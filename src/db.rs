@@ -1,4 +1,4 @@
-//! One SQLite file holds the folder index, the thumbnail cache and settings.
+//! One SQLite file holds the folder index, the thumbnail and waveform caches, and settings.
 //!
 //! A single file rather than thousands of small thumbnail files: opening many small files is slow
 //! on Windows (NTFS plus antivirus scanning on every open). WAL mode lets the thumbnail workers
@@ -25,6 +25,22 @@ pub struct StoredThumb {
     pub src_h: u32,
     pub format: u8,
     pub data: Vec<u8>,
+}
+
+/// A sound's waveform as stored, or the error message when the file couldn't be decoded.
+pub struct StoredWaveform {
+    pub duration_ms: u32,
+    pub sample_rate: u32,
+    pub channels: u16,
+    /// Min and max per point, as signed bytes.
+    pub peaks: Vec<u8>,
+    pub error: Option<String>,
+}
+
+/// One cache entry for the writer thread to save.
+pub enum CacheWrite {
+    Thumb(i64, StoredThumb),
+    Waveform(i64, StoredWaveform),
 }
 
 /// The per-user cache location for this OS (`%LOCALAPPDATA%` on Windows, `~/Library/Caches` on
@@ -64,6 +80,13 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
              src_h INTEGER NOT NULL,
              format INTEGER NOT NULL,
              data BLOB NOT NULL);
+         CREATE TABLE IF NOT EXISTS waveforms(
+             key INTEGER PRIMARY KEY,
+             duration_ms INTEGER NOT NULL,
+             sample_rate INTEGER NOT NULL,
+             channels INTEGER NOT NULL,
+             peaks BLOB NOT NULL,
+             error TEXT);
          CREATE TABLE IF NOT EXISTS settings(
              key TEXT PRIMARY KEY,
              value TEXT NOT NULL);",
@@ -124,15 +147,41 @@ pub fn get_thumb(conn: &Connection, key: i64) -> rusqlite::Result<Option<StoredT
         .optional()
 }
 
-pub fn put_thumbs(conn: &mut Connection, batch: &[(i64, StoredThumb)]) -> rusqlite::Result<()> {
+pub fn get_waveform(conn: &Connection, key: i64) -> rusqlite::Result<Option<StoredWaveform>> {
+    conn.prepare_cached("SELECT duration_ms, sample_rate, channels, peaks, error FROM waveforms WHERE key = ?1")?
+        .query_row([key], |row| {
+            Ok(StoredWaveform {
+                duration_ms: row.get(0)?,
+                sample_rate: row.get(1)?,
+                channels: row.get(2)?,
+                peaks: row.get(3)?,
+                error: row.get(4)?,
+            })
+        })
+        .optional()
+}
+
+/// Saves a batch in one transaction.
+pub fn put_cache(conn: &mut Connection, batch: &[CacheWrite]) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
     {
-        let mut insert = tx.prepare_cached(
+        let mut thumb = tx.prepare_cached(
             "INSERT OR REPLACE INTO thumbs(key, w, h, src_w, src_h, format, data)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?;
-        for (key, thumb) in batch {
-            insert.execute(params![key, thumb.w, thumb.h, thumb.src_w, thumb.src_h, thumb.format, thumb.data])?;
+        let mut waveform = tx.prepare_cached(
+            "INSERT OR REPLACE INTO waveforms(key, duration_ms, sample_rate, channels, peaks, error)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+        )?;
+        for write in batch {
+            match write {
+                CacheWrite::Thumb(key, t) => {
+                    thumb.execute(params![key, t.w, t.h, t.src_w, t.src_h, t.format, t.data])?;
+                }
+                CacheWrite::Waveform(key, w) => {
+                    waveform.execute(params![key, w.duration_ms, w.sample_rate, w.channels, w.peaks, w.error])?;
+                }
+            }
         }
     }
     tx.commit()
@@ -174,7 +223,7 @@ mod tests {
                     let mut conn = open(&path).map_err(|err| format!("open {i}: {err}"))?;
                     let thumb =
                         StoredThumb { w: 1, h: 1, src_w: 1, src_h: 1, format: FORMAT_RAW_RGBA, data: vec![0; 4] };
-                    put_thumbs(&mut conn, &[(i, thumb)]).map_err(|err| format!("write {i}: {err}"))
+                    put_cache(&mut conn, &[CacheWrite::Thumb(i, thumb)]).map_err(|err| format!("write {i}: {err}"))
                 })
             })
             .collect();

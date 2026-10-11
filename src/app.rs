@@ -1,8 +1,8 @@
-//! The window: toolbar, folder tree, thumbnail grid and status bar.
+//! The window: toolbar, folder tree, preview grid, sound player and status bar.
 //!
 //! Nothing here touches the disk or decodes a file on the UI thread, apart from loading the cached
-//! index when a folder is opened. Scanning and thumbnails arrive from background threads, and the
-//! grid only draws (and only asks thumbnails for) the rows on screen.
+//! index when a folder is opened. Scanning, previews and sound arrive from background threads, and
+//! the grid only draws (and only asks previews for) the rows on screen.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -12,14 +12,15 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Receiver;
 use eframe::egui::text::{LayoutJob, TextWrapping};
 use eframe::egui::{
-    self, Align2, Color32, ColorImage, FontId, Key, Pos2, Rect, Sense, TextureFilter, TextureHandle, TextureId,
-    TextureOptions, pos2, vec2,
+    self, Align2, Color32, ColorImage, FontId, Key, Pos2, Rect, RichText, Sense, TextureFilter, TextureHandle,
+    TextureId, TextureOptions, pos2, vec2,
 };
 use rusqlite::Connection;
 
 use crate::asset::AssetKind;
+use crate::audio::{NowPlaying, Player, ReadAhead, Source, Waveform};
 use crate::library::{Entry, Library, root_string};
-use crate::thumbs::{Thumb, ThumbJob, ThumbService};
+use crate::thumbs::{Preview, Thumb, ThumbJob, ThumbService};
 use crate::{db, diag, platform, scan};
 
 /// Thumbnails kept on the GPU. The least recently drawn go first; scrolling back reloads them
@@ -27,12 +28,16 @@ use crate::{db, diag, platform, scan};
 const MAX_TEXTURES: usize = 1500;
 /// Limits GPU uploads per frame so a burst of finished thumbnails can't stall a frame.
 const UPLOADS_PER_FRAME: usize = 48;
-/// Rows beyond the visible ones whose thumbnails are made ahead of scrolling.
+/// Rows beyond the visible ones whose previews are made ahead of scrolling.
 const PREFETCH_ROWS_BELOW: usize = 3;
 const PREFETCH_ROWS_ABOVE: usize = 1;
+/// Sounds read into memory ahead of the selection, in the direction of travel.
+const READ_AHEAD_SOUNDS: usize = 3;
 const LABEL_HEIGHT: f32 = 18.0;
 const GAP: f32 = 8.0;
+const PLAYER_WAVEFORM_HEIGHT: f32 = 64.0;
 const SETTING_LAST_ROOT: &str = "last_root";
+const ERROR_COLOR: Color32 = Color32::from_rgb(230, 90, 90);
 
 struct CachedTexture {
     handle: TextureHandle,
@@ -56,6 +61,15 @@ struct LastScan {
     skipped: usize,
 }
 
+/// What the player bar asked for, applied once the bar is drawn.
+enum PlayerAction {
+    Play(u32),
+    PlayFrom(u32, f64),
+    SetPaused(bool),
+    Seek(f64),
+    Stop,
+}
+
 pub struct BrowserApp {
     db_path: PathBuf,
     conn: Option<Connection>,
@@ -77,13 +91,22 @@ pub struct BrowserApp {
     tile: f32,
 
     textures: HashMap<i64, CachedTexture>,
+    waveforms: HashMap<i64, Arc<Waveform>>,
     failed: HashMap<i64, String>,
-    /// Finished thumbnails waiting for their GPU upload.
+    /// Finished previews waiting to be taken in (thumbnails wait for their GPU upload).
     arrived: VecDeque<Thumb>,
     arrived_keys: HashSet<i64>,
     last_wanted: Vec<i64>,
     checker: TextureHandle,
     frame: u64,
+
+    player: Option<Player>,
+    read_ahead: ReadAhead,
+    /// The entry last sent to the player: (index, key).
+    playing: Option<(u32, i64)>,
+    autoplay: bool,
+    looping: bool,
+    volume: f32,
 
     columns: usize,
     /// (scroll offset, viewport height) of the grid last frame.
@@ -105,6 +128,14 @@ impl BrowserApp {
             ColorImage::new([2, 2], vec![light, dark, dark, light]),
             TextureOptions::NEAREST_REPEAT,
         );
+        let ctx = cc.egui_ctx.clone();
+        let player = Player::start(Arc::new(move || ctx.request_repaint()))
+            .map_err(|err| diag::report("No sound output", err))
+            .ok();
+        let volume = 0.8;
+        if let Some(player) = &player {
+            player.set_volume(volume);
+        }
         let root = start_root
             .or_else(|| conn.as_ref().and_then(|conn| db::get_setting(conn, SETTING_LAST_ROOT)).map(PathBuf::from));
 
@@ -125,12 +156,19 @@ impl BrowserApp {
             selected: None,
             tile: 128.0,
             textures: HashMap::new(),
+            waveforms: HashMap::new(),
             failed: HashMap::new(),
             arrived: VecDeque::new(),
             arrived_keys: HashSet::new(),
             last_wanted: Vec::new(),
             checker,
             frame: 0,
+            player,
+            read_ahead: ReadAhead::start(),
+            playing: None,
+            autoplay: true,
+            looping: false,
+            volume,
             columns: 1,
             grid_scroll: (0.0, 0.0),
             scroll_to_selected: false,
@@ -154,6 +192,10 @@ impl BrowserApp {
         self.failed.clear();
         self.last_wanted.clear();
         self.thumbs.set_wanted(Vec::new());
+        self.playing = None;
+        if let Some(player) = &self.player {
+            player.stop();
+        }
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("Asset Browser - {}", platform::native(&root))));
 
         if let Some(conn) = &self.conn {
@@ -210,7 +252,8 @@ impl BrowserApp {
         if self.library.as_ref().is_some_and(|old| old.same_files_as(&done.library)) {
             return;
         }
-        // Keep the selection and folder across the swap; entry indices change, keys don't.
+        // Keep the selection, folder and playing sound across the swap; entry indices change, keys
+        // don't.
         let (selected_key, dir_lower) = match &self.library {
             Some(old) => (
                 self.selected.and_then(|index| old.entries.get(index as usize)).map(|entry| entry.key),
@@ -219,9 +262,9 @@ impl BrowserApp {
             None => (None, None),
         };
         let library = done.library;
-        self.selected = selected_key
-            .and_then(|key| library.entries.iter().position(|entry| entry.key == key))
-            .map(|index| index as u32);
+        let find = |key: i64| library.entries.iter().position(|entry| entry.key == key).map(|index| index as u32);
+        self.selected = selected_key.and_then(find);
+        self.playing = self.playing.and_then(|(_, key)| find(key).map(|index| (index, key)));
         self.selected_dir = dir_lower.and_then(|lower| library.find_dir(&lower)).unwrap_or(0);
         self.library = Some(library);
         self.view_dirty = true;
@@ -232,11 +275,13 @@ impl BrowserApp {
             self.arrived_keys.insert(thumb.key);
             self.arrived.push_back(thumb);
         }
-        for _ in 0..UPLOADS_PER_FRAME {
+        let mut uploads = 0;
+        while uploads < UPLOADS_PER_FRAME {
             let Some(thumb) = self.arrived.pop_front() else { break };
             self.arrived_keys.remove(&thumb.key);
             match thumb.result {
-                Ok(pixels) => {
+                Ok(Preview::Image(pixels)) => {
+                    uploads += 1;
                     let unscaled = pixels.is_unscaled();
                     let options = if unscaled {
                         let mut options = TextureOptions::NEAREST;
@@ -258,6 +303,9 @@ impl BrowserApp {
                         },
                     );
                 }
+                Ok(Preview::Sound(waveform)) => {
+                    self.waveforms.insert(thumb.key, waveform);
+                }
                 Err(message) => {
                     self.failed.insert(thumb.key, message);
                 }
@@ -278,6 +326,58 @@ impl BrowserApp {
             self.selected_dir = 0;
         }
         self.view = library.filter(self.selected_dir, self.kinds, &self.query.to_lowercase());
+    }
+
+    /// Selects an entry. A sound starts playing straight away when auto-play is on, and the sounds
+    /// after it are read into memory so moving on to them starts without a disk wait.
+    fn select(&mut self, index: u32) {
+        self.selected = Some(index);
+        let Some(library) = &self.library else { return };
+        if library.entries[index as usize].kind == AssetKind::Audio && self.autoplay {
+            self.play(index);
+        }
+        self.read_ahead_around(index);
+    }
+
+    fn play(&mut self, index: u32) {
+        let (Some(library), Some(player)) = (&self.library, &self.player) else { return };
+        let entry = &library.entries[index as usize];
+        let source = match self.read_ahead.get(entry.key) {
+            Some(bytes) => Source::Memory(bytes),
+            None => Source::File(library.path_of(entry)),
+        };
+        player.play(entry.key, source, entry.extension());
+        self.playing = Some((index, entry.key));
+    }
+
+    fn read_ahead_around(&self, index: u32) {
+        let Some(library) = &self.library else { return };
+        let Some(position) = self.view.iter().position(|&i| i == index) else { return };
+        let is_sound = |&&i: &&u32| library.entries[i as usize].kind == AssetKind::Audio;
+        let after = self.view[position + 1..].iter().filter(is_sound).take(READ_AHEAD_SOUNDS);
+        let before = self.view[..position].iter().rev().filter(is_sound).take(1);
+        let files = after
+            .chain(before)
+            .map(|&i| {
+                let entry = &library.entries[i as usize];
+                (entry.key, library.path_of(entry), entry.size)
+            })
+            .collect();
+        self.read_ahead.want(files);
+    }
+
+    /// Space: pause or resume the selected sound, or start it if it isn't the one playing.
+    fn toggle_play(&mut self) {
+        let (Some(library), Some(selected)) = (&self.library, self.selected) else { return };
+        let entry = &library.entries[selected as usize];
+        if entry.kind != AssetKind::Audio {
+            return;
+        }
+        let now = self.player.as_ref().and_then(Player::now);
+        match (&self.player, now) {
+            (Some(player), Some(now)) if now.key == entry.key && !now.finished => player.set_paused(!now.paused),
+            _ => self.play(selected),
+        }
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -306,6 +406,9 @@ impl BrowserApp {
                     }
                 }
                 ui.separator();
+                ui.toggle_value(&mut self.autoplay, "Auto-play")
+                    .on_hover_text("Play sounds as soon as they're selected, by click or arrow key");
+                ui.separator();
                 ui.add(egui::Slider::new(&mut self.tile, 48.0..=256.0).text("Size"));
             });
         });
@@ -318,7 +421,7 @@ impl BrowserApp {
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 if let Some(error) = diag::last() {
-                    ui.colored_label(Color32::from_rgb(230, 90, 90), error)
+                    ui.colored_label(ERROR_COLOR, error)
                         .on_hover_text(format!("Logged to {}", diag::log_path().display()));
                     ui.separator();
                 }
@@ -350,7 +453,7 @@ impl BrowserApp {
                 let (queued, busy) = self.thumbs.pending();
                 let average = if made > 0 { micros as f64 / made as f64 / 1000.0 } else { 0.0 };
                 ui.label(format!(
-                    "Thumbnails: {} made ({average:.1} ms avg on {} threads), {} from cache, {} failed, {} queued",
+                    "Previews: {} made ({average:.1} ms avg on {} threads), {} from cache, {} failed, {} queued",
                     grouped(made as usize),
                     self.thumbs.thread_count(),
                     grouped(stats.from_cache.load(std::sync::atomic::Ordering::Relaxed) as usize),
@@ -359,6 +462,147 @@ impl BrowserApp {
                 ));
             });
         });
+    }
+
+    /// The bar for the selected sound (or, when no sound is selected, the one playing): transport,
+    /// time, volume and a waveform to click or drag to a position.
+    fn player_panel(&mut self, ui: &mut egui::Ui) {
+        let Some(library) = &self.library else { return };
+        let shown = self
+            .selected
+            .filter(|&index| library.entries[index as usize].kind == AssetKind::Audio)
+            .or(self.playing.map(|(index, _)| index));
+        let Some(index) = shown else { return };
+        let entry = &library.entries[index as usize];
+        let now = self.player.as_ref().and_then(Player::now).filter(|now| now.key == entry.key);
+        let waveform = self.waveforms.get(&entry.key);
+        let duration = now.as_ref().and_then(|now| now.duration).or(waveform.map(|w| w.duration as f64));
+        let mut action = None;
+
+        egui::Panel::bottom("player").show(ui, |ui| {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let Some(player) = &self.player else {
+                    ui.colored_label(ERROR_COLOR, "No sound output. See the error in the status bar.");
+                    return;
+                };
+                let running = now.as_ref().is_some_and(|now| !now.finished);
+                let audible = now.as_ref().is_some_and(|now| !now.finished && !now.paused);
+                let play_button = ui.button(if audible { "⏸" } else { "▶" }).on_hover_text("Play or pause (Space)");
+                if play_button.clicked() {
+                    action = Some(if running { PlayerAction::SetPaused(audible) } else { PlayerAction::Play(index) });
+                }
+                if ui.button("⏹").on_hover_text("Stop (Esc)").clicked() {
+                    action = Some(PlayerAction::Stop);
+                }
+                if ui.toggle_value(&mut self.looping, "Loop").changed() {
+                    player.set_looping(self.looping);
+                }
+                ui.separator();
+                ui.label(RichText::new(entry.name()).strong());
+                let position = now.as_ref().map_or(0.0, |now| now.position);
+                let total = duration.map_or_else(|| "?".to_owned(), format_time);
+                ui.monospace(format!("{} / {total}", format_time(position)));
+                if let Some(ready) = now.as_ref().and_then(|now| now.ready_ms) {
+                    ui.weak(format!("started in {ready:.0} ms"))
+                        .on_hover_text("From the request to the first audio handed to the sound card");
+                }
+                if let Some(error) = now.as_ref().and_then(|now| now.error.as_deref()) {
+                    ui.colored_label(ERROR_COLOR, error);
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let slider = egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false);
+                    if ui.add(slider).changed() {
+                        player.set_volume(self.volume);
+                    }
+                    ui.label("Volume");
+                    ui.weak(&player.device_name);
+                });
+            });
+
+            let (rect, response) =
+                ui.allocate_exact_size(vec2(ui.available_width(), PLAYER_WAVEFORM_HEIGHT), Sense::click_and_drag());
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
+            let progress = match (&now, duration) {
+                (Some(now), Some(total)) if total > 0.0 && !now.finished => Some((now.position / total) as f32),
+                _ => None,
+            };
+            let accent = ui.visuals().selection.bg_fill;
+            match waveform {
+                Some(waveform) => {
+                    let color = entry.kind.color().gamma_multiply(0.55);
+                    draw_waveform(
+                        &painter,
+                        rect.shrink2(vec2(2.0, 4.0)),
+                        waveform,
+                        color,
+                        entry.kind.color(),
+                        progress,
+                    );
+                }
+                None => {
+                    let text =
+                        if self.failed.contains_key(&entry.key) { "Couldn't read this sound" } else { "Reading…" };
+                    painter.text(
+                        rect.center(),
+                        Align2::CENTER_CENTER,
+                        text,
+                        FontId::proportional(13.0),
+                        ui.visuals().weak_text_color(),
+                    );
+                }
+            }
+            let fraction_at = |x: f32| ((x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+            if let Some(progress) = progress {
+                let x = rect.left() + progress * rect.width();
+                painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], (1.5, accent));
+            }
+            if let Some(pointer) = response.interact_pointer_pos().or(response.hover_pos()) {
+                // Where a click would jump to.
+                let x = rect.left() + fraction_at(pointer.x) * rect.width();
+                painter.line_segment(
+                    [pos2(x, rect.top()), pos2(x, rect.bottom())],
+                    (1.0, ui.visuals().text_color().gamma_multiply(0.5)),
+                );
+            }
+            if (response.clicked() || response.drag_stopped())
+                && let (Some(pointer), Some(total)) = (response.interact_pointer_pos(), duration)
+            {
+                let seconds = fraction_at(pointer.x) as f64 * total;
+                action = Some(match &now {
+                    Some(now) if !now.finished => PlayerAction::Seek(seconds),
+                    _ => PlayerAction::PlayFrom(index, seconds),
+                });
+            }
+            ui.add_space(4.0);
+        });
+
+        let Some(action) = action else { return };
+        match action {
+            PlayerAction::Play(index) => self.play(index),
+            PlayerAction::PlayFrom(index, seconds) => {
+                self.play(index);
+                if let Some(player) = &self.player {
+                    player.seek(seconds);
+                }
+            }
+            PlayerAction::SetPaused(paused) => {
+                if let Some(player) = &self.player {
+                    player.set_paused(paused);
+                }
+            }
+            PlayerAction::Seek(seconds) => {
+                if let Some(player) = &self.player {
+                    player.seek(seconds);
+                }
+            }
+            PlayerAction::Stop => {
+                if let Some(player) = &self.player {
+                    player.stop();
+                }
+            }
+        }
     }
 
     fn folder_panel(&mut self, ui: &mut egui::Ui) {
@@ -378,19 +622,17 @@ impl BrowserApp {
         });
     }
 
+    /// Runs before any widget is drawn and consumes the keys it handles, so a focused button
+    /// can't also react to Space or Enter.
     fn handle_keys(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() || self.view.is_empty() {
+        if ctx.egui_wants_keyboard_input() {
             return;
         }
-        let (left, right, up, down, enter) = ctx.input(|input| {
-            (
-                input.key_pressed(Key::ArrowLeft),
-                input.key_pressed(Key::ArrowRight),
-                input.key_pressed(Key::ArrowUp),
-                input.key_pressed(Key::ArrowDown),
-                input.key_pressed(Key::Enter),
-            )
-        });
+        let pressed = |key| ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key));
+        let (left, right, up, down) =
+            (pressed(Key::ArrowLeft), pressed(Key::ArrowRight), pressed(Key::ArrowUp), pressed(Key::ArrowDown));
+        let (enter, space, escape) = (pressed(Key::Enter), pressed(Key::Space), pressed(Key::Escape));
+
         let columns = self.columns.max(1) as isize;
         let step = if left {
             -1
@@ -403,17 +645,25 @@ impl BrowserApp {
         } else {
             0
         };
-        if step != 0 {
+        if step != 0 && !self.view.is_empty() {
             let current = self.selected.and_then(|selected| self.view.iter().position(|&index| index == selected));
             let next = match current {
                 Some(position) => (position as isize + step).clamp(0, self.view.len() as isize - 1) as usize,
                 None => 0,
             };
-            self.selected = Some(self.view[next]);
+            if current != Some(next) {
+                self.select(self.view[next]);
+            }
             self.scroll_to_selected = true;
         }
         if enter && let (Some(library), Some(selected)) = (&self.library, self.selected) {
             let _ = platform::open(&library.path_of(&library.entries[selected as usize]));
+        }
+        if space {
+            self.toggle_play();
+        }
+        if escape && let Some(player) = &self.player {
+            player.stop();
         }
     }
 
@@ -452,8 +702,10 @@ impl BrowserApp {
                 }
             }
 
+            let now = self.player.as_ref().and_then(Player::now);
             let view = &self.view;
             let textures = &mut self.textures;
+            let waveforms = &self.waveforms;
             let failed = &self.failed;
             let checker = self.checker.id();
             let frame = self.frame;
@@ -476,6 +728,8 @@ impl BrowserApp {
                             library,
                             entry,
                             texture: textures.get_mut(&entry.key),
+                            waveform: waveforms.get(&entry.key),
+                            playing: now.as_ref().filter(|now| now.key == entry.key && !now.finished),
                             failed: failed.get(&entry.key),
                             checker,
                             frame,
@@ -490,14 +744,14 @@ impl BrowserApp {
             });
             self.grid_scroll = (output.state.offset.y, output.inner_rect.height());
             if let Some(index) = clicked {
-                self.selected = Some(index);
+                self.select(index);
             }
-            self.request_thumbnails(visible_rows, columns, rows);
+            self.request_previews(visible_rows, columns, rows);
         });
     }
 
-    /// Asks for thumbnails of the visible rows first, then the rows just around them.
-    fn request_thumbnails(&mut self, visible: std::ops::Range<usize>, columns: usize, rows: usize) {
+    /// Asks for previews of the visible rows first, then the rows just around them.
+    fn request_previews(&mut self, visible: std::ops::Range<usize>, columns: usize, rows: usize) {
         let Some(library) = &self.library else { return };
         let below = visible.end..(visible.end + PREFETCH_ROWS_BELOW).min(rows);
         let above = visible.start.saturating_sub(PREFETCH_ROWS_ABOVE)..visible.start;
@@ -506,11 +760,12 @@ impl BrowserApp {
             for column in 0..columns {
                 let Some(&index) = self.view.get(row * columns + column) else { break };
                 let entry = &library.entries[index as usize];
-                if entry.kind == AssetKind::Image
-                    && !self.textures.contains_key(&entry.key)
-                    && !self.failed.contains_key(&entry.key)
-                    && !self.arrived_keys.contains(&entry.key)
-                {
+                let has_preview = match entry.kind {
+                    AssetKind::Image => self.textures.contains_key(&entry.key),
+                    AssetKind::Audio => self.waveforms.contains_key(&entry.key),
+                    AssetKind::Model => true, // none to make yet
+                };
+                if !has_preview && !self.failed.contains_key(&entry.key) && !self.arrived_keys.contains(&entry.key) {
                     wanted.push(index);
                 }
             }
@@ -523,7 +778,7 @@ impl BrowserApp {
             .iter()
             .map(|&index| {
                 let entry = &library.entries[index as usize];
-                ThumbJob { key: entry.key, path: library.path_of(entry) }
+                ThumbJob { key: entry.key, path: library.path_of(entry), kind: entry.kind }
             })
             .collect();
         self.thumbs.set_wanted(jobs);
@@ -553,15 +808,23 @@ impl eframe::App for BrowserApp {
         self.frame += 1;
         self.poll_scan();
         self.drain_thumbs(&ctx);
-        self.toolbar(ui, &ctx);
-        self.status_bar(ui);
-        self.folder_panel(ui);
         if self.view_dirty {
             self.rebuild_view();
         }
         self.handle_keys(&ctx);
+        self.toolbar(ui, &ctx);
+        self.status_bar(ui);
+        self.player_panel(ui);
+        self.folder_panel(ui);
+        if self.view_dirty {
+            self.rebuild_view();
+        }
         self.grid(ui);
         self.evict_textures();
+        // Keep the playhead moving while something is audible.
+        if self.player.as_ref().and_then(Player::now).is_some_and(|now| !now.finished && !now.paused) {
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
     }
 }
 
@@ -569,6 +832,8 @@ struct TileUi<'a> {
     library: &'a Library,
     entry: &'a Entry,
     texture: Option<&'a mut CachedTexture>,
+    waveform: Option<&'a Arc<Waveform>>,
+    playing: Option<&'a NowPlaying>,
     failed: Option<&'a String>,
     checker: TextureId,
     frame: u64,
@@ -603,8 +868,27 @@ impl TileUi<'_> {
             let checker_uv = Rect::from_min_max(Pos2::ZERO, pos2(fitted.width() / 16.0, fitted.height() / 16.0));
             painter.image(self.checker, fitted, checker_uv, Color32::WHITE);
             painter.image(texture.handle.id(), fitted, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+        } else if let Some(waveform) = self.waveform {
+            let color = entry.kind.color();
+            // The decoder can't always tell a file's length up front; the waveform always knows it.
+            let progress = self.playing.map(|now| {
+                let total = now.duration.unwrap_or(waveform.duration as f64).max(f64::EPSILON);
+                (now.position / total) as f32
+            });
+            let wave_rect = Rect::from_min_max(inner.min, pos2(inner.max.x, inner.max.y - 14.0));
+            draw_waveform(painter, wave_rect, waveform, color.gamma_multiply(0.55), color, progress);
+            painter.text(
+                inner.right_bottom(),
+                Align2::RIGHT_BOTTOM,
+                format_time(waveform.duration as f64),
+                FontId::proportional(11.0),
+                visuals.weak_text_color(),
+            );
+            if self.playing.is_some() {
+                painter.text(inner.left_bottom(), Align2::LEFT_BOTTOM, "▶", FontId::proportional(11.0), color);
+            }
         } else {
-            let color = if self.failed.is_some() { Color32::from_rgb(220, 90, 90) } else { entry.kind.color() };
+            let color = if self.failed.is_some() { ERROR_COLOR } else { entry.kind.color() };
             painter.text(
                 inner.center(),
                 Align2::CENTER_CENTER,
@@ -640,20 +924,64 @@ impl TileUi<'_> {
                 ui.close();
             }
         });
-        let failed = self.failed;
+        let (failed, waveform) = (self.failed, self.waveform);
         response.on_hover_ui(|ui| {
             ui.label(&entry.rel);
-            let mut details = format_size(entry.size);
+            let mut details = vec![];
             if let Some([w, h]) = source_size {
-                details = format!("{w} × {h} · {details}");
+                details.push(format!("{w} × {h}"));
             }
-            ui.weak(details);
+            if let Some(waveform) = waveform {
+                details.push(format_time(waveform.duration as f64));
+                details.push(format!("{:.1} kHz", waveform.sample_rate as f32 / 1000.0));
+                details.push(match waveform.channels {
+                    1 => "mono".to_owned(),
+                    2 => "stereo".to_owned(),
+                    n => format!("{n} channels"),
+                });
+            }
+            details.push(format_size(entry.size));
+            ui.weak(details.join(" · "));
             if let Some(message) = failed {
-                ui.colored_label(Color32::from_rgb(230, 90, 90), format!("Couldn't make a thumbnail: {message}"));
+                ui.colored_label(ERROR_COLOR, format!("Couldn't make a preview: {message}"));
             }
         });
         clicked
     }
+}
+
+/// Draws a waveform as one mesh: a bar per column from the lowest to the highest sample in it.
+/// Columns before `progress` (0..1) use `played`.
+fn draw_waveform(
+    painter: &egui::Painter,
+    rect: Rect,
+    waveform: &Waveform,
+    color: Color32,
+    played: Color32,
+    progress: Option<f32>,
+) {
+    let peaks = &waveform.peaks;
+    if peaks.is_empty() || rect.width() < 1.0 {
+        return;
+    }
+    let columns = rect.width() as usize;
+    let column_width = rect.width() / columns as f32;
+    let (middle, half) = (rect.center().y, rect.height() / 2.0);
+    let played_until = progress.map(|p| rect.left() + p * rect.width());
+    let mut mesh = egui::Mesh::default();
+    for column in 0..columns {
+        let start = column * peaks.len() / columns;
+        let end = ((column + 1) * peaks.len() / columns).clamp(start + 1, peaks.len());
+        let (low, high) =
+            peaks[start..end].iter().fold((i8::MAX, i8::MIN), |(low, high), [l, h]| (low.min(*l), high.max(*h)));
+        let x = rect.left() + column as f32 * column_width;
+        // Silence still shows as a thin line.
+        let top = (middle - high as f32 / 127.0 * half).min(middle - 0.5);
+        let bottom = (middle - low as f32 / 127.0 * half).max(middle + 0.5);
+        let fill = if played_until.is_some_and(|until| x < until) { played } else { color };
+        mesh.add_colored_rect(Rect::from_min_max(pos2(x, top), pos2(x + column_width, bottom)), fill);
+    }
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 /// Fits `w` × `h` inside `area`, keeping its shape. Unscaled thumbnails (pixel art) are scaled by
@@ -727,4 +1055,17 @@ pub fn format_size(bytes: u64) -> String {
         unit += 1;
     }
     format!("{value:.1} {}", UNITS[unit])
+}
+
+/// 0.35 → "0.35 s", 4.2 → "4.2 s", 75 → "1:15"
+pub fn format_time(seconds: f64) -> String {
+    let seconds = seconds.max(0.0);
+    if seconds < 1.0 {
+        format!("{seconds:.2} s")
+    } else if seconds < 60.0 {
+        format!("{seconds:.1} s")
+    } else {
+        let whole = seconds as u64;
+        format!("{}:{:02}", whole / 60, whole % 60)
+    }
 }

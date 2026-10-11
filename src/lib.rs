@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod asset;
+pub mod audio;
 pub mod db;
 pub mod diag;
 pub mod library;

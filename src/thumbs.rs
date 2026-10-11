@@ -1,8 +1,9 @@
-//! Makes thumbnails on a pool of worker threads, on-screen items first.
+//! Makes previews on a pool of worker threads, on-screen items first: thumbnails for images,
+//! waveforms for sounds.
 //!
-//! The UI hands over the full list of thumbnails it wants each frame (`set_wanted`), visible ones
+//! The UI hands over the full list of previews it wants each frame (`set_wanted`), visible ones
 //! first. That list replaces the queue, so items scrolled past are dropped instead of being made
-//! before the ones now on screen. Each thumbnail is made once and then served from the SQLite
+//! before the ones now on screen. Each preview is made once and then served from the SQLite
 //! cache, whose writes go through one writer thread in batches.
 
 use std::collections::{HashSet, VecDeque};
@@ -18,7 +19,11 @@ use crossbeam_channel::{Receiver, Sender};
 use fast_image_resize as fr;
 use image::{ExtendedColorType, ImageEncoder, ImageFormat};
 
-use crate::db::{self, FORMAT_FAILED, FORMAT_JPEG, FORMAT_QOI, FORMAT_RAW_RGBA, StoredThumb};
+use crate::asset::AssetKind;
+use crate::audio::{self, Waveform};
+use crate::db::{
+    self, CacheWrite, FORMAT_FAILED, FORMAT_JPEG, FORMAT_QOI, FORMAT_RAW_RGBA, StoredThumb, StoredWaveform,
+};
 use crate::{diag, psd_composite};
 
 /// Longest side of a stored thumbnail, in pixels. Images no bigger than this are stored as they
@@ -31,6 +36,12 @@ const THUMB_VERSION: u64 = 1;
 pub struct ThumbJob {
     pub key: i64,
     pub path: PathBuf,
+    pub kind: AssetKind,
+}
+
+pub enum Preview {
+    Image(ThumbPixels),
+    Sound(Arc<Waveform>),
 }
 
 pub struct ThumbPixels {
@@ -50,7 +61,7 @@ impl ThumbPixels {
 
 pub struct Thumb {
     pub key: i64,
-    pub result: Result<ThumbPixels, String>,
+    pub result: Result<Preview, String>,
     pub from_cache: bool,
     pub micros: u64,
 }
@@ -194,7 +205,7 @@ impl Drop for ThumbService {
 struct Worker {
     shared: Arc<Shared>,
     results: Sender<Thumb>,
-    store: Sender<(i64, StoredThumb)>,
+    store: Sender<CacheWrite>,
     on_result: Arc<dyn Fn() + Send + Sync>,
     stats: Arc<ThumbStats>,
 }
@@ -231,47 +242,88 @@ impl Worker {
 
     fn process(&self, job: &ThumbJob, conn: Option<&rusqlite::Connection>, resizer: &mut fr::Resizer) -> Thumb {
         let start = Instant::now();
-        let cached = conn.and_then(|conn| {
-            db::get_thumb(conn, job.key).map_err(|err| diag::report("Reading a cached thumbnail", err)).ok().flatten()
-        });
-        if let Some(stored) = cached {
+        if let Some(result) = conn.and_then(|conn| cached_preview(conn, job)) {
             self.stats.from_cache.fetch_add(1, Ordering::Relaxed);
-            return Thumb {
-                key: job.key,
-                result: decode_stored(&stored),
-                from_cache: true,
-                micros: start.elapsed().as_micros() as u64,
-            };
+            return Thumb { key: job.key, result, from_cache: true, micros: start.elapsed().as_micros() as u64 };
         }
 
         // Some decoders panic on malformed files. Contain it here: the worker carries on and the
         // file counts as failed, instead of staying "in progress" forever.
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| make_thumbnail(&job.path, resizer)))
-            .unwrap_or_else(|_| Err("the decoder crashed on this file".into()));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| match job.kind {
+            AssetKind::Image => make_thumbnail(&job.path, resizer).map(Preview::Image),
+            AssetKind::Audio => audio::waveform(&job.path).map(|waveform| Preview::Sound(Arc::new(waveform))),
+            AssetKind::Model => Err("models have no preview yet".to_owned()),
+        }))
+        .unwrap_or_else(|_| Err("the decoder crashed on this file".into()));
         let micros = start.elapsed().as_micros() as u64;
-        let stored = match &result {
-            Ok(pixels) => encode_stored(pixels),
-            Err(message) => {
-                self.stats.failed.fetch_add(1, Ordering::Relaxed);
-                // Remember failures too, so a broken file isn't decoded again on every visit.
-                StoredThumb {
-                    w: 0,
-                    h: 0,
-                    src_w: 0,
-                    src_h: 0,
-                    format: FORMAT_FAILED,
-                    data: message.clone().into_bytes(),
-                }
-            }
-        };
-        let _ = self.store.send((job.key, stored));
+        if result.is_err() {
+            self.stats.failed.fetch_add(1, Ordering::Relaxed);
+        }
+        // Failures are remembered too, so a broken file isn't decoded again on every visit.
+        let _ = self.store.send(to_cache(job, &result));
         self.stats.made.fetch_add(1, Ordering::Relaxed);
         self.stats.make_micros.fetch_add(micros, Ordering::Relaxed);
         Thumb { key: job.key, result, from_cache: false, micros }
     }
 }
 
-fn writer_loop(db_path: &Path, jobs: &Receiver<(i64, StoredThumb)>) {
+fn cached_preview(conn: &rusqlite::Connection, job: &ThumbJob) -> Option<Result<Preview, String>> {
+    let report = |err: rusqlite::Error| diag::report("Reading the preview cache", err);
+    match job.kind {
+        AssetKind::Image => db::get_thumb(conn, job.key)
+            .map_err(report)
+            .ok()
+            .flatten()
+            .map(|stored| decode_stored(&stored).map(Preview::Image)),
+        AssetKind::Audio => db::get_waveform(conn, job.key).map_err(report).ok().flatten().map(decode_waveform),
+        AssetKind::Model => None,
+    }
+}
+
+fn to_cache(job: &ThumbJob, result: &Result<Preview, String>) -> CacheWrite {
+    match (job.kind, result) {
+        (_, Ok(Preview::Image(pixels))) => CacheWrite::Thumb(job.key, encode_stored(pixels)),
+        (_, Ok(Preview::Sound(waveform))) => CacheWrite::Waveform(job.key, encode_waveform(waveform)),
+        (AssetKind::Audio, Err(message)) => CacheWrite::Waveform(
+            job.key,
+            StoredWaveform {
+                duration_ms: 0,
+                sample_rate: 0,
+                channels: 0,
+                peaks: Vec::new(),
+                error: Some(message.clone()),
+            },
+        ),
+        (_, Err(message)) => CacheWrite::Thumb(
+            job.key,
+            StoredThumb { w: 0, h: 0, src_w: 0, src_h: 0, format: FORMAT_FAILED, data: message.clone().into_bytes() },
+        ),
+    }
+}
+
+fn encode_waveform(waveform: &Waveform) -> StoredWaveform {
+    StoredWaveform {
+        duration_ms: (waveform.duration * 1000.0).round() as u32,
+        sample_rate: waveform.sample_rate,
+        channels: waveform.channels,
+        peaks: waveform.peaks.iter().flat_map(|[low, high]| [*low as u8, *high as u8]).collect(),
+        error: None,
+    }
+}
+
+fn decode_waveform(stored: StoredWaveform) -> Result<Preview, String> {
+    if let Some(error) = stored.error {
+        return Err(error);
+    }
+    Ok(Preview::Sound(Arc::new(Waveform {
+        peaks: stored.peaks.as_chunks::<2>().0.iter().map(|pair| [pair[0] as i8, pair[1] as i8]).collect(),
+        duration: stored.duration_ms as f32 / 1000.0,
+        sample_rate: stored.sample_rate,
+        channels: stored.channels,
+    })))
+}
+
+fn writer_loop(db_path: &Path, jobs: &Receiver<CacheWrite>) {
     let mut conn = match db::open(db_path) {
         Ok(conn) => conn,
         Err(err) => {
@@ -289,8 +341,8 @@ fn writer_loop(db_path: &Path, jobs: &Receiver<(i64, StoredThumb)>) {
                 Err(_) => break,
             }
         }
-        if let Err(err) = db::put_thumbs(&mut conn, &batch) {
-            diag::report("Saving thumbnails", err);
+        if let Err(err) = db::put_cache(&mut conn, &batch) {
+            diag::report("Saving previews", err);
         }
     }
 }
