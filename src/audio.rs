@@ -32,7 +32,14 @@ const BUFFER_SECONDS: f32 = 2.0;
 pub const WAVEFORM_POINTS: usize = 512;
 /// Read-ahead: files bigger than this stream from disk instead (long music, mostly).
 const READ_AHEAD_MAX_FILE: u64 = 24 * 1024 * 1024;
-const READ_AHEAD_BUDGET: usize = 160 * 1024 * 1024;
+/// What the sounds read ahead may hold in all; the memory setting changes it
+/// (`set_read_ahead_budget`).
+static READ_AHEAD_BUDGET: AtomicU64 = AtomicU64::new(160 * 1024 * 1024);
+
+/// How much the sounds read ahead may hold, from the next one read.
+pub fn set_read_ahead_budget(bytes: u64) {
+    READ_AHEAD_BUDGET.store(bytes, Ordering::Relaxed);
+}
 
 /// Where a sound's bytes come from.
 pub enum Source {
@@ -282,6 +289,8 @@ fn decoder_loop(
                             awaiting_first = Some(requested);
                         }
                         Err(err) => {
+                            // Shown under the player; logged too, like every error the window shows.
+                            diag::note("Playing a sound", &err);
                             info.error = Some(err);
                             current = None;
                             shared.finished.store(true, Ordering::Release);
@@ -297,7 +306,10 @@ fn decoder_loop(
                         let mut info = shared.info.lock().unwrap();
                         match result {
                             Ok(at) => info.start = at,
-                            Err(err) => info.error = Some(err),
+                            Err(err) => {
+                                diag::note("Seeking in a sound", &err);
+                                info.error = Some(err);
+                            }
                         }
                         shared.played_frames.store(0, Ordering::Relaxed);
                     }
@@ -338,6 +350,7 @@ fn decoder_loop(
                 shared.decoder_done.store(true, Ordering::Release);
             }
             Err(err) => {
+                diag::note("Playing a sound", &err);
                 shared.info.lock().unwrap().error = Some(err);
                 ended = true;
                 shared.decoder_done.store(true, Ordering::Release);
@@ -660,7 +673,7 @@ fn read_ahead_loop(shared: &ReadAheadShared) {
         cache.bytes += bytes.len();
         cache.files.insert(key, bytes.into());
         cache.order.push_back(key);
-        while cache.bytes > READ_AHEAD_BUDGET {
+        while cache.bytes as u64 > READ_AHEAD_BUDGET.load(Ordering::Relaxed) {
             let Some(oldest) = cache.order.pop_front() else { break };
             if let Some(evicted) = cache.files.remove(&oldest) {
                 cache.bytes -= evicted.len();

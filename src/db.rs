@@ -321,7 +321,19 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Resul
 }
 
 pub fn remove_setting(conn: &Connection, key: &str) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM settings WHERE key = ?1", [key]).map(drop)
+    remove_settings(conn, &[key])
+}
+
+/// Removes several settings in one transaction.
+pub fn remove_settings(conn: &Connection, keys: &[&str]) -> rusqlite::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut statement = tx.prepare_cached("DELETE FROM settings WHERE key = ?1")?;
+        for key in keys {
+            statement.execute([key])?;
+        }
+    }
+    tx.commit()
 }
 
 /// Saves several settings in one transaction.

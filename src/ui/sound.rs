@@ -142,11 +142,14 @@ pub fn transport(ui: &mut Ui, sound: &mut Sound, library: &Library, index: u32, 
     let volume_inline = ui
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            let (glyph, tip) = if audible { (icon::PAUSE, "Pause (Space)") } else { (icon::PLAY, "Play (Space)") };
-            if play_button(ui, glyph).on_hover_text(tip).clicked() {
+            let (glyph, tip) = if audible { (icon::PAUSE, "Pause") } else { (icon::PLAY, "Play") };
+            let hint = |action| crate::keymap::hint(ui.ctx(), action);
+            let (play_hint, stop_hint) =
+                (hint(crate::keymap::Action::PlayPause), hint(crate::keymap::Action::StopOrClear));
+            if play_button(ui, glyph).on_hover_text(format!("{tip}{play_hint}")).clicked() {
                 sound.toggle(library, index);
             }
-            if widgets::icon_button(ui, icon::STOP, "Stop (Esc)", false).clicked() {
+            if widgets::icon_button(ui, icon::STOP, &format!("Stop{stop_hint}"), false).clicked() {
                 sound.stop();
             }
             if widgets::icon_button(ui, icon::REPEAT, "Loop", sound.looping).clicked() {

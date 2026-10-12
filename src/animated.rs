@@ -3,6 +3,7 @@
 //! screen recording can't take hundreds of megabytes.
 
 use std::io::Cursor;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use fast_image_resize as fr;
 use image::AnimationDecoder;
@@ -10,9 +11,15 @@ use image::AnimationDecoder;
 use crate::sheets::{Animation, Frame, Sheet, Source};
 use crate::thumbs::{ThumbPixels, fit_size, shrink};
 
-/// The frames picture's longest side, and its pixels at most (16 MP: 64 MB, on the GPU too).
+/// The frames picture's longest side, and its pixels at most (16 MP: 64 MB, on the GPU too). The
+/// memory setting can lower the pixels (`set_max_pixels`).
 const SHEET_SIDE: u32 = 4096;
-const SHEET_PIXELS: u64 = 16 << 20;
+static SHEET_PIXELS: AtomicU64 = AtomicU64::new(16 << 20);
+
+/// The most pixels a GIF's frames may take, from the next one loaded.
+pub fn set_max_pixels(pixels: u64) {
+    SHEET_PIXELS.store(pixels, Ordering::Relaxed);
+}
 /// Frames past this many are left out.
 const MAX_FRAMES: usize = 1000;
 /// Transparent pixels between frames, so drawing one never picks up its neighbour's edge.
@@ -30,7 +37,7 @@ pub fn load_gif(
         return Ok(None);
     }
     let kept = total.min(MAX_FRAMES);
-    let layout = Layout::plan(width, height, kept as u32);
+    let layout = Layout::plan(width, height, kept as u32, SHEET_PIXELS.load(Ordering::Relaxed));
     let mut rgba = vec![0u8; layout.width as usize * layout.height as usize * 4];
     let mut frames = Vec::with_capacity(kept);
     let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(|err| err.to_string())?;
@@ -110,8 +117,8 @@ struct Layout {
 }
 
 impl Layout {
-    /// Frames at their own size, or scaled down evenly until all of them fit the budget.
-    fn plan(w: u32, h: u32, frames: u32) -> Self {
+    /// Frames at their own size, or scaled down evenly until all of them fit in `max_pixels`.
+    fn plan(w: u32, h: u32, frames: u32, max_pixels: u64) -> Self {
         let frames = frames.max(1);
         let mut longest = w.max(h).max(1);
         loop {
@@ -122,7 +129,7 @@ impl Layout {
             let width = columns * (frame_w + GUTTER) - GUTTER;
             let height = rows * (frame_h + GUTTER) - GUTTER;
             let fits =
-                width <= SHEET_SIDE && height <= SHEET_SIDE && u64::from(width) * u64::from(height) <= SHEET_PIXELS;
+                width <= SHEET_SIDE && height <= SHEET_SIDE && u64::from(width) * u64::from(height) <= max_pixels;
             if fits || longest <= 16 {
                 return Self { longest, frame_w, frame_h, columns, width, height };
             }
@@ -198,13 +205,17 @@ mod tests {
     #[test]
     fn big_animations_fit_the_budget() {
         // The library's biggest: 126 frames of 1270 x 698.
-        let layout = Layout::plan(1270, 698, 126);
+        let budget = 16 << 20;
+        let layout = Layout::plan(1270, 698, 126, budget);
         assert!(layout.width <= SHEET_SIDE && layout.height <= SHEET_SIDE);
-        assert!(u64::from(layout.width) * u64::from(layout.height) <= SHEET_PIXELS);
+        assert!(u64::from(layout.width) * u64::from(layout.height) <= budget);
         assert!(layout.frame_w > 300, "still bigger than the preview pane shows it: {layout:?}");
         let rows = 126u32.div_ceil(layout.columns);
         assert_eq!(layout.cell(125)[1], (rows - 1) * (layout.frame_h + GUTTER));
         // Small sprites keep every pixel.
-        assert_eq!(Layout::plan(48, 48, 8).frame_w, 48);
+        assert_eq!(Layout::plan(48, 48, 8, budget).frame_w, 48);
+        // A smaller budget scales them down further.
+        let small = Layout::plan(1270, 698, 126, 4 << 20);
+        assert!(small.frame_w < layout.frame_w && u64::from(small.width) * u64::from(small.height) <= 4 << 20);
     }
 }

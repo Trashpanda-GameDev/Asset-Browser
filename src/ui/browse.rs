@@ -319,8 +319,9 @@ fn star_button(ui: &Ui, browse: &Browse<'_>, index: u32, center: Pos2, show_outl
     // A dark halo keeps the star readable over light pictures.
     painter.circle_filled(rect.center(), 10.0, Color32::from_black_alpha(if favorite { 110 } else { 80 }));
     painter.text(rect.center(), Align2::CENTER_CENTER, icon::STAR, FontId::new(14.0, family), color);
-    let tip = if favorite { "Remove from Favorites (F)" } else { "Add to Favorites (F)" };
-    let clicked = response.on_hover_text(tip).clicked();
+    let tip = if favorite { "Remove from Favorites" } else { "Add to Favorites" };
+    let hint = crate::keymap::hint(&response.ctx, crate::keymap::Action::Favorite);
+    let clicked = response.on_hover_text(format!("{tip}{hint}")).clicked();
     let path = browse.library.path_of(&browse.library.entries[index as usize]);
     clicked.then(|| GroupCommand::ToggleFavorite(Targets::Paths(vec![path])))
 }

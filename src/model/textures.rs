@@ -54,6 +54,14 @@ pub(super) enum Alpha {
 
 /// Decoded textures kept for reuse. A pack's atlas at the thumbnail size is 256 KB.
 const CACHE_ENTRIES: usize = 32;
+/// What those may hold in all: one at the preview pane's size is 16 MB. The memory setting
+/// changes it (`set_cache_budget`).
+static CACHE_BUDGET: AtomicU64 = AtomicU64::new(128 << 20);
+
+/// How much the decoded textures kept may hold, from the next one decoded.
+pub fn set_cache_budget(bytes: u64) {
+    CACHE_BUDGET.store(bytes, Ordering::Relaxed);
+}
 
 /// A texture file as decoded once, or being decoded: every thread that wants it while it's
 /// decoding waits for that one decode instead of starting its own. Workers take a folder's
@@ -244,7 +252,12 @@ fn cache_cell(
         cache.push_front(entry);
         return cell;
     }
-    if cache.len() >= CACHE_ENTRIES {
+    // The oldest go first, past the count or the bytes (of those decoded by now).
+    let budget = CACHE_BUDGET.load(Ordering::Relaxed);
+    let held = |cache: &VecDeque<Cached>| -> u64 {
+        cache.iter().filter_map(|entry| entry.texture.get()?.as_ref()).map(|decoded| decoded.rgba.len() as u64).sum()
+    };
+    while cache.len() >= CACHE_ENTRIES || (!cache.is_empty() && held(&cache) > budget) {
         cache.pop_back();
     }
     let cell = Arc::new(OnceLock::new());

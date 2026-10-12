@@ -45,6 +45,15 @@ pub fn category_color(index: u8) -> Color32 {
     CATEGORY_COLORS[index as usize % CATEGORY_COLORS.len()]
 }
 
+/// The window's title bar in the header's colour, so the two read as one bar
+/// (`platform::color_title_bar`).
+pub fn color_title_bar(ctx: &egui::Context, window: &impl raw_window_handle::HasWindowHandle) {
+    let rgb = |color: Color32| [color.r(), color.g(), color.b()];
+    // Dark wherever the OS has a dark title bar; exactly the header's colour on Windows 11.
+    ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(egui::viewport::SystemTheme::Dark));
+    crate::platform::color_title_bar(window, rgb(PANEL), rgb(TEXT_WEAK), rgb(BORDER));
+}
+
 /// The family used for titles.
 pub fn semibold() -> FontFamily {
     FontFamily::Name("semibold".into())

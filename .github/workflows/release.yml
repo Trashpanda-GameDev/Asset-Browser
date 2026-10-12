@@ -1,7 +1,10 @@
 # Publishes a release of the Windows app when a version tag is pushed:
 #
-#   1. Set `version` in Cargo.toml (say to 0.2.0), and commit and push it.
-#   2. git tag v0.2.0 && git push origin v0.2.0
+#   1. In CHANGELOG.md, rename "## Unreleased" to the version and date ("## 0.2.0 – 13 Oct 2026"):
+#      those are the release's notes, and what the app shows as "What's new".
+#   2. Set `version` in Cargo.toml (say to 0.2.0) and run `cargo build` so Cargo.lock has it too (the
+#      build below is --locked). Commit all three and merge them into main.
+#   3. On main: git tag v0.2.0 && git push origin v0.2.0
 #
 # Velopack packs the build into a setup program, a portable zip, and the update package that the
 # copies already out there download (src/updates.rs). Run by hand (Actions > Release > Run
@@ -32,9 +35,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          # The tags, for the release notes.
-          fetch-depth: 0
 
       - name: Version
         id: version
@@ -52,6 +52,22 @@ jobs:
           echo "vpk=$vpk" >> "$GITHUB_OUTPUT"
           echo "Asset Browser $version, packed with vpk $vpk"
 
+      - name: Release notes
+        shell: bash
+        run: |
+          # The version's section of CHANGELOG.md, which the app shows as "What's new" too. Checked
+          # before the build, so a missing one stops the release in seconds.
+          version="${{ steps.version.outputs.version }}"
+          mkdir -p target
+          tr -d '\r' < CHANGELOG.md | awk -v version="$version" '
+            /^## / { if (found) exit; found = ($2 == version); next }
+            found' > target/release-notes.md
+          if ! grep -q '[^[:space:]]' target/release-notes.md; then
+            echo "::error::CHANGELOG.md has no notes under \"## $version\". Rename \"## Unreleased\" to it."
+            exit 1
+          fi
+          cat target/release-notes.md
+
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
@@ -65,14 +81,6 @@ jobs:
         run: |
           dotnet tool install --global vpk --version ${{ steps.version.outputs.vpk }}
           echo "$USERPROFILE/.dotnet/tools" >> "$GITHUB_PATH"
-
-      - name: Release notes
-        shell: bash
-        run: |
-          # The commits since the release before.
-          previous=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
-          git log --no-merges --format='- %s' "${previous:+$previous..}HEAD" > target/release-notes.md
-          cat target/release-notes.md
 
       - name: Pack
         shell: bash

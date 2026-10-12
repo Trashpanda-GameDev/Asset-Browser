@@ -15,8 +15,9 @@ use crate::library::{Entry, Library};
 use crate::model::ModelInfo;
 use crate::thumbs::{Preview, Thumb, ThumbJob, ThumbPixels, ThumbService};
 
-/// Thumbnails kept on the GPU. The least recently drawn go first; scrolling back reloads them
-/// from the cache in about a millisecond each.
+/// Thumbnails kept on the GPU, until the memory setting says otherwise (`set_max_textures`). The
+/// least recently drawn go first; scrolling back reloads them from the cache in about a
+/// millisecond each.
 const MAX_TEXTURES: usize = 1500;
 /// Limits GPU uploads per frame so a burst of finished thumbnails can't stall a frame.
 const UPLOADS_PER_FRAME: usize = 48;
@@ -44,6 +45,7 @@ pub struct Previews {
     /// Drawn behind pictures with transparency.
     pub checker: TextureHandle,
     frame: u64,
+    max_textures: usize,
 }
 
 impl Previews {
@@ -66,7 +68,37 @@ impl Previews {
             wanted_set: HashSet::new(),
             checker,
             frame: 0,
+            max_textures: MAX_TEXTURES,
         }
+    }
+
+    /// How many thumbnails may stay on the GPU; any over go at the end of the frame.
+    pub fn set_max_textures(&mut self, count: usize) {
+        self.max_textures = count.max(100);
+    }
+
+    pub fn texture_count(&self) -> usize {
+        self.textures.len()
+    }
+
+    /// Forgets what's held of the cache's parts that were cleared, so they're made again as
+    /// they're shown: thumbnails (and model pictures), waveforms, model facts.
+    pub fn forget(&mut self, thumbnails: bool, waveforms: bool, models: bool) {
+        if thumbnails {
+            self.textures.clear();
+        }
+        if waveforms {
+            self.waveforms.clear();
+        }
+        if models {
+            // A model without its facts counts as not previewed, so its picture is made again too.
+            self.models.clear();
+        }
+        // Failures were cached with them; they're tried again too.
+        self.failed.clear();
+        self.arrived.clear();
+        self.arrived_keys.clear();
+        self.last_wanted.clear();
     }
 
     pub fn begin_frame(&mut self) {
@@ -186,13 +218,14 @@ impl Previews {
     }
 
     pub fn evict(&mut self) {
-        if self.textures.len() <= MAX_TEXTURES {
+        let max = self.max_textures;
+        if self.textures.len() <= max {
             return;
         }
         let mut by_age: Vec<(u64, i64)> =
             self.textures.iter().map(|(&key, texture)| (texture.last_used.get(), key)).collect();
         by_age.sort_unstable();
-        let excess = self.textures.len() - MAX_TEXTURES + MAX_TEXTURES / 10;
+        let excess = self.textures.len() - max + max / 10;
         for (last_used, key) in by_age.into_iter().take(excess) {
             if last_used == self.frame {
                 break;

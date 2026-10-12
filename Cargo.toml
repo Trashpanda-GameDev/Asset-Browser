@@ -1,6 +1,6 @@
 [package]
 name = "asset_browser"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "A fast, native browser for folders of game assets: images, sounds, models and materials."
 publish = false
@@ -34,10 +34,22 @@ trash = "5"
 # Installs and updates the app from GitHub Releases. Pinned to the `vpk` version that packs releases
 # (.github/workflows/release.yml), which must match.
 velopack = "=1.2.161"
+# The version eframe uses: the native window, to colour its title bar (`platform::color_title_bar`).
+raw-window-handle = "0.6"
+# Velopack's version too: comparing versions for "What's new".
+semver = "1"
 
 [target.'cfg(windows)'.dependencies]
-# The drive type: Windows keeps a Recycle Bin only on fixed drives (`platform::has_trash`).
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_WindowsProgramming"] }
+# The drive type: Windows keeps a Recycle Bin only on fixed drives (`platform::has_trash`). The
+# title bar's colours (`platform::color_title_bar`). The process's memory, for the settings.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Storage_FileSystem",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+] }
 
 [dev-dependencies]
 # The version wgpu uses: checks the 3D view's shader in tests, without a GPU.
