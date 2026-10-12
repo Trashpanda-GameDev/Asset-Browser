@@ -111,6 +111,7 @@ fn run(slot: &(Mutex<Slot>, Condvar), results: &Sender<Loaded>, on_result: &(dyn
             AssetKind::Audio => Err("sounds have no large preview".to_owned()),
         }))
         .unwrap_or_else(|_| Err("the decoder crashed on this file".into()));
+        thumbs::trim_resizer(&mut resizer);
         if results.send(Loaded { key: request.key, result }).is_err() {
             return;
         }

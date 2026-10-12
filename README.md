@@ -88,6 +88,10 @@ The icon is `assets/icon.png` (1024 px); `assets/icon.ico` holds every size Wind
   the work queue, so scrolling past something drops it rather than making it first.
 - **The UI thread never touches the disk or decodes anything,** and only draws the rows on screen.
 - **PSDs are read from their flattened picture,** and only the rows the thumbnail needs (`src/psd_composite.rs`).
+- **Memory stays bounded.** A picture is decoded at full size before it's shrunk, so the thumbnail workers share a
+  decoding budget (512 MB): big pictures take turns, small ones never wait. Opaque pictures are shrunk without the
+  extra copy transparency needs, and no worker keeps its working copy of a big picture afterwards. At most 1,500
+  thumbnails stay on the GPU (about 300 MB), the least recently seen going first.
 - **Sound never waits on the disk or a lock.** A decoder thread keeps 2 s of audio ready in a lock-free ring buffer; the
   audio callback only copies from it. The next sounds after the selection are read into memory ahead of time, so
   stepping through a folder with the arrow keys starts each one in under a millisecond.
@@ -127,6 +131,7 @@ Measured on F:\Resources (60,648 assets, spinning laptop disk, 20 threads), 12 O
 | Model thumbnails, from cache | 21,760/s |
 | Model thumbnail, one thread, files in memory: load / render | median 0.4 / 3.2 ms; worst 88 / 20 ms |
 | GIF frames for the preview pane, all 559 GIFs (544 animated) | median 0.1 ms, worst 0.8 s (104 frames of 1270 × 698), 0 failures |
+| Memory, thumbnails for 30 PNGs of 4400 × 4400 not seen before: peak / after | 0.7 GB / back to 41 MB in 3 s (it was 3.7 GB, then 2.1 GB kept for good) |
 
 ## Where things are
 
