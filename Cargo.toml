@@ -1,6 +1,6 @@
 [package]
 name = "asset_browser"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "A fast, native browser for folders of game assets: images, sounds, models and materials."
 publish = false

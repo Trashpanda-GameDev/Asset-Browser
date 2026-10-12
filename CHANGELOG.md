@@ -4,9 +4,10 @@ What's new in each version of Asset Browser, written for the people using it. Th
 version's notes the first time it starts after updating to it (and every version's under Settings →
 Updates → What's new), and the release workflow publishes the same notes with the release.
 
-Add to **Unreleased** as things change. To release, rename it to the version and date, as below.
+As things change, add them under a `## Unreleased` heading at the top. To release, rename it to the
+version and date, as below.
 
-## Unreleased
+## 0.2.0 – 13 Oct 2026
 
 - **Settings**, from the gear at the top right or Ctrl+,: updates, keyboard shortcuts, storage and
   memory in one place.
