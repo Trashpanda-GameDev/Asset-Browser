@@ -1,0 +1,53 @@
+[package]
+name = "asset_browser"
+version = "0.1.0"
+edition = "2024"
+description = "A fast, native browser for folders of game assets: images, sounds, models and materials."
+publish = false
+
+[dependencies]
+eframe = "0.36"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tga", "tiff", "webp", "ico", "qoi"] }
+# The version `image` uses: counts an animated GIF's frames without decoding them.
+gif = "0.14"
+fast_image_resize = "6"
+rayon = "1.12"
+crossbeam-channel = "0.5"
+rusqlite = { version = "0.40", features = ["bundled"] }
+rfd = "0.17"
+directories = "6"
+cpal = "0.18"
+symphonia = { version = "0.6", features = ["mp3", "aac", "alac", "isomp4", "aiff"] }
+rtrb = "0.4"
+ufbx = "0.11.5"
+# Buffers and images are resolved by `model::gltf` itself; `import` would pull in its own image decoding.
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"] }
+bytemuck = { version = "1", features = ["derive"] }
+flate2 = "1"
+ruzstd = { version = "0.9", default-features = false, features = ["std"] }
+roxmltree = "0.21"
+# Sprite sheet data (Aseprite / TexturePacker JSON); `preserve_order` keeps Aseprite's frame order.
+serde_json = { version = "1", features = ["preserve_order"] }
+egui-phosphor = { version = "0.14", features = ["regular", "fill"] }
+# Deleting moves files to the Recycle Bin (the Trash on macOS and Linux), so it can be undone.
+trash = "5"
+
+[target.'cfg(windows)'.dependencies]
+# The drive type: Windows keeps a Recycle Bin only on fixed drives (`platform::has_trash`).
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_WindowsProgramming"] }
+
+[dev-dependencies]
+# The version wgpu uses: checks the 3D view's shader in tests, without a GPU.
+naga = { version = "30", features = ["wgsl-in"] }
+
+[profile.dev.package."*"]
+# Decoders and resizers are unusably slow unoptimised; keep our own crate fast to rebuild.
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[build-dependencies]
+# Puts the icon and the app's name into the Windows exe (`build.rs`).
+winresource = "0.1"

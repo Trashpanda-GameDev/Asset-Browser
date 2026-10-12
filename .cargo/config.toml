@@ -1,0 +1,4 @@
+# Windows: the C runtime goes into the executable, so it starts on a PC without the Visual C++
+# redistributable (VCRUNTIME140.dll). The bundled C code (SQLite, ufbx) follows the same setting.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
