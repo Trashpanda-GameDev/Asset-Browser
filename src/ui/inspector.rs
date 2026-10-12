@@ -181,8 +181,9 @@ impl Inspector {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                 let several = selection.len() > 1 && selection.contains(focus);
+                let hint = crate::keymap::hint(ui.ctx(), crate::keymap::Action::Open);
                 if widgets::button(ui, icon::ARROW_SQUARE_OUT, "Open")
-                    .on_hover_text("Open in its default app (Enter)")
+                    .on_hover_text(format!("Open in its default app{hint}"))
                     .clicked()
                 {
                     output.action = Some(MenuAction::Open);
@@ -206,12 +207,14 @@ impl Inspector {
                 }
                 ui.add_space(4.0);
             }
+            // Every row is there from the start, with "…" until its value is known, so moving through
+            // the assets with the keys doesn't make the rows below jump as values arrive.
             widgets::section_label(ui, "Details");
             match entry.kind {
                 AssetKind::Image => {
-                    image_properties(ui, entry, previews, self.detail_size(entry.key), self.gif_length(entry.key));
+                    image_properties(ui, entry, previews, self.detail_size(entry.key), self.gif_frames(entry));
                 }
-                AssetKind::Audio => sound_properties(ui, entry, previews, sound),
+                AssetKind::Audio => sound_properties(ui, entry, previews),
                 AssetKind::Model => self.model_properties(ui, entry, previews),
             }
             widgets::property(ui, "File size", format_size(entry.size));
@@ -224,6 +227,18 @@ impl Inspector {
                 format!("{root} › {}", entry.folder().replace('/', " › "))
             };
             widgets::property(ui, "Folder", RichText::new(folder).color(theme::TEXT_WEAK));
+            // Last, since it only appears once the sound plays.
+            if entry.kind == AssetKind::Audio
+                && let Some(ready) = sound.now_for(entry.key).and_then(|now| now.ready_ms)
+            {
+                widgets::property(ui, "Started in", format!("{ready:.0} ms"))
+                    .on_hover_text("From the request to the first audio handed to the sound card");
+            }
+            // Below the details: a sprite sheet's or GIF's frames load after the picture is shown, and
+            // the player arriving here moves nothing above it.
+            if entry.kind == AssetKind::Image {
+                self.animation_section(ui, entry);
+            }
 
             if selection.len() > 1 {
                 ui.add_space(10.0);
@@ -247,20 +262,39 @@ impl Inspector {
         }
     }
 
-    /// An animated GIF's frame count and length, once its frames are loaded.
-    fn gif_length(&self, key: i64) -> Option<(usize, u32)> {
-        match &self.detail {
-            Some((detail_key, DetailState::Image { sheet: Some(sheet), .. }))
-                if *detail_key == key && matches!(sheet.source, Source::Animated { .. }) =>
-            {
-                let total = match sheet.source {
-                    Source::Animated { total, .. } => total,
-                    _ => sheet.frames.len(),
-                };
-                Some((total, sheet.frames.iter().filter_map(|frame| frame.duration_ms).sum()))
-            }
-            _ => None,
+    /// A GIF's frames for its details ("24 · 2.4 s", "1" for a still one, "…" while they load);
+    /// `None` for other pictures.
+    fn gif_frames(&self, entry: &Entry) -> Option<RichText> {
+        if !entry.extension().eq_ignore_ascii_case("gif") {
+            return None;
         }
+        Some(match &self.detail {
+            Some((key, DetailState::Image { sheet, .. })) if *key == entry.key => match sheet {
+                Some(sheet) if matches!(sheet.source, Source::Animated { .. }) => {
+                    let total = match sheet.source {
+                        Source::Animated { total, .. } => total,
+                        _ => sheet.frames.len(),
+                    };
+                    let ms: u32 = sheet.frames.iter().filter_map(|frame| frame.duration_ms).sum();
+                    RichText::new(format!("{} · {}", grouped(total), format_time(f64::from(ms) / 1000.0)))
+                }
+                _ => RichText::new("1"),
+            },
+            Some((key, DetailState::Failed(_))) if *key == entry.key => RichText::new("–"),
+            _ => pending(),
+        })
+    }
+
+    /// The sprite sheet player's controls, once the picture's frames are loaded and playing.
+    fn animation_section(&mut self, ui: &mut Ui, entry: &Entry) {
+        let Some((key, DetailState::Image { texture, size, pixels, .. })) = &self.detail else { return };
+        if *key != entry.key || !self.sheet.animate || self.sheet.sheet.is_none() {
+            return;
+        }
+        let (texture, size, pixels) = (texture.id(), *size, pixels.clone());
+        ui.add_space(10.0);
+        widgets::section_label(ui, "Animation");
+        self.sheet.controls(ui, texture, size, &pixels);
     }
 
     fn image_section(&mut self, ui: &mut Ui, entry: &Entry, path_key: &str, previews: &Previews, width: f32) {
@@ -316,11 +350,6 @@ impl Inspector {
                 }
             }
         });
-        if animating && let Some((texture, size, pixels, _)) = &loaded {
-            ui.add_space(4.0);
-            widgets::section_label(ui, "Animation");
-            self.sheet.controls(ui, *texture, *size, pixels);
-        }
     }
 
     fn model_section(
@@ -378,6 +407,12 @@ impl Inspector {
         let Some(info) = loaded.or(previews.models.get(&entry.key).map(|info| info.as_ref())) else {
             if let Some(message) = previews.failed.get(&entry.key) {
                 widgets::property(ui, "Preview", RichText::new(message).color(theme::ERROR));
+            } else if entry.extension().eq_ignore_ascii_case("blend") {
+                widgets::property(ui, "Format", pending());
+            } else {
+                for name in ["Format", "Triangles", "Vertices", "Meshes", "Materials", "Textures", "Dimensions"] {
+                    widgets::property(ui, name, pending());
+                }
             }
             return;
         };
@@ -422,40 +457,47 @@ fn sound_section(ui: &mut Ui, library: &Library, focus: u32, previews: &Previews
     sound::transport(ui, sound, library, focus, duration);
 }
 
-fn sound_properties(ui: &mut Ui, entry: &Entry, previews: &Previews, sound: &Sound) {
+fn sound_properties(ui: &mut Ui, entry: &Entry, previews: &Previews) {
     if let Some(waveform) = previews.waveforms.get(&entry.key) {
         widgets::property(ui, "Length", format_time(waveform.duration as f64));
         widgets::property(ui, "Sample rate", format!("{:.1} kHz", waveform.sample_rate as f32 / 1000.0));
         widgets::property(ui, "Channels", channels(waveform.channels));
     } else if let Some(message) = previews.failed.get(&entry.key) {
         widgets::property(ui, "Preview", RichText::new(message).color(theme::ERROR));
+    } else {
+        for name in ["Length", "Sample rate", "Channels"] {
+            widgets::property(ui, name, pending());
+        }
     }
     widgets::property(ui, "Format", entry.extension().to_uppercase());
-    if let Some(ready) = sound.now_for(entry.key).and_then(|now| now.ready_ms) {
-        widgets::property(ui, "Started in", format!("{ready:.0} ms"))
-            .on_hover_text("From the request to the first audio handed to the sound card");
-    }
 }
 
-/// `animation` is an animated GIF's frame count and length (ms), once loaded.
+/// `frames` is a GIF's frame count and length (`Inspector::gif_frames`).
 fn image_properties(
     ui: &mut Ui,
     entry: &Entry,
     previews: &Previews,
     detail: Option<[u32; 2]>,
-    animation: Option<(usize, u32)>,
+    frames: Option<RichText>,
 ) {
     if let Some([w, h]) = detail.or(previews.dimensions(entry.key)) {
         widgets::property(ui, "Dimensions", format!("{w} × {h} px"));
     } else if let Some(message) = previews.failed.get(&entry.key) {
         widgets::property(ui, "Preview", RichText::new(message).color(theme::ERROR));
+    } else {
+        widgets::property(ui, "Dimensions", pending());
     }
-    if let Some((frames, ms)) = animation {
-        widgets::property(ui, "Frames", format!("{} · {}", grouped(frames), format_time(f64::from(ms) / 1000.0)));
+    if let Some(frames) = frames {
+        widgets::property(ui, "Frames", frames);
     }
     let format = entry.extension().to_uppercase();
     let format = if format == "PSD" { "PSD (flattened picture)".to_owned() } else { format };
     widgets::property(ui, "Format", format);
+}
+
+/// A detail that isn't known yet: its row is shown anyway, so the rows below stay where they are.
+fn pending() -> RichText {
+    RichText::new("…").color(theme::TEXT_FAINT)
 }
 
 /// The asset's name, kind and path.
@@ -632,7 +674,9 @@ fn favorite_button(ui: &mut Ui, favorite: bool) -> egui::Response {
         star,
     );
     painter.galley(pos2(rect.left() + 32.0, rect.center().y - galley.size().y / 2.0), galley, theme::TEXT);
-    response.on_hover_text(if favorite { "Remove from Favorites (F)" } else { "Add to Favorites (F)" })
+    let tip = if favorite { "Remove from Favorites" } else { "Add to Favorites" };
+    let hint = crate::keymap::hint(&response.ctx, crate::keymap::Action::Favorite);
+    response.on_hover_text(format!("{tip}{hint}"))
 }
 
 /// A stand-in while the preview is made.

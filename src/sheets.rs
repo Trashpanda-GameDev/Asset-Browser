@@ -524,6 +524,15 @@ impl SheetStore {
         .flatten()
     }
 
+    /// Forgets every picture's choices (Settings → Storage).
+    pub fn clear(&self) {
+        if let Some(conn) = &self.conn
+            && let Err(err) = conn.execute("DELETE FROM sheets", [])
+        {
+            diag::report("Clearing sprite sheet choices", err);
+        }
+    }
+
     pub fn set(&self, key: &str, saved: &Saved) {
         let Some(conn) = &self.conn else { return };
         let grid = saved.grid;

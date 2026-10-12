@@ -104,6 +104,12 @@ impl SheetView {
         self.animate = false;
     }
 
+    /// Forgets every picture's saved choices; the picture shown is detected again.
+    pub fn forget_choices(&mut self) {
+        self.store.clear();
+        self.clear();
+    }
+
     /// How many frames were found, for the button that starts playing them.
     pub fn frame_count(&self) -> Option<usize> {
         self.sheet.as_ref().map(|sheet| sheet.frames.len())

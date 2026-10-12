@@ -233,6 +233,24 @@ impl Groups {
         true
     }
 
+    /// Deletes every collection and category and empties Favorites (Settings → Storage). The files
+    /// are untouched.
+    pub fn clear(&mut self) -> bool {
+        if let Some(conn) = &self.conn {
+            let cleared = conn.unchecked_transaction().and_then(|tx| {
+                tx.execute("DELETE FROM members", [])?;
+                tx.execute("DELETE FROM groups WHERE id <> ?1", [FAVORITES])?;
+                tx.commit()
+            });
+            if let Err(err) = cleared {
+                diag::report("Clearing favorites, collections and categories", err);
+                return false;
+            }
+        }
+        self.list = vec![favorites_group()];
+        true
+    }
+
     /// Adds the files that aren't in the group yet; returns how many were added.
     pub fn add(&mut self, id: i64, paths: &[PathBuf]) -> usize {
         let Some(group) = self.list.iter_mut().find(|group| group.id == id) else { return 0 };

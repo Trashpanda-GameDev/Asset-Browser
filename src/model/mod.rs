@@ -25,7 +25,7 @@ mod stl;
 mod textures;
 mod three_ds;
 
-pub use textures::{TextureStats, texture_stats};
+pub use textures::{TextureStats, set_cache_budget as set_texture_cache_budget, texture_stats};
 
 /// Everything about a model that the previews need, in one coordinate system:
 /// right-handed, Y up, metres, with every node transform already applied.

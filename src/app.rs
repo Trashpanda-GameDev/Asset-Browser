@@ -17,20 +17,27 @@ use egui_phosphor::regular as icon;
 use rusqlite::Connection;
 
 use crate::asset::AssetKind;
+use crate::changelog;
 use crate::deletion::{self, Deleted};
 use crate::groups::{self, FAVORITES, GroupKind, Groups, Membership, UNCATEGORIZED};
+use crate::keymap::{self, Action, Keymap};
 use crate::library::{self, Library, SortBy, folder_name, path_key, root_string};
+use crate::memory;
 use crate::scan::ScannedFile;
+use crate::storage::Part;
 use crate::thumbs::ThumbService;
 use crate::ui::browse::{self, Browse, BrowseOutput, MenuAction};
 use crate::ui::folders::{FolderAction, FolderTree};
 use crate::ui::image_view::Backdrop;
+use crate::ui::image_view::ImageView;
 use crate::ui::inspector::{Inspector, InspectorArgs};
 use crate::ui::mode::{Layout as ViewLayout, Mode, ModeView};
 use crate::ui::organize::{self, GroupCommand, GroupEdit, Sidebar, Targets, plural};
 use crate::ui::previews::Previews;
+use crate::ui::settings::{Command, Settings, SettingsArgs};
 use crate::ui::sound::{self, Sound};
 use crate::ui::updates::UpdateAction;
+use crate::ui::whats_new::WhatsNew;
 use crate::ui::{theme, widgets};
 use crate::updates::Updates;
 use crate::{db, diag, platform, scan};
@@ -44,6 +51,9 @@ const SETTING_LAST_ROOT: &str = "last_root";
 const OPEN_MANY_MAX: usize = 12;
 /// How long a confirmation ("Added 3 to Forest props") stays up.
 const TOAST_TIME: Duration = Duration::from_millis(2600);
+/// The last version whose "What's new" was shown (or would have been, on a first install).
+const SETTING_WHATS_NEW: &str = "app.whats_new_seen";
+const SETTING_MEMORY: &str = "memory.limit_mb";
 
 /// A scan of some of the library's folders, and the library built with what it found.
 struct ScanDone {
@@ -98,6 +108,12 @@ struct AfterDelete {
     parent: Option<String>,
 }
 
+/// Parts of the cache being cleared on the cache writer's thread.
+struct Clearing {
+    parts: Vec<Part>,
+    done: Receiver<Result<(), String>>,
+}
+
 /// A deletion under way.
 struct Deleting {
     rx: Receiver<Deleted>,
@@ -143,6 +159,12 @@ pub struct BrowserApp {
     inspector: Inspector,
     sound: Sound,
     updates: Updates,
+    /// The settings window, and what it sets.
+    settings: Settings,
+    keymap: Keymap,
+    memory_mb: u64,
+    whats_new: Option<WhatsNew>,
+    clearing: Option<Clearing>,
 
     /// Favorites, collections and categories, and where their members are in the library.
     groups: Groups,
@@ -173,6 +195,7 @@ pub struct BrowserApp {
 impl BrowserApp {
     pub fn new(cc: &eframe::CreationContext<'_>, start_root: Option<PathBuf>) -> Self {
         theme::apply(&cc.egui_ctx);
+        theme::color_title_bar(&cc.egui_ctx, cc);
         let db_path = db::default_path();
         let conn = db::open(&db_path)
             .map_err(|err| diag::report(&format!("Cache unavailable ({})", db_path.display()), err))
@@ -220,6 +243,11 @@ impl BrowserApp {
             inspector: Inspector::new(&cc.egui_ctx, &db::user_data_path()),
             sound: Sound::start(&cc.egui_ctx),
             updates,
+            settings: Settings::default(),
+            keymap: Keymap::default(),
+            memory_mb: memory::DEFAULT_MB,
+            whats_new: None,
+            clearing: None,
             groups: Groups::open(&db::user_data_path()),
             membership: Membership::default(),
             membership_dirty: true,
@@ -236,8 +264,56 @@ impl BrowserApp {
             scroll_to_focus: false,
         };
         app.load_settings();
+        app.apply_memory();
+        app.whats_new_at_start();
         app.open_library(start_root);
         app
+    }
+
+    /// Opens the settings at `page`; `None` closes them. (Also for `src/bin/shots.rs`.)
+    pub fn show_settings(&mut self, page: Option<crate::ui::settings::Page>) {
+        match page {
+            Some(page) => self.settings.open_at(page),
+            None => self.settings.open = false,
+        }
+    }
+
+    /// Shows "What's new": every version's notes, or as after an update, the running version's.
+    /// (Also for `src/bin/shots.rs`.)
+    pub fn show_whats_new(&mut self, every_version: bool) {
+        let Ok(current) = semver::Version::parse(&self.updates.version()) else { return };
+        self.whats_new = Some(if every_version {
+            WhatsNew::every_version(current)
+        } else {
+            WhatsNew::since(semver::Version::new(0, 0, 0), current)
+        });
+    }
+
+    pub fn hide_whats_new(&mut self) {
+        self.whats_new = None;
+    }
+
+    /// Shares the memory limit out among what the app keeps (`memory`).
+    fn apply_memory(&mut self) {
+        let shares = memory::apply(self.memory_mb);
+        self.previews.set_max_textures(shares.thumbnails);
+    }
+
+    /// After an update, "What's new" for the versions since the one whose notes were last shown.
+    fn whats_new_at_start(&mut self) {
+        let Some(conn) = &self.conn else { return };
+        let Ok(current) = semver::Version::parse(&self.updates.version()) else { return };
+        let seen = db::get_setting(conn, SETTING_WHATS_NEW);
+        // Any saved view means it ran before: an update rather than a first install.
+        let used_before = db::get_setting(conn, "ui.mode").is_some();
+        if let changelog::AtStart::Since(seen) =
+            changelog::at_start(changelog::releases(), seen.as_deref(), used_before, &current)
+        {
+            self.whats_new = Some(WhatsNew::since(seen, current.clone()));
+        }
+        if let Err(err) = db::set_setting(conn, SETTING_WHATS_NEW, &current.to_string()) {
+            diag::report("Saving settings", err);
+        }
     }
 
     /// Shows the library's folders from the cached index at once, then rescans them all in the
@@ -1234,61 +1310,90 @@ impl BrowserApp {
     /// Runs before any widget is drawn and consumes the keys it handles, so a focused button
     /// can't also react to Space or Enter.
     fn handle_keys(&mut self, ctx: &egui::Context) {
-        // A "Delete?" dialog takes the keys itself (Enter, Esc).
-        if self.confirm_files.is_some() || self.confirm_delete.is_some() {
+        // A "Delete?" dialog takes the keys itself (Enter, Esc), and so do the settings and "What's
+        // new" (Esc, a shortcut being changed).
+        if self.confirm_files.is_some()
+            || self.confirm_delete.is_some()
+            || self.settings.wants_keys()
+            || self.whats_new.is_some()
+        {
             return;
         }
-        let command = |key| ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, key));
-        if command(Key::F) {
+        // The shortcuts are the user's (Settings → Keyboard), so a shortcut's press is matched
+        // exactly: Ctrl+Shift+F isn't Ctrl+F.
+        let keys = self.keymap.clone();
+        let typing = ctx.egui_wants_keyboard_input();
+        // The window's own shortcuts work while typing in the search box when they have Ctrl or
+        // Alt; a plain key is typed.
+        let window = |action: Action| (!typing || keys.has_modifier(action)) && keys.pressed(ctx, action).is_some();
+        if window(Action::Search) {
             self.focus_search = true;
         }
-        for (key, mode) in [Key::Num1, Key::Num2, Key::Num3, Key::Num4].into_iter().zip(Mode::ALL) {
-            if command(key) {
+        for (action, mode) in
+            [Action::ModeAll, Action::ModeImages, Action::ModeSounds, Action::ModeModels].into_iter().zip(Mode::ALL)
+        {
+            if window(action) {
                 self.set_mode(mode);
             }
         }
-        if ctx.egui_wants_keyboard_input() {
+        if window(Action::Settings) {
+            self.settings.open = true;
+        }
+        if window(Action::TogglePane) {
+            self.show_inspector = !self.show_inspector;
+        }
+        for (action, layout) in [(Action::Grid, ViewLayout::Grid), (Action::List, ViewLayout::List)] {
+            if window(action) {
+                self.mode_view_mut().layout = layout;
+                self.scroll_to_focus = true;
+            }
+        }
+        if typing {
             return;
         }
-        if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Delete)) {
+        let pressed = |action| keys.pressed(ctx, action);
+        if pressed(Action::Delete).is_some() {
             self.ask_to_delete_selection();
         }
-        if command(Key::A) {
+        if pressed(Action::SelectAll).is_some() {
             let view = std::mem::take(&mut self.view);
             self.mode_view_mut().selection.all(&view);
             self.view = view;
         }
-        if command(Key::C) {
+        if pressed(Action::CopyPaths).is_some() {
             self.run_action(MenuAction::CopyPaths);
         }
-        if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::F)) {
+        if pressed(Action::ShowInFolder).is_some() {
+            self.run_action(MenuAction::Reveal);
+        }
+        if pressed(Action::Favorite).is_some() {
             self.run_group_command(GroupCommand::ToggleFavorite(Targets::Selection));
         }
 
-        let pressed = |modifiers, key| ctx.input_mut(|input| input.consume_key(modifiers, key));
-        let shift = ctx.input(|input| input.modifiers.shift);
-        let modifiers = if shift { Modifiers::SHIFT } else { Modifiers::NONE };
         let columns = self.columns.max(1) as isize;
         let page = columns * self.page_rows.max(1) as isize;
         let len = self.view.len() as isize;
         let mut step = None;
-        for (key, delta) in [
-            (Key::ArrowLeft, -1),
-            (Key::ArrowRight, 1),
-            (Key::ArrowUp, -columns),
-            (Key::ArrowDown, columns),
-            (Key::PageUp, -page),
-            (Key::PageDown, page),
-            (Key::Home, -len),
-            (Key::End, len),
+        // Holding Shift on a move selects as it goes.
+        let mut shift = false;
+        for (action, delta) in [
+            (Action::Left, -1),
+            (Action::Right, 1),
+            (Action::Up, -columns),
+            (Action::Down, columns),
+            (Action::PageUp, -page),
+            (Action::PageDown, page),
+            (Action::First, -len),
+            (Action::Last, len),
         ] {
-            if pressed(modifiers, key) {
+            if let Some(held) = pressed(action) {
                 step = Some(delta);
+                shift = held;
             }
         }
-        let enter = pressed(Modifiers::NONE, Key::Enter);
-        let space = pressed(Modifiers::NONE, Key::Space);
-        let escape = pressed(Modifiers::NONE, Key::Escape);
+        let enter = pressed(Action::Open).is_some();
+        let space = pressed(Action::PlayPause).is_some();
+        let escape = pressed(Action::StopOrClear).is_some();
 
         if let Some(step) = step
             && !self.view.is_empty()
@@ -1384,19 +1489,27 @@ impl BrowserApp {
                         })
                     })
                     .collect();
+                let tips: Vec<String> = Mode::ALL
+                    .iter()
+                    .map(|mode| {
+                        let (tip, action) = match mode {
+                            Mode::All => ("Everything", Action::ModeAll),
+                            Mode::Images => ("Pictures and textures", Action::ModeImages),
+                            Mode::Sounds => ("Sounds, with a player", Action::ModeSounds),
+                            Mode::Models => ("3D models, with a 3D view", Action::ModeModels),
+                        };
+                        format!("{tip}{}", keymap::hint(ui.ctx(), action))
+                    })
+                    .collect();
                 let segments: Vec<widgets::Segment<'_>> = Mode::ALL
                     .iter()
                     .zip(notes)
-                    .map(|(mode, note)| widgets::Segment {
+                    .zip(&tips)
+                    .map(|((mode, note), tip)| widgets::Segment {
                         glyph: mode.glyph(),
                         label: if show_labels { mode.label() } else { "" },
                         note,
-                        tooltip: match mode {
-                            Mode::All => "Everything (Ctrl+1)",
-                            Mode::Images => "Pictures and textures (Ctrl+2)",
-                            Mode::Sounds => "Sounds, with a player (Ctrl+3)",
-                            Mode::Models => "3D models, with a 3D view (Ctrl+4)",
-                        },
+                        tooltip: tip,
                     })
                     .collect();
                 if let Some(index) = widgets::segmented(ui, ui.id().with("modes"), &segments, self.mode.index()) {
@@ -1404,18 +1517,28 @@ impl BrowserApp {
                 }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let inspector_tip =
-                        if self.show_inspector { "Hide the preview pane" } else { "Show the preview pane" };
-                    if widgets::icon_button(ui, icon::SIDEBAR_SIMPLE, inspector_tip, self.show_inspector).clicked() {
+                    let settings_tip = format!("Settings{}", keymap::hint(ui.ctx(), Action::Settings));
+                    if widgets::icon_button(ui, icon::GEAR_SIX, &settings_tip, self.settings.open).clicked() {
+                        self.settings.open = true;
+                    }
+                    widgets::divider(ui);
+                    let inspector_tip = format!(
+                        "{} the preview pane{}",
+                        if self.show_inspector { "Hide" } else { "Show" },
+                        keymap::hint(ui.ctx(), Action::TogglePane)
+                    );
+                    if widgets::icon_button(ui, icon::SIDEBAR_SIMPLE, &inspector_tip, self.show_inspector).clicked() {
                         self.show_inspector = !self.show_inspector;
                     }
                     widgets::divider(ui);
                     let layout = self.mode_view().layout;
-                    if widgets::icon_button(ui, icon::LIST, "List", layout == ViewLayout::List).clicked() {
+                    let list_tip = format!("List{}", keymap::hint(ui.ctx(), Action::List));
+                    if widgets::icon_button(ui, icon::LIST, &list_tip, layout == ViewLayout::List).clicked() {
                         self.mode_view_mut().layout = ViewLayout::List;
                         self.scroll_to_focus = true;
                     }
-                    if widgets::icon_button(ui, icon::SQUARES_FOUR, "Grid", layout == ViewLayout::Grid).clicked() {
+                    let grid_tip = format!("Grid{}", keymap::hint(ui.ctx(), Action::Grid));
+                    if widgets::icon_button(ui, icon::SQUARES_FOUR, &grid_tip, layout == ViewLayout::Grid).clicked() {
                         self.mode_view_mut().layout = ViewLayout::Grid;
                         self.scroll_to_focus = true;
                     }
@@ -1737,16 +1860,134 @@ impl BrowserApp {
         }
         match update {
             Some(UpdateAction::Check) => self.updates.check_now(),
-            Some(UpdateAction::Restart) => {
-                // Saved before the updater starts: it waits for the app to close, but if it can't
-                // watch the process it goes ahead and stops it.
-                self.save_settings();
-                if self.updates.restart() {
-                    self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
+            Some(UpdateAction::Restart) => self.restart_to_update(),
             None => {}
         }
+    }
+
+    fn restart_to_update(&mut self) {
+        // Saved before the updater starts: it waits for the app to close, but if it can't watch
+        // the process it goes ahead and stops it.
+        self.save_settings();
+        if self.updates.restart() {
+            self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    /// The settings window, and doing what's asked in it.
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        if !self.settings.open {
+            return;
+        }
+        let (user_path, log_path) = (db::user_data_path(), diag::log_path());
+        let args = SettingsArgs {
+            updates: &self.updates,
+            keymap: &self.keymap,
+            memory_mb: self.memory_mb,
+            clearing: self.clearing.is_some(),
+            cache_path: &self.db_path,
+            user_path: &user_path,
+            log_path: &log_path,
+        };
+        let commands = self.settings.show(ctx, &args);
+        for command in commands {
+            match command {
+                Command::CheckForUpdates => self.updates.check_now(),
+                Command::RestartToUpdate => self.restart_to_update(),
+                Command::WhatsNew => {
+                    if let Ok(current) = semver::Version::parse(&self.updates.version()) {
+                        self.whats_new = Some(WhatsNew::every_version(current));
+                    }
+                }
+                Command::SetShortcut(action, shortcut) => {
+                    self.settings.keys_note = self.keymap.set(action, shortcut).and_then(|other| {
+                        let shortcut = shortcut?.label(ctx);
+                        Some(format!("{shortcut} was for “{}”, which has no shortcut now.", other.label()))
+                    });
+                    self.save_settings();
+                }
+                Command::ResetShortcuts => {
+                    self.keymap = Keymap::default();
+                    self.settings.keys_note = None;
+                    self.save_settings();
+                }
+                Command::Clear(parts) => self.clear(parts),
+                Command::SetMemory(mb) => {
+                    self.memory_mb = mb.clamp(memory::MIN_MB, memory::MAX_MB);
+                    self.apply_memory();
+                    self.save_settings();
+                }
+                Command::Reveal(path) => {
+                    if let Err(err) = platform::reveal(&path) {
+                        diag::report("Showing the file", err);
+                    }
+                }
+                Command::OpenLink(url) => {
+                    if let Err(err) = platform::open_link(&url) {
+                        diag::report("Opening the link", err);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Clears what was chosen under Settings → Storage: the user's data here and now, the cache's
+    /// parts on the cache writer's thread (`poll_clearing` finishes up).
+    fn clear(&mut self, parts: Vec<Part>) {
+        for part in &parts {
+            match part {
+                Part::Groups => {
+                    self.groups.clear();
+                    self.group = None;
+                    self.membership_dirty = true;
+                    self.view_dirty = true;
+                }
+                Part::SheetChoices => self.inspector.sheet.forget_choices(),
+                Part::LibraryFolders => {
+                    self.roots.clear();
+                    self.save_roots();
+                    self.set_library(None);
+                    self.update_title();
+                }
+                _ => {}
+            }
+        }
+        let cache: Vec<Part> = parts.into_iter().filter(|part| !part.in_user_data()).collect();
+        if cache.is_empty() {
+            self.settings.remeasure();
+            self.notify("Cleared".to_owned());
+            return;
+        }
+        let done = self.thumbs.clear(cache.clone());
+        self.clearing = Some(Clearing { parts: cache, done });
+    }
+
+    fn poll_clearing(&mut self) {
+        let Some(clearing) = &self.clearing else { return };
+        let result = match clearing.done.try_recv() {
+            Ok(result) => result,
+            Err(crossbeam_channel::TryRecvError::Empty) => {
+                self.ctx.request_repaint_after(Duration::from_millis(100));
+                return;
+            }
+            Err(crossbeam_channel::TryRecvError::Disconnected) => Err("the cache writer stopped".to_owned()),
+        };
+        let parts = clearing.parts.clone();
+        self.clearing = None;
+        self.settings.remeasure();
+        if let Err(err) = result {
+            diag::report("Clearing the cache", err);
+            return;
+        }
+        let has = |part| parts.contains(&part);
+        self.previews.forget(has(Part::Thumbnails), has(Part::Waveforms), has(Part::ModelFacts));
+        if has(Part::Settings) {
+            self.reset_settings();
+        }
+        if has(Part::Index) {
+            self.scan(self.roots.clone());
+        }
+        self.notify("Cleared".to_owned());
     }
 
     /// Shows and selects `index`, switching mode, folder and search as needed.
@@ -2035,6 +2276,27 @@ impl BrowserApp {
         }
         self.inspector.viewport.auto_rotate = get("model.turntable").is_some_and(|value| value == "1");
         self.inspector.viewport.wireframe = get("model.wireframe").is_some_and(|value| value == "1");
+        self.keymap = Keymap::load(get);
+        self.memory_mb = get(SETTING_MEMORY)
+            .and_then(|value| value.parse::<u64>().ok())
+            .map_or(memory::DEFAULT_MB, |mb| mb.clamp(memory::MIN_MB, memory::MAX_MB));
+    }
+
+    /// Everything the settings hold back to how it started, after they were cleared.
+    fn reset_settings(&mut self) {
+        self.mode = Mode::All;
+        self.modes = Mode::ALL.map(ModeView::new);
+        self.show_inspector = true;
+        self.sound.volume = 0.8;
+        self.inspector.image.backdrop = ImageView::default().backdrop;
+        // The rest have their defaults where nothing is saved.
+        self.load_settings();
+        self.apply_memory();
+        self.view_dirty = true;
+        // Cleared settings aren't a first install: no "What's new" next time.
+        if let (Some(conn), Ok(current)) = (&self.conn, semver::Version::parse(&self.updates.version())) {
+            let _ = db::set_setting(conn, SETTING_WHATS_NEW, &current.to_string());
+        }
     }
 
     fn save_settings(&self) {
@@ -2064,8 +2326,18 @@ impl BrowserApp {
             settings.push((key("group_sort"), view.group_sort.key().to_owned()));
             settings.push((key("group_descending"), flag(view.group_descending).to_owned()));
         }
+        settings.push((SETTING_MEMORY.to_owned(), self.memory_mb.to_string()));
+        // Shortcuts are saved only where they differ from the defaults.
+        let mut defaults = Vec::new();
+        for (key, value) in self.keymap.settings() {
+            match value {
+                Some(value) => settings.push((key, value)),
+                None => defaults.push(key),
+            }
+        }
         let settings: Vec<(&str, &str)> = settings.iter().map(|(key, value)| (key.as_str(), value.as_str())).collect();
-        if let Err(err) = db::set_settings(conn, &settings) {
+        let defaults: Vec<&str> = defaults.iter().map(String::as_str).collect();
+        if let Err(err) = db::set_settings(conn, &settings).and_then(|()| db::remove_settings(conn, &defaults)) {
             diag::report("Saving settings", err);
         }
     }
@@ -2074,9 +2346,12 @@ impl BrowserApp {
 impl eframe::App for BrowserApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // For the tooltips that name a shortcut.
+        keymap::publish(&ctx, &self.keymap);
         self.previews.begin_frame();
         self.poll_scans();
         self.poll_deleting();
+        self.poll_clearing();
         self.updates.poll();
         self.take_dropped_folders(&ctx);
         self.previews.drain(&self.thumbs, &ctx);
@@ -2104,6 +2379,12 @@ impl eframe::App for BrowserApp {
         self.previews.evict();
         self.delete_dialog(&ctx);
         self.delete_files_dialog(&ctx);
+        self.settings_window(&ctx);
+        if let Some(whats_new) = &mut self.whats_new
+            && !whats_new.show(&ctx)
+        {
+            self.whats_new = None;
+        }
         self.draw_toast(&ctx);
         organize::drag_indicator(&ctx);
         self.draw_drop_hint(&ctx);

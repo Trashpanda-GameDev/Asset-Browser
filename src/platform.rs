@@ -1,5 +1,6 @@
-//! The few things that work differently on each OS: opening and revealing files, and deleting
-//! them to the Recycle Bin or Trash. Nothing else in the app should call into a specific platform.
+//! The few things that work differently on each OS: opening and revealing files, deleting them to
+//! the Recycle Bin or Trash, the window's title bar and the process's memory. Nothing else in the
+//! app should call into a specific platform.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -18,6 +19,22 @@ pub fn open(path: &Path) -> io::Result<()> {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         Command::new("xdg-open").arg(path).spawn().map(drop)
+    }
+}
+
+/// Opens a web address in the default browser.
+pub fn open_link(url: &str) -> io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer").arg(url).spawn().map(drop)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(url).spawn().map(drop)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(url).spawn().map(drop)
     }
 }
 
@@ -81,5 +98,61 @@ pub fn has_trash(path: &Path) -> bool {
     {
         let _ = path;
         true
+    }
+}
+
+/// Gives the window's title bar the app's colours instead of the system's light ones: dark on
+/// Windows 10, and on Windows 11 exactly `caption`, with `text` for the title and `border` around
+/// the window. Elsewhere the window's dark theme (`ViewportCommand::SetTheme`) is all there is.
+pub fn color_title_bar(
+    window: &impl raw_window_handle::HasWindowHandle,
+    caption: [u8; 3],
+    text: [u8; 3],
+    border: [u8; 3],
+) {
+    #[cfg(target_os = "windows")]
+    {
+        use raw_window_handle::RawWindowHandle;
+        use windows_sys::Win32::Graphics::Dwm::{
+            DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
+            DwmSetWindowAttribute,
+        };
+        let Ok(handle) = window.window_handle() else { return };
+        let RawWindowHandle::Win32(win32) = handle.as_raw() else { return };
+        let hwnd = win32.hwnd.get() as *mut core::ffi::c_void;
+        let set = |attribute: i32, value: u32| {
+            // SAFETY: the window outlives the call (its handle is borrowed), and the value is the
+            // 4-byte BOOL or COLORREF the attribute takes, which DWM only reads.
+            unsafe { DwmSetWindowAttribute(hwnd, attribute as u32, (&raw const value).cast(), 4) };
+        };
+        let color_ref = |[r, g, b]: [u8; 3]| u32::from(r) | u32::from(g) << 8 | u32::from(b) << 16;
+        set(DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
+        // Windows 10 refuses these and keeps the dark bar.
+        set(DWMWA_CAPTION_COLOR, color_ref(caption));
+        set(DWMWA_TEXT_COLOR, color_ref(text));
+        set(DWMWA_BORDER_COLOR, color_ref(border));
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, caption, text, border);
+    }
+}
+
+/// How much memory the app holds right now (its private bytes), where the OS says.
+pub fn memory_in_use() -> Option<u64> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX};
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        let mut counters: PROCESS_MEMORY_COUNTERS_EX = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+        // SAFETY: `counters` is a writable PROCESS_MEMORY_COUNTERS_EX of the size given, and the
+        // current-process pseudo handle needs no closing.
+        let ok = unsafe { GetProcessMemoryInfo(GetCurrentProcess(), (&raw mut counters).cast(), size) };
+        (ok != 0).then_some(counters.PrivateUsage as u64)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
     }
 }

@@ -26,6 +26,7 @@ use crate::db::{
     self, CacheWrite, FORMAT_FAILED, FORMAT_JPEG, FORMAT_QOI, FORMAT_RAW_RGBA, StoredThumb, StoredWaveform,
 };
 use crate::model::{self, ModelInfo};
+use crate::storage::{self, Part};
 use crate::{diag, psd_composite};
 
 /// Longest side of a stored thumbnail, in pixels. Images no bigger than this are stored as they
@@ -103,7 +104,16 @@ pub struct ThumbService {
     results: Receiver<Thumb>,
     workers: Vec<JoinHandle<()>>,
     writer: Option<JoinHandle<()>>,
+    /// To the writer, for clearing the cache in turn with what it saves.
+    store: Option<Sender<Store>>,
     pub stats: Arc<ThumbStats>,
+}
+
+/// What the cache writer is given: a preview to save, or parts of the cache to clear (answered on
+/// the channel when done).
+enum Store {
+    Write(CacheWrite),
+    Clear(Vec<Part>, Sender<Result<(), String>>),
 }
 
 /// One worker per core, leaving one for the UI and the OS.
@@ -154,7 +164,18 @@ impl ThumbService {
             })
             .collect();
 
-        Self { shared, results, workers, writer: Some(writer), stats }
+        Self { shared, results, workers, writer: Some(writer), store: Some(store_tx), stats }
+    }
+
+    /// Clears parts of the cache, after what's waiting to be saved and before anything after it,
+    /// then gives the space back. Answers on the channel when done (it can take seconds).
+    pub fn clear(&self, parts: Vec<Part>) -> Receiver<Result<(), String>> {
+        let (done_tx, done) = crossbeam_channel::bounded(1);
+        let sent = self.store.as_ref().is_some_and(|store| store.send(Store::Clear(parts, done_tx.clone())).is_ok());
+        if !sent {
+            let _ = done_tx.send(Err("the cache isn't open".to_owned()));
+        }
+        done
     }
 
     pub fn thread_count(&self) -> usize {
@@ -207,7 +228,9 @@ impl Drop for ThumbService {
         for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
-        // The writer stops once every worker's sender is gone, after committing what's left.
+        // The writer stops once every sender is gone (the workers' and this one), after committing
+        // what's left.
+        self.store = None;
         if let Some(writer) = self.writer.take() {
             let _ = writer.join();
         }
@@ -217,7 +240,7 @@ impl Drop for ThumbService {
 struct Worker {
     shared: Arc<Shared>,
     results: Sender<Thumb>,
-    store: Sender<CacheWrite>,
+    store: Sender<Store>,
     on_result: Arc<dyn Fn() + Send + Sync>,
     stats: Arc<ThumbStats>,
 }
@@ -276,7 +299,7 @@ impl Worker {
             self.stats.failed.fetch_add(1, Ordering::Relaxed);
         }
         // Failures are remembered too, so a broken file isn't decoded again on every visit.
-        let _ = self.store.send(to_cache(job, &result));
+        let _ = self.store.send(Store::Write(to_cache(job, &result)));
         self.stats.made.fetch_add(1, Ordering::Relaxed);
         self.stats.make_micros.fetch_add(micros, Ordering::Relaxed);
         Thumb { key: job.key, result, from_cache: false, micros }
@@ -348,34 +371,57 @@ fn decode_waveform(stored: StoredWaveform) -> Result<Preview, String> {
     })))
 }
 
-fn writer_loop(db_path: &Path, jobs: &Receiver<CacheWrite>) {
+fn writer_loop(db_path: &Path, jobs: &Receiver<Store>) {
     let mut conn = match db::open(db_path) {
         Ok(conn) => conn,
         Err(err) => {
+            let message = err.to_string();
             diag::report("Thumbnail cache writer", err);
-            while jobs.recv().is_ok() {}
+            while let Ok(job) = jobs.recv() {
+                if let Store::Clear(_, done) = job {
+                    let _ = done.send(Err(message.clone()));
+                }
+            }
             return;
         }
     };
     while let Ok(first) = jobs.recv() {
-        let mut batch = vec![first];
+        // Saves are batched into one transaction; a clear ends the batch and goes after it.
+        let mut batch = Vec::new();
+        let mut clear = None;
+        match first {
+            Store::Write(write) => batch.push(write),
+            Store::Clear(parts, done) => clear = Some((parts, done)),
+        }
         let deadline = Instant::now() + Duration::from_millis(100);
-        while batch.len() < 512 {
+        while clear.is_none() && batch.len() < 512 {
             match jobs.recv_deadline(deadline) {
-                Ok(item) => batch.push(item),
+                Ok(Store::Write(write)) => batch.push(write),
+                Ok(Store::Clear(parts, done)) => clear = Some((parts, done)),
                 Err(_) => break,
             }
         }
-        if let Err(err) = db::put_cache(&mut conn, &batch) {
+        if !batch.is_empty()
+            && let Err(err) = db::put_cache(&mut conn, &batch)
+        {
             diag::report("Saving previews", err);
+        }
+        if let Some((parts, done)) = clear {
+            let _ = done.send(storage::clear_cache(&mut conn, &parts).map_err(|err| err.to_string()));
         }
     }
 }
 
 /// How much memory the thumbnail workers may hold at once for decoding. A picture is decoded at
 /// full size before it's shrunk, so 19 workers meeting a folder of 4K textures held 3.7 GB at
-/// once (measured). Big pictures take turns; small ones never wait.
+/// once (measured). Big pictures take turns; small ones never wait. The memory setting changes it
+/// (`set_decode_limit`).
 static DECODING: DecodeBudget = DecodeBudget::new(512 << 20);
+
+/// How much the thumbnail workers may decode at once, from now on.
+pub fn set_decode_limit(bytes: u64) {
+    DECODING.set_limit(bytes);
+}
 /// What decoding a picture holds per pixel: the decoded picture (4 bytes) and, while it's shrunk,
 /// the resizer's premultiplied copy when it has transparency (4 more).
 const DECODE_BYTES_PER_PIXEL: u64 = 8;
@@ -501,7 +547,7 @@ pub fn trim_resizer(resizer: &mut fr::Resizer) {
 struct DecodeBudget {
     state: Mutex<BudgetState>,
     changed: Condvar,
-    limit: u64,
+    limit: AtomicU64,
 }
 
 struct BudgetState {
@@ -513,14 +559,25 @@ struct BudgetState {
 
 impl DecodeBudget {
     const fn new(limit: u64) -> Self {
-        Self { state: Mutex::new(BudgetState { used: 0, next: 0, serving: 0 }), changed: Condvar::new(), limit }
+        Self {
+            state: Mutex::new(BudgetState { used: 0, next: 0, serving: 0 }),
+            changed: Condvar::new(),
+            limit: AtomicU64::new(limit),
+        }
+    }
+
+    fn set_limit(&self, bytes: u64) {
+        // Under the lock, so a waiter can't miss the change between checking and waiting.
+        let _state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.limit.store(bytes, Ordering::Relaxed);
+        self.changed.notify_all();
     }
 
     fn reserve(&self, bytes: u64) -> Reserved<'_> {
         let mut state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let ticket = state.next;
         state.next += 1;
-        while state.serving != ticket || (state.used > 0 && state.used + bytes > self.limit) {
+        while state.serving != ticket || (state.used > 0 && state.used + bytes > self.limit.load(Ordering::Relaxed)) {
             state = self.changed.wait(state).unwrap_or_else(|poisoned| poisoned.into_inner());
         }
         state.serving += 1;

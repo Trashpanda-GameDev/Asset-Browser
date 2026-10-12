@@ -21,11 +21,12 @@ People get it from the repository's [Releases](https://github.com/Trashpanda-Gam
   from Windows' **Installed apps**.
 - **`TrashpandaAssetBrowser-win-Portable.zip`** runs from wherever it's unzipped: start **Asset Browser.exe** in it.
 
-The app checks for a newer release when it starts, every 6 hours, and when you click its version at the right end of
-the status bar. It downloads one in the background and shows **Restart to update**; if you don't, the update is
-installed when you close the app. The library, favorites and settings live in each user's own folders (see
-[Where things are](#where-things-are)), so updating, uninstalling or deleting the portable folder leaves them alone.
-A copy built with `cargo build` doesn't update itself.
+The app checks for a newer release when it starts, every 6 hours, and when asked (**Settings → Updates → Check for
+updates**, or a click on its version at the right end of the status bar). It downloads one in the background and
+shows **Restart to update**; if you don't, the update is installed when you close the app. The first start after an
+update shows **What's new** once; every version's notes are under **Settings → Updates → What's new**. The library,
+favorites and settings live in each user's own folders (see [Where things are](#where-things-are)), so updating,
+uninstalling or deleting the portable folder leaves them alone. A copy built with `cargo build` doesn't update itself.
 
 Until the app is code-signed, Windows warns about the download ("Windows protected your PC": **More info**,
 **Run anyway**); the updates it downloads itself aren't warned about. Builds for macOS and Linux would have to be made
@@ -35,9 +36,14 @@ The icon is `assets/icon.png` (1024 px); `assets/icon.ico` holds every size Wind
 
 ### Making a release
 
-1. Set `version` in `Cargo.toml` (say to `0.2.0`) and run `cargo build`, which writes it into `Cargo.lock` too.
-   Commit both: the release builds with `--locked`, so it stops if `Cargo.lock` still has the old version.
-2. Merge it into `main`, then tag `main` and push the tag:
+What's new goes in [`CHANGELOG.md`](CHANGELOG.md) as it's made, under **Unreleased**, written for the people using
+the app. Then:
+
+1. In `CHANGELOG.md`, rename `## Unreleased` to the version and date (`## 0.2.0 – 13 Oct 2026`). That section is
+   the release's notes and the app's "What's new"; the release stops if the version has none.
+2. Set `version` in `Cargo.toml` (say to `0.2.0`) and run `cargo build`, which writes it into `Cargo.lock` too.
+   Commit all three: the release builds with `--locked`, so it stops if `Cargo.lock` still has the old version.
+3. Merge it into `main`, then tag `main` and push the tag:
 
    ```
    git switch main
@@ -51,7 +57,7 @@ one already.
 
 `.github/workflows/release.yml` builds the app on Windows, packs it with [Velopack](https://velopack.io) into the
 setup program, the portable zip and the update packages (with a smaller delta from the last release), and publishes
-them as a GitHub release whose notes are the commits since the last one. It stops if the tag doesn't match
+them as a GitHub release with the version's notes from `CHANGELOG.md`. It stops if the tag doesn't match
 `Cargo.toml`. To try the build and packing without publishing, run the workflow by hand (**Actions**, **Release**,
 **Run workflow**): the files are kept with the run.
 
@@ -135,6 +141,16 @@ It looks there instead of on GitHub, finds 0.1.1 and updates to it. The test id 
   its default app (so does double-click), **Space** plays or pauses, **Esc** stops the sound or else clears the
   selection, **Ctrl+F** searches, **Ctrl+C** copies the selected paths, **F** stars them, **Delete** deletes them
   (after asking). Right-click for Open, Show in folder, Copy path, Favorites, collections and categories, and Delete.
+  Every shortcut can be changed, or added (the preview pane, grid, list, show in folder), in Settings.
+- **Settings** (the gear at the top right, or **Ctrl+,**):
+  - **Updates:** the version, **Check for updates**, **What's new** (every version's notes) and the releases page.
+  - **Keyboard:** click a shortcut and press the new keys; a shortcut taken from another action leaves it with none.
+  - **Storage:** how big the cache and your data are, part by part, and clearing any of them: thumbnails, waveforms,
+    3D model details, the folder index, the settings, and (asked again, since they can't be brought back) favorites,
+    collections and categories, sprite sheet choices and the library's folders. The files and the logs are a click
+    away.
+  - **Memory:** how much memory the app may use, shared out among decoding, thumbnails on the graphics card, sounds
+    read ahead, model textures and GIF frames; 1.5 GB keeps what it used before the setting existed.
 - The left panel filters by folder (including everything below it). The search box matches every word against the
   file's path in its folder and its categories, so folder names work too.
 
@@ -175,6 +191,13 @@ takes to start, from disk and from memory, and loads the frames of the GIFs as t
 limits the sample to matching paths, `--offset` picks a different
 sample (the OS keeps recently read files in memory, so compare settings on fresh files), and `--sheet` writes the
 thumbnails to one image to check by eye.
+
+```
+cargo run --release --bin shots -- <folder>
+```
+
+Opens the app on your library and saves screenshots of the window, each settings page and "What's new" into the
+folder, to check the look by eye; it closes itself after about 17 seconds, without taking the keyboard.
 
 Measured on F:\Resources (60,648 assets, spinning laptop disk, 20 threads), 12 Oct 2026:
 
@@ -221,12 +244,19 @@ Measured on F:\Resources (60,648 assets, spinning laptop disk, 20 threads), 12 O
 | `src/ui/sheet_view.rs` | The pane's player for sprite sheets and GIFs, and the grid |
 | `src/ui/previews.rs` | Thumbnails on the GPU, waveforms and model facts the window has |
 | `src/ui/theme.rs`, `widgets.rs`, `format.rs` | Colours, fonts and icons; the hand-drawn controls; numbers and dates |
-| `src/platform.rs` | Open / show in file manager, the Recycle Bin and whether a drive has one: the only per-OS code |
+| `src/platform.rs` | Open / show in file manager, the Recycle Bin, the title bar's colours, the process's memory: the only per-OS code |
 | `src/deletion.rs` | Deleting to the Recycle Bin on its own thread, and which files actually went |
 | `src/diag.rs` | Error log and panic hook (release builds have no console) |
 | `src/updates.rs` | Updates through Velopack: checking the releases, downloading, installing on a restart or on closing |
 | `src/ui/updates.rs` | The version and the updater's news at the end of the status bar |
+| `src/keymap.rs` | The keyboard shortcuts: defaults, changing them, matching key presses |
+| `src/memory.rs` | The memory setting, shared out among decoding, GPU thumbnails, read-ahead, textures and GIF frames |
+| `src/storage.rs` | Measuring the cache and user data part by part, and clearing parts of the cache |
+| `src/changelog.rs`, `CHANGELOG.md` | What's new in each version, built into the app; the release's notes too |
+| `src/ui/settings.rs` | The settings window: Updates, Keyboard, Storage and Memory pages |
+| `src/ui/whats_new.rs` | "What's new" after an update, and every version's notes |
 | `src/bin/bench.rs` | The benchmark |
+| `src/bin/shots.rs` | Screenshots of the window and the settings, to check the look |
 | `build.rs`, `assets/` | The app icon, and putting it with the app's name into the Windows exe (`src/main.rs` sets the window's) |
 | `.cargo/config.toml` | Links the C runtime into Windows builds, so they need no Visual C++ redistributable |
 | `.github/workflows/` | `ci.yml` checks every push on Windows, macOS and Linux; `release.yml` publishes a release for a version tag |
