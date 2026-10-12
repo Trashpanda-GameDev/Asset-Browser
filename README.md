@@ -1,8 +1,8 @@
 # AssetBrowser
 
 A fast, native browser for folders of game assets: add your asset folders and browse their images, sounds and models
-together, with previews. Written in Rust with [egui](https://github.com/emilk/egui) on wgpu. Windows first; macOS and Linux
-are kept buildable.
+together, with previews. Written in Rust with [egui](https://github.com/emilk/egui) on wgpu. Windows first; written to
+build on macOS and Linux too, but not yet tried there.
 
 ## Run
 
@@ -10,6 +10,15 @@ are kept buildable.
 cargo run --release                  # opens the library: the folders you added
 cargo run --release -- F:\Resources  # adds this folder to the library (or shows it, if it's in already)
 ```
+
+## Share it
+
+`cargo build --release` makes `target\release\asset_browser.exe`: one file, with its icon and the C runtime built in,
+so it runs as it is on 64-bit Windows 10 and 11. Zip it and send it; it keeps its data in each user's own folders
+(see below). Until the exe is code-signed, Windows warns about it when it comes from the internet ("Windows protected
+your PC": **More info**, **Run anyway**). Builds for macOS and Linux have to be made on those systems.
+
+The icon is `assets/icon.png` (1024 px); `assets/icon.ico` holds every size Windows uses, made from it.
 
 ## Use it
 
@@ -136,6 +145,8 @@ Measured on F:\Resources (60,648 assets, spinning laptop disk, 20 threads), 12 O
 | `src/platform.rs` | Open / show in file manager: the only per-OS code |
 | `src/diag.rs` | Error log and panic hook (release builds have no console) |
 | `src/bin/bench.rs` | The benchmark |
+| `build.rs`, `assets/` | The app icon, and putting it with the app's name into the Windows exe (`src/main.rs` sets the window's) |
+| `.cargo/config.toml` | Links the C runtime into Windows builds, so they need no Visual C++ redistributable |
 
 The cache and log live in the OS's per-user cache folder (`%LOCALAPPDATA%\AssetBrowser\cache` on Windows). Settings
 (mode, layouts, volume and so on) are saved in the same file. What you make yourself is kept apart, so clearing the
