@@ -29,15 +29,75 @@ impl Entry {
         let name = self.name();
         name.rsplit_once('.').map_or("", |(_, ext)| ext)
     }
+
+    /// The folder part of `rel` ("" for files directly in the root).
+    pub fn folder(&self) -> &str {
+        self.rel.rsplit_once('/').map_or("", |(folder, _)| folder)
+    }
+
+    fn lower_name(&self) -> &str {
+        self.lower.rsplit('/').next().unwrap_or(&self.lower)
+    }
+
+    fn lower_extension(&self) -> &str {
+        self.lower_name().rsplit_once('.').map_or("", |(_, ext)| ext)
+    }
 }
 
 pub struct DirNode {
     pub name: String,
     /// Lowercase path relative to the root ("" for the root itself).
     pub lower: String,
+    pub parent: Option<u32>,
     pub children: Vec<u32>,
-    /// Assets in this folder and everything below it.
-    pub total: u32,
+    /// Assets of each kind in this folder and everything below it.
+    pub totals: [u32; 3],
+}
+
+impl DirNode {
+    /// Assets of the enabled kinds in this folder and below it.
+    pub fn total(&self, kinds: [bool; 3]) -> u32 {
+        self.totals.iter().zip(kinds).filter(|(_, on)| *on).map(|(n, _)| n).sum()
+    }
+}
+
+/// The order of the browsed assets. `Folder` is the library's own order: by path, so each
+/// folder's files stay together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortBy {
+    Folder,
+    Name,
+    Type,
+    Size,
+    Modified,
+}
+
+impl SortBy {
+    pub const ALL: [SortBy; 5] = [Self::Folder, Self::Name, Self::Type, Self::Size, Self::Modified];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Folder => "Folder",
+            Self::Name => "Name",
+            Self::Type => "Type",
+            Self::Size => "Size",
+            Self::Modified => "Modified",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Folder => "folder",
+            Self::Name => "name",
+            Self::Type => "type",
+            Self::Size => "size",
+            Self::Modified => "modified",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|sort| sort.key() == key)
+    }
 }
 
 pub struct Library {
@@ -57,7 +117,7 @@ impl Library {
             .into_iter()
             .map(|file| Entry {
                 lower: file.rel.to_lowercase(),
-                key: cache_key(&root_str, &file.rel, file.size, file.mtime),
+                key: cache_key(&root_str, &file.rel, file.size, file.mtime, file.kind),
                 rel: file.rel,
                 kind: file.kind,
                 size: file.size,
@@ -67,21 +127,26 @@ impl Library {
             .collect();
         entries.sort_unstable_by(|a, b| a.lower.cmp(&b.lower));
 
-        let mut dirs = vec![DirNode { name: String::new(), lower: String::new(), children: Vec::new(), total: 0 }];
-        let mut parents = vec![None];
+        let mut dirs = vec![DirNode {
+            name: String::new(),
+            lower: String::new(),
+            parent: None,
+            children: Vec::new(),
+            totals: [0; 3],
+        }];
         let mut by_path: HashMap<String, u32> = HashMap::new();
         let mut kind_totals = [0; 3];
         for entry in &mut entries {
             kind_totals[entry.kind.index()] += 1;
             let dir = match entry.rel.rfind('/') {
                 None => 0,
-                Some(slash) => dir_index(&entry.rel[..slash], &mut dirs, &mut parents, &mut by_path),
+                Some(slash) => dir_index(&entry.rel[..slash], &mut dirs, &mut by_path),
             };
             entry.dir = dir;
             let mut node = Some(dir);
             while let Some(index) = node {
-                dirs[index as usize].total += 1;
-                node = parents[index as usize];
+                dirs[index as usize].totals[entry.kind.index()] += 1;
+                node = dirs[index as usize].parent;
             }
         }
         for index in 0..dirs.len() {
@@ -117,6 +182,27 @@ impl Library {
             .collect()
     }
 
+    /// Puts `view` (indices into `entries`, in library order) in the given order. Ties keep the
+    /// library order, whichever the direction.
+    pub fn sort(&self, view: &mut [u32], by: SortBy, descending: bool) {
+        let entry = |index: &u32| &self.entries[*index as usize];
+        view.sort_unstable_by(|a, b| {
+            let (x, y) = (entry(a), entry(b));
+            let order = match by {
+                SortBy::Folder => std::cmp::Ordering::Equal,
+                SortBy::Name => x.lower_name().cmp(y.lower_name()),
+                SortBy::Type => {
+                    x.lower_extension().cmp(y.lower_extension()).then_with(|| x.lower_name().cmp(y.lower_name()))
+                }
+                SortBy::Size => x.size.cmp(&y.size),
+                SortBy::Modified => x.mtime.cmp(&y.mtime),
+            };
+            let order = if descending { order.reverse() } else { order };
+            // Library order breaks ties (and is the whole order for `Folder`).
+            order.then(if by == SortBy::Folder && descending { b.cmp(a) } else { a.cmp(b) })
+        });
+    }
+
     /// Same set of files with the same versions: a rescan found nothing new.
     pub fn same_files_as(&self, other: &Library) -> bool {
         self.entries.len() == other.entries.len()
@@ -126,24 +212,41 @@ impl Library {
     pub fn find_dir(&self, lower: &str) -> Option<u32> {
         self.dirs.iter().position(|node| node.lower == lower).map(|index| index as u32)
     }
+
+    /// `dir` and its parents, root first.
+    pub fn dir_chain(&self, dir: u32) -> Vec<u32> {
+        let mut chain = Vec::new();
+        let mut node = Some(dir);
+        while let Some(index) = node {
+            chain.push(index);
+            node = self.dirs.get(index as usize).and_then(|dir| dir.parent);
+        }
+        chain.reverse();
+        chain
+    }
+
+    /// Index of each entry by its cache key, for carrying selections over to a rescanned library.
+    pub fn index_by_key(&self) -> HashMap<i64, u32> {
+        self.entries.iter().enumerate().map(|(index, entry)| (entry.key, index as u32)).collect()
+    }
 }
 
-fn dir_index(
-    rel_dir: &str,
-    dirs: &mut Vec<DirNode>,
-    parents: &mut Vec<Option<u32>>,
-    by_path: &mut HashMap<String, u32>,
-) -> u32 {
+fn dir_index(rel_dir: &str, dirs: &mut Vec<DirNode>, by_path: &mut HashMap<String, u32>) -> u32 {
     if let Some(&index) = by_path.get(rel_dir) {
         return index;
     }
     let (parent, name) = match rel_dir.rfind('/') {
         None => (0, rel_dir),
-        Some(slash) => (dir_index(&rel_dir[..slash], dirs, parents, by_path), &rel_dir[slash + 1..]),
+        Some(slash) => (dir_index(&rel_dir[..slash], dirs, by_path), &rel_dir[slash + 1..]),
     };
     let index = dirs.len() as u32;
-    dirs.push(DirNode { name: name.to_owned(), lower: rel_dir.to_lowercase(), children: Vec::new(), total: 0 });
-    parents.push(Some(parent));
+    dirs.push(DirNode {
+        name: name.to_owned(),
+        lower: rel_dir.to_lowercase(),
+        parent: Some(parent),
+        children: Vec::new(),
+        totals: [0; 3],
+    });
     dirs[parent as usize].children.push(index);
     by_path.insert(rel_dir.to_owned(), index);
     index
@@ -155,4 +258,63 @@ pub fn root_string(root: &Path) -> String {
     let trimmed = text.trim_end_matches(['/', '\\']);
     // Keep "C:\" rather than "C:" so a drive root stays a valid path.
     if trimmed.ends_with(':') { text.into_owned() } else { trimmed.to_owned() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn library() -> Library {
+        let file = |rel: &str, kind, size, mtime| ScannedFile { rel: rel.to_owned(), kind, size, mtime };
+        Library::build(
+            Path::new("/assets"),
+            vec![
+                file("ui/b.png", AssetKind::Image, 30, 3),
+                file("ui/A.png", AssetKind::Image, 10, 1),
+                file("sfx/hit.wav", AssetKind::Audio, 20, 2),
+                file("sfx/deep/boom.ogg", AssetKind::Audio, 20, 5),
+                file("rock.fbx", AssetKind::Model, 40, 4),
+            ],
+        )
+    }
+
+    fn names(library: &Library, view: &[u32]) -> Vec<String> {
+        view.iter().map(|&index| library.entries[index as usize].name().to_owned()).collect()
+    }
+
+    #[test]
+    fn sorts_with_ties_in_library_order() {
+        let library = library();
+        let all = library.filter(0, [true; 3], "");
+        assert_eq!(names(&library, &all), ["rock.fbx", "boom.ogg", "hit.wav", "A.png", "b.png"]);
+
+        let mut view = all.clone();
+        library.sort(&mut view, SortBy::Name, false);
+        assert_eq!(names(&library, &view), ["A.png", "b.png", "boom.ogg", "hit.wav", "rock.fbx"]);
+        library.sort(&mut view, SortBy::Size, true);
+        assert_eq!(
+            names(&library, &view),
+            ["rock.fbx", "b.png", "boom.ogg", "hit.wav", "A.png"],
+            "ties stay in path order"
+        );
+        library.sort(&mut view, SortBy::Type, false);
+        assert_eq!(names(&library, &view), ["rock.fbx", "boom.ogg", "A.png", "b.png", "hit.wav"]);
+        library.sort(&mut view, SortBy::Modified, true);
+        assert_eq!(names(&library, &view), ["boom.ogg", "rock.fbx", "b.png", "hit.wav", "A.png"]);
+        library.sort(&mut view, SortBy::Folder, false);
+        assert_eq!(view, all);
+    }
+
+    #[test]
+    fn folders_count_each_kind() {
+        let library = library();
+        let sfx = library.find_dir("sfx").unwrap();
+        let deep = library.find_dir("sfx/deep").unwrap();
+        assert_eq!(library.dirs[sfx as usize].totals, [0, 2, 0]);
+        assert_eq!(library.dirs[0].total([true, false, true]), 3);
+        assert_eq!(library.dir_chain(deep), [0, sfx, deep]);
+        assert_eq!(library.filter(sfx, [false, true, false], "boom").len(), 1);
+        let by_key = library.index_by_key();
+        assert!(library.entries.iter().enumerate().all(|(index, entry)| by_key[&entry.key] == index as u32));
+    }
 }

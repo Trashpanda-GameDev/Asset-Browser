@@ -1,4 +1,4 @@
-//! One SQLite file holds the folder index, the thumbnail and waveform caches, and settings.
+//! One SQLite file holds the folder index, the thumbnail, waveform and model caches, and settings.
 //!
 //! A single file rather than thousands of small thumbnail files: opening many small files is slow
 //! on Windows (NTFS plus antivirus scanning on every open). WAL mode lets the thumbnail workers
@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::asset::AssetKind;
+use crate::model::ModelInfo;
 use crate::scan::ScannedFile;
 
 pub const FORMAT_FAILED: u8 = 0;
@@ -41,6 +42,8 @@ pub struct StoredWaveform {
 pub enum CacheWrite {
     Thumb(i64, StoredThumb),
     Waveform(i64, StoredWaveform),
+    /// A model's picture, kept with the image thumbnails, and what's in the file.
+    Model(i64, StoredThumb, ModelInfo),
 }
 
 /// The per-user cache location for this OS (`%LOCALAPPDATA%` on Windows, `~/Library/Caches` on
@@ -87,6 +90,20 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
              channels INTEGER NOT NULL,
              peaks BLOB NOT NULL,
              error TEXT);
+         CREATE TABLE IF NOT EXISTS models(
+             key INTEGER PRIMARY KEY,
+             format TEXT NOT NULL,
+             vertices INTEGER NOT NULL,
+             triangles INTEGER NOT NULL,
+             meshes INTEGER NOT NULL,
+             materials INTEGER NOT NULL,
+             textures INTEGER NOT NULL,
+             missing_textures INTEGER NOT NULL,
+             size_x REAL NOT NULL,
+             size_y REAL NOT NULL,
+             size_z REAL NOT NULL,
+             animations TEXT NOT NULL,
+             geometry INTEGER NOT NULL);
          CREATE TABLE IF NOT EXISTS settings(
              key TEXT PRIMARY KEY,
              value TEXT NOT NULL);",
@@ -161,6 +178,43 @@ pub fn get_waveform(conn: &Connection, key: i64) -> rusqlite::Result<Option<Stor
         .optional()
 }
 
+pub fn get_model(conn: &Connection, key: i64) -> rusqlite::Result<Option<ModelInfo>> {
+    conn.prepare_cached(
+        "SELECT format, vertices, triangles, meshes, materials, textures, missing_textures,
+                size_x, size_y, size_z, animations, geometry
+         FROM models WHERE key = ?1",
+    )?
+    .query_row([key], |row| {
+        Ok(ModelInfo {
+            format: row.get(0)?,
+            vertices: row.get::<_, i64>(1)? as u64,
+            triangles: row.get::<_, i64>(2)? as u64,
+            meshes: row.get(3)?,
+            materials: row.get(4)?,
+            textures: row.get(5)?,
+            missing_textures: row.get(6)?,
+            size: [row.get::<_, f64>(7)? as f32, row.get::<_, f64>(8)? as f32, row.get::<_, f64>(9)? as f32],
+            animations: decode_animations(&row.get::<_, String>(10)?),
+            geometry: row.get(11)?,
+        })
+    })
+    .optional()
+}
+
+/// One `name<TAB>seconds` line per animation.
+fn encode_animations(animations: &[(String, f32)]) -> String {
+    animations.iter().map(|(name, seconds)| format!("{}\t{seconds}\n", name.replace(['\t', '\n', '\r'], " "))).collect()
+}
+
+fn decode_animations(text: &str) -> Vec<(String, f32)> {
+    text.lines()
+        .filter_map(|line| {
+            let (name, seconds) = line.rsplit_once('\t')?;
+            Some((name.to_owned(), seconds.parse().ok()?))
+        })
+        .collect()
+}
+
 /// Saves a batch in one transaction.
 pub fn put_cache(conn: &mut Connection, batch: &[CacheWrite]) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
@@ -173,6 +227,11 @@ pub fn put_cache(conn: &mut Connection, batch: &[CacheWrite]) -> rusqlite::Resul
             "INSERT OR REPLACE INTO waveforms(key, duration_ms, sample_rate, channels, peaks, error)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
         )?;
+        let mut model = tx.prepare_cached(
+            "INSERT OR REPLACE INTO models(key, format, vertices, triangles, meshes, materials, textures,
+                                           missing_textures, size_x, size_y, size_z, animations, geometry)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        )?;
         for write in batch {
             match write {
                 CacheWrite::Thumb(key, t) => {
@@ -180,6 +239,25 @@ pub fn put_cache(conn: &mut Connection, batch: &[CacheWrite]) -> rusqlite::Resul
                 }
                 CacheWrite::Waveform(key, w) => {
                     waveform.execute(params![key, w.duration_ms, w.sample_rate, w.channels, w.peaks, w.error])?;
+                }
+                CacheWrite::Model(key, t, info) => {
+                    thumb.execute(params![key, t.w, t.h, t.src_w, t.src_h, t.format, t.data])?;
+                    let [x, y, z] = info.size.map(f64::from);
+                    model.execute(params![
+                        key,
+                        info.format,
+                        info.vertices as i64,
+                        info.triangles as i64,
+                        info.meshes,
+                        info.materials,
+                        info.textures,
+                        info.missing_textures,
+                        x,
+                        y,
+                        z,
+                        encode_animations(&info.animations),
+                        info.geometry,
+                    ])?;
                 }
             }
         }
@@ -192,12 +270,22 @@ pub fn get_setting(conn: &Connection, key: &str) -> Option<String> {
 }
 
 pub fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO settings(key, value) VALUES(?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![key, value],
-    )
-    .map(drop)
+    set_settings(conn, &[(key, value)])
+}
+
+/// Saves several settings in one transaction.
+pub fn set_settings(conn: &Connection, settings: &[(&str, &str)]) -> rusqlite::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut statement = tx.prepare_cached(
+            "INSERT INTO settings(key, value) VALUES(?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )?;
+        for (key, value) in settings {
+            statement.execute(params![key, value])?;
+        }
+    }
+    tx.commit()
 }
 
 #[cfg(test)]

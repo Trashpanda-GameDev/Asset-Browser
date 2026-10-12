@@ -1,5 +1,5 @@
-//! Makes previews on a pool of worker threads, on-screen items first: thumbnails for images,
-//! waveforms for sounds.
+//! Makes previews on a pool of worker threads, on-screen items first: thumbnails for images and
+//! models, waveforms for sounds.
 //!
 //! The UI hands over the full list of previews it wants each frame (`set_wanted`), visible ones
 //! first. That list replaces the queue, so items scrolled past are dropped instead of being made
@@ -24,14 +24,21 @@ use crate::audio::{self, Waveform};
 use crate::db::{
     self, CacheWrite, FORMAT_FAILED, FORMAT_JPEG, FORMAT_QOI, FORMAT_RAW_RGBA, StoredThumb, StoredWaveform,
 };
+use crate::model::{self, ModelInfo};
 use crate::{diag, psd_composite};
 
 /// Longest side of a stored thumbnail, in pixels. Images no bigger than this are stored as they
 /// are, so pixel art keeps its exact pixels.
 pub const THUMB_MAX: u32 = 192;
 
-/// Bump when the way thumbnails are made changes, so old cache entries stop matching.
+/// Bump when the way image thumbnails or waveforms are made changes, so old cache entries stop
+/// matching.
 const THUMB_VERSION: u64 = 1;
+
+/// The same for model previews, kept apart so they can be made again without throwing away the
+/// image and sound caches. Starts at 2: version 1 is what model keys were before models had
+/// previews.
+pub const MODEL_PREVIEW_VERSION: u64 = 2;
 
 pub struct ThumbJob {
     pub key: i64,
@@ -42,6 +49,10 @@ pub struct ThumbJob {
 pub enum Preview {
     Image(ThumbPixels),
     Sound(Arc<Waveform>),
+    /// A model's thumbnail and what's in the file. The picture is a render, `THUMB_MAX` square
+    /// with a transparent background (`src_w` and `src_h` 0), or for a .blend the preview
+    /// Blender saved (`src_w` × `src_h` its size).
+    Model(ThumbPixels, Arc<ModelInfo>),
 }
 
 pub struct ThumbPixels {
@@ -252,7 +263,9 @@ impl Worker {
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| match job.kind {
             AssetKind::Image => make_thumbnail(&job.path, resizer).map(Preview::Image),
             AssetKind::Audio => audio::waveform(&job.path).map(|waveform| Preview::Sound(Arc::new(waveform))),
-            AssetKind::Model => Err("models have no preview yet".to_owned()),
+            AssetKind::Model => {
+                model::thumbnail(&job.path, resizer).map(|(pixels, info)| Preview::Model(pixels, Arc::new(info)))
+            }
         }))
         .unwrap_or_else(|_| Err("the decoder crashed on this file".into()));
         let micros = start.elapsed().as_micros() as u64;
@@ -276,7 +289,15 @@ fn cached_preview(conn: &rusqlite::Connection, job: &ThumbJob) -> Option<Result<
             .flatten()
             .map(|stored| decode_stored(&stored).map(Preview::Image)),
         AssetKind::Audio => db::get_waveform(conn, job.key).map_err(report).ok().flatten().map(decode_waveform),
-        AssetKind::Model => None,
+        AssetKind::Model => {
+            let stored = db::get_thumb(conn, job.key).map_err(report).ok().flatten()?;
+            if stored.format == FORMAT_FAILED {
+                return Some(Err(String::from_utf8_lossy(&stored.data).into_owned()));
+            }
+            // A picture without its info is made again.
+            let info = db::get_model(conn, job.key).map_err(report).ok().flatten()?;
+            Some(decode_stored(&stored).map(|pixels| Preview::Model(pixels, Arc::new(info))))
+        }
     }
 }
 
@@ -284,6 +305,7 @@ fn to_cache(job: &ThumbJob, result: &Result<Preview, String>) -> CacheWrite {
     match (job.kind, result) {
         (_, Ok(Preview::Image(pixels))) => CacheWrite::Thumb(job.key, encode_stored(pixels)),
         (_, Ok(Preview::Sound(waveform))) => CacheWrite::Waveform(job.key, encode_waveform(waveform)),
+        (_, Ok(Preview::Model(pixels, info))) => CacheWrite::Model(job.key, encode_stored(pixels), (**info).clone()),
         (AssetKind::Audio, Err(message)) => CacheWrite::Waveform(
             job.key,
             StoredWaveform {
@@ -349,10 +371,16 @@ fn writer_loop(db_path: &Path, jobs: &Receiver<CacheWrite>) {
 
 /// Reads an image file and shrinks the picture to fit `THUMB_MAX`.
 pub fn make_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<ThumbPixels, String> {
+    make_image(path, resizer, THUMB_MAX)
+}
+
+/// Reads an image file and shrinks the picture to fit `max` pixels on its longer side. Pictures
+/// no bigger are kept as they are.
+pub fn make_image(path: &Path, resizer: &mut fr::Resizer, max: u32) -> Result<ThumbPixels, String> {
     if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("psd")) {
         // Reads only the part of the file it needs, so it opens the file itself.
-        let sampled = psd_composite::read(path, THUMB_MAX)?;
-        return shrink(sampled.w, sampled.h, sampled.rgba, sampled.src_w, sampled.src_h, resizer);
+        let sampled = psd_composite::read(path, max)?;
+        return shrink(sampled.w, sampled.h, sampled.rgba, sampled.src_w, sampled.src_h, max, resizer);
     }
     let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
     // Trust the content over the extension (a PNG named .jpg is common); TGA has no signature,
@@ -366,22 +394,23 @@ pub fn make_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<ThumbPix
     }
     let image = reader.decode().map_err(|err| err.to_string())?.into_rgba8();
     let (w, h) = image.dimensions();
-    shrink(w, h, image.into_raw(), w, h, resizer)
+    shrink(w, h, image.into_raw(), w, h, max, resizer)
 }
 
-/// Fits `w` × `h` pixels (already reduced from `src_w` × `src_h`, or not) into `THUMB_MAX`.
+/// Fits `w` × `h` pixels (already reduced from `src_w` × `src_h`, or not) into `max`.
 fn shrink(
     w: u32,
     h: u32,
     rgba: Vec<u8>,
     src_w: u32,
     src_h: u32,
+    max: u32,
     resizer: &mut fr::Resizer,
 ) -> Result<ThumbPixels, String> {
     if w == 0 || h == 0 {
         return Err("image has no pixels".into());
     }
-    let (thumb_w, thumb_h) = fit_size(src_w, src_h, THUMB_MAX);
+    let (thumb_w, thumb_h) = fit_size(src_w, src_h, max);
     if (thumb_w, thumb_h) == (w, h) {
         return Ok(ThumbPixels { w, h, src_w, src_h, rgba });
     }
@@ -392,7 +421,8 @@ fn shrink(
     Ok(ThumbPixels { w: thumb_w, h: thumb_h, src_w, src_h, rgba: dst.into_vec() })
 }
 
-fn fit_size(w: u32, h: u32, max: u32) -> (u32, u32) {
+/// The size `w` × `h` scaled down, keeping its aspect, to fit `max` on its longer side.
+pub(crate) fn fit_size(w: u32, h: u32, max: u32) -> (u32, u32) {
     if w <= max && h <= max {
         return (w, h);
     }
@@ -436,12 +466,13 @@ fn decode_stored(stored: &StoredThumb) -> Result<ThumbPixels, String> {
     Ok(ThumbPixels { w: stored.w, h: stored.h, src_w: stored.src_w, src_h: stored.src_h, rgba })
 }
 
-/// Identifies one version of one file: a different path, size or modification time is a
-/// different key. FNV-1a, because its output never changes between Rust versions.
+/// Identifies one version of one file's preview: a different path, size or modification time is
+/// a different key, and so is a new way of making previews of its kind. FNV-1a, because its
+/// output never changes between Rust versions.
 ///
 /// The root's separators are normalised so a file gets the same key whichever of its parent
 /// folders was opened.
-pub fn cache_key(root: &str, rel: &str, size: u64, mtime: i64) -> i64 {
+pub fn cache_key(root: &str, rel: &str, size: u64, mtime: i64, kind: AssetKind) -> i64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     let mut feed = |bytes: &[u8]| {
         for &byte in bytes {
@@ -454,6 +485,74 @@ pub fn cache_key(root: &str, rel: &str, size: u64, mtime: i64) -> i64 {
     feed(rel.as_bytes());
     feed(&size.to_le_bytes());
     feed(&mtime.to_le_bytes());
-    feed(&THUMB_VERSION.to_le_bytes());
+    let version = match kind {
+        AssetKind::Image | AssetKind::Audio => THUMB_VERSION,
+        AssetKind::Model => MODEL_PREVIEW_VERSION,
+    };
+    feed(&version.to_le_bytes());
     hash as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::ModelInfo;
+
+    #[test]
+    fn image_and_sound_keys_are_unchanged() {
+        // Computed by the version before model previews: users have these thumbnails cached.
+        let rock = cache_key("F:\\Resources", "3D/Textures/rock.png", 123456, 1700000000, AssetKind::Image);
+        assert_eq!(rock, -9117893502861981840);
+        let hit = cache_key("F:\\Resources\\", "Sounds/hit.wav", 98765, -5, AssetKind::Audio);
+        assert_eq!(hit, -7692076259545324008);
+        let bomb = "3D/Platformer Pack by Quaternius/FBX/Bomb.fbx";
+        assert_eq!(cache_key("F:\\Resources", bomb, 4242, 1534000000, AssetKind::Model), -7762848195514578235);
+    }
+
+    #[test]
+    fn model_preview_round_trips_through_the_cache() {
+        let path = std::env::temp_dir().join(format!("asset_browser_model_cache_{}.sqlite", std::process::id()));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        let mut conn = db::open(&path).unwrap();
+        let info = ModelInfo {
+            format: "FBX 7.4 binary".into(),
+            vertices: 1234,
+            triangles: 2000,
+            meshes: 3,
+            materials: 2,
+            textures: 1,
+            missing_textures: 1,
+            size: [1.5, 2.0, 0.25],
+            animations: vec![("Idle\tloop".into(), 2.5), ("Run".into(), 0.75)],
+            geometry: true,
+        };
+        let mut rgba = vec![0u8; 4 * 4 * 4];
+        rgba[0..4].copy_from_slice(&[10, 20, 30, 255]);
+        let pixels = ThumbPixels { w: 4, h: 4, src_w: 0, src_h: 0, rgba };
+        let job = ThumbJob { key: 7, path: PathBuf::from("a.fbx"), kind: AssetKind::Model };
+        let failed = ThumbJob { key: 8, path: PathBuf::from("b.fbx"), kind: AssetKind::Model };
+        let writes = [
+            to_cache(&job, &Ok(Preview::Model(pixels, Arc::new(info.clone())))),
+            to_cache(&failed, &Err("there are no meshes in this file".into())),
+        ];
+        db::put_cache(&mut conn, &writes).unwrap();
+
+        let Some(Ok(Preview::Model(back, back_info))) = cached_preview(&conn, &job) else { panic!("cached model") };
+        assert_eq!((back.w, back.h, back.src_w, back.src_h), (4, 4, 0, 0));
+        assert_eq!(&back.rgba[0..4], &[10, 20, 30, 255], "QOI keeps pixels exact");
+        // Tabs can't survive the text column; they become spaces.
+        let mut expected = info;
+        expected.animations[0].0 = "Idle loop".into();
+        assert_eq!(*back_info, expected);
+        let Some(Err(message)) = cached_preview(&conn, &failed) else { panic!("cached failure") };
+        assert_eq!(message, "there are no meshes in this file");
+        let unknown = ThumbJob { key: 9, path: PathBuf::from("c.fbx"), kind: AssetKind::Model };
+        assert!(cached_preview(&conn, &unknown).is_none());
+        drop(conn);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
 }

@@ -1,14 +1,14 @@
 //! Measures the parts that decide how fast the browser feels, on a real folder.
 //!
-//!     cargo run --release --bin bench -- <folder> [--thumbs N] [--sounds N] [--threads N] [--offset K]
-//!                                                 [--only TEXT] [--sheet OUT.png]
+//!     cargo run --release --bin bench -- <folder> [--thumbs N] [--sounds N] [--models N] [--threads N]
+//!                                                 [--offset K] [--only TEXT] [--sheet OUT.png]
 //!
 //! Uses a throwaway cache database, so each first preview pass is a true cold run and the second
 //! shows what reopening the folder costs. The OS keeps recently read files in memory, so compare
 //! settings with a different `--offset` each time: every offset picks a separate set of files.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -16,12 +16,14 @@ use asset_browser::app::grouped;
 use asset_browser::asset::AssetKind;
 use asset_browser::audio::{self, Source};
 use asset_browser::library::{Entry, Library, root_string};
-use asset_browser::thumbs::{Preview, ThumbJob, ThumbPixels, ThumbService};
+use asset_browser::model::{self, LoadOptions, raster};
+use asset_browser::thumbs::{Preview, THUMB_MAX, ThumbJob, ThumbPixels, ThumbService};
 use asset_browser::{db, scan};
 
 struct Options {
     thumbs: usize,
     sounds: usize,
+    models: usize,
     threads: usize,
     offset: usize,
     only: String,
@@ -34,6 +36,7 @@ fn main() {
     let mut options = Options {
         thumbs: 2000,
         sounds: 300,
+        models: 600,
         threads: asset_browser::thumbs::default_threads(),
         offset: 0,
         only: String::new(),
@@ -46,6 +49,7 @@ fn main() {
         match arg.as_str() {
             "--thumbs" => options.thumbs = number(args.next(), "--thumbs"),
             "--sounds" => options.sounds = number(args.next(), "--sounds"),
+            "--models" => options.models = number(args.next(), "--models"),
             "--threads" => options.threads = number(args.next(), "--threads"),
             "--offset" => options.offset = number(args.next(), "--offset"),
             "--only" => options.only = args.next().expect("--only needs text to match in paths").to_lowercase(),
@@ -55,7 +59,8 @@ fn main() {
     }
     let Some(root) = root else {
         eprintln!(
-            "usage: bench <folder> [--thumbs N] [--sounds N] [--threads N] [--offset K] [--only TEXT] [--sheet OUT.png]"
+            "usage: bench <folder> [--thumbs N] [--sounds N] [--models N] [--threads N] [--offset K] [--only TEXT] \
+             [--sheet OUT.png]"
         );
         std::process::exit(2);
     };
@@ -106,13 +111,17 @@ fn main() {
     if options.sounds > 0 {
         start_latency(&library, &spread(&library, AssetKind::Audio, &options, 20, 1));
     }
+    let models = spread(&library, AssetKind::Model, &options, options.models, 0);
+    previews("Models", &library, &models, &db_path, &options);
+    model_stages(&library, &models);
 
     let size: u64 = ["", "-wal", "-shm"]
         .iter()
         .filter_map(|suffix| std::fs::metadata(format!("{}{suffix}", db_path.display())).ok())
         .map(|meta| meta.len())
         .sum();
-    println!("Cache size:    {:.1} MB for {} previews", size as f64 / 1e6, grouped(images.len() + sounds.len()));
+    let count = images.len() + sounds.len() + models.len();
+    println!("Cache size:    {:.1} MB for {} previews", size as f64 / 1e6, grouped(count));
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", db_path.display()));
     }
@@ -132,34 +141,54 @@ fn spread<'a>(library: &'a Library, kind: AssetKind, options: &Options, count: u
 }
 
 /// Makes previews for `sample` twice: into an empty cache, then from it.
-fn previews(label: &str, library: &Library, sample: &[&Entry], db_path: &std::path::Path, options: &Options) {
+fn previews(label: &str, library: &Library, sample: &[&Entry], db_path: &Path, options: &Options) {
     if sample.is_empty() {
         return;
     }
+    let models = label == "Models";
     let names: HashMap<i64, (&str, u64)> =
         sample.iter().map(|entry| (entry.key, (entry.rel.as_str(), entry.size))).collect();
+    let order: HashMap<i64, usize> = sample.iter().enumerate().map(|(i, entry)| (entry.key, i)).collect();
     for pass in ["cold", "warm"] {
         let service = ThumbService::start_with_threads(db_path.to_path_buf(), options.threads, Arc::new(|| {}));
         let jobs = sample
             .iter()
             .map(|entry| ThumbJob { key: entry.key, path: library.path_of(entry), kind: entry.kind })
             .collect();
+        let textures_before = model::texture_stats();
         let start = Instant::now();
         service.set_wanted(jobs);
         let mut done = 0;
         let mut failed: Vec<(i64, String)> = Vec::new();
         let mut slowest: Vec<(u64, i64)> = Vec::new();
         let mut sheet_cells: Vec<ThumbPixels> = Vec::new();
+        // Models: every result in sample order, for a sheet of them all.
+        let mut model_cells: Vec<Option<ThumbPixels>> = (0..sample.len()).map(|_| None).collect();
+        // Textured, missing a texture, picture only (.blend), skeleton only, animated.
+        let mut contents = [0usize; 5];
         while done < sample.len() {
             let Some(thumb) = service.recv_timeout(Duration::from_secs(120)) else {
                 println!("  timed out with {} of {} done", done, sample.len());
                 break;
             };
             done += 1;
-            match thumb.result {
-                Ok(Preview::Image(pixels)) if pass == "cold" && options.sheet.is_some() && sheet_cells.len() < 48 => {
-                    sheet_cells.push(pixels);
+            if let Ok(Preview::Model(_, info)) = &thumb.result {
+                let picture_only = info.format.starts_with("Blender");
+                let counts = [
+                    info.textures > 0,
+                    info.missing_textures > 0,
+                    picture_only,
+                    !info.geometry && !picture_only,
+                    !info.animations.is_empty(),
+                ];
+                for (count, yes) in contents.iter_mut().zip(counts) {
+                    *count += usize::from(yes);
                 }
+            }
+            let sheet = pass == "cold" && options.sheet.is_some();
+            match thumb.result {
+                Ok(Preview::Model(pixels, _)) if sheet => model_cells[order[&thumb.key]] = Some(pixels),
+                Ok(Preview::Image(pixels)) if sheet && sheet_cells.len() < 48 => sheet_cells.push(pixels),
                 Ok(_) => {}
                 Err(message) => failed.push((thumb.key, message)),
             }
@@ -179,7 +208,27 @@ fn previews(label: &str, library: &Library, sample: &[&Entry], db_path: &std::pa
             write_sheet(path, &sheet_cells);
             println!("    contact sheet: {}", path.display());
         }
+        if let (Some(path), true, "cold") = (&options.sheet, models, pass) {
+            write_model_sheets(path, sample, &model_cells, &failed);
+        }
         if pass == "cold" {
+            if models {
+                let [textured, missing, pictures, skeletons, animated] = contents;
+                println!(
+                    "    {textured} textured, {missing} missing a texture, {pictures} .blend pictures, \
+                     {skeletons} skeletons only, {animated} animated"
+                );
+                let textures = model::texture_stats();
+                let decoded = textures.decoded - textures_before.decoded;
+                let micros = textures.decode_micros - textures_before.decode_micros;
+                println!(
+                    "    textures: {} decoded ({:.0} ms of work, {:.1} ms each), {} reused from memory",
+                    grouped(decoded as usize),
+                    micros as f64 / 1000.0,
+                    micros as f64 / 1000.0 / decoded.max(1) as f64,
+                    grouped((textures.reused - textures_before.reused) as usize),
+                );
+            }
             slowest.sort_unstable_by(|a, b| b.cmp(a));
             for (micros, key) in slowest.iter().take(5) {
                 let (rel, size) = names[key];
@@ -192,11 +241,92 @@ fn previews(label: &str, library: &Library, sample: &[&Entry], db_path: &std::pa
             }
             let mut reasons: Vec<_> = reasons.into_iter().collect();
             reasons.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
-            for (reason, count) in reasons.iter().take(6) {
+            for (reason, count) in reasons.iter().take(if models { 20 } else { 6 }) {
                 println!("    failed x{count}: {reason}");
             }
         }
     }
+}
+
+/// Where each model's time goes, one file after another with the files already in memory: reading
+/// the file (with its textures, which the cold pass left in the texture cache) and rendering.
+fn model_stages(library: &Library, sample: &[&Entry]) {
+    let mut load = Vec::new();
+    let mut render = Vec::new();
+    let mut by_format: HashMap<String, (usize, Duration, Duration)> = HashMap::new();
+    for entry in sample {
+        let path = library.path_of(entry);
+        if entry.extension().eq_ignore_ascii_case("blend") {
+            continue;
+        }
+        let start = Instant::now();
+        let Ok(model) = model::load(&path, &LoadOptions { max_texture: model::THUMB_TEXTURE }) else { continue };
+        let loaded = start.elapsed();
+        let start = Instant::now();
+        let picture = raster::render_thumbnail(&model, THUMB_MAX);
+        let rendered = start.elapsed();
+        std::hint::black_box(picture);
+        load.push(loaded);
+        render.push(rendered);
+        let format = model.info.format.split_whitespace().next().unwrap_or("").to_owned();
+        let stats = by_format.entry(format).or_default();
+        *stats = (stats.0 + 1, stats.1 + loaded, stats.2 + rendered);
+    }
+    if load.is_empty() {
+        return;
+    }
+    let summary = |times: &mut Vec<Duration>| {
+        times.sort_unstable();
+        let total: Duration = times.iter().sum();
+        format!(
+            "median {:.1} ms, mean {:.1} ms, worst {:.1} ms",
+            ms(times[times.len() / 2]),
+            ms(total) / times.len() as f64,
+            ms(*times.last().unwrap_or(&Duration::ZERO))
+        )
+    };
+    println!("Model stages, one thread, files in memory ({} models):", load.len());
+    println!("    load:   {}", summary(&mut load));
+    println!("    render: {}", summary(&mut render));
+    let mut formats: Vec<_> = by_format.into_iter().collect();
+    formats.sort_unstable_by_key(|(_, (count, ..))| std::cmp::Reverse(*count));
+    for (format, (count, loaded, rendered)) in formats {
+        println!(
+            "    {format:<8} x{count:<4} load {:.1} ms, render {:.1} ms on average",
+            ms(loaded) / count as f64,
+            ms(rendered) / count as f64
+        );
+    }
+}
+
+/// Every model's thumbnail in sample order, 48 to a page (`<sheet>-models-<page>.png`), failures
+/// as red cells, with a list of which cell is which file (`<sheet>-models.txt`).
+fn write_model_sheets(path: &Path, sample: &[&Entry], cells: &[Option<ThumbPixels>], failed: &[(i64, String)]) {
+    const PER_PAGE: usize = 48;
+    let stem = path.with_extension("");
+    let failures: HashMap<i64, &str> = failed.iter().map(|(key, message)| (*key, message.as_str())).collect();
+    let mut legend = String::new();
+    for (page, start) in (0..cells.len()).step_by(PER_PAGE).enumerate() {
+        let end = (start + PER_PAGE).min(cells.len());
+        let failed_cell =
+            ThumbPixels { w: 192, h: 192, src_w: 192, src_h: 192, rgba: [200, 40, 40, 160].repeat(192 * 192) };
+        let page_cells: Vec<ThumbPixels> = cells[start..end]
+            .iter()
+            .map(|cell| match cell {
+                Some(cell) => ThumbPixels { rgba: cell.rgba.clone(), ..*cell },
+                None => ThumbPixels { rgba: failed_cell.rgba.clone(), ..failed_cell },
+            })
+            .collect();
+        let page_path = PathBuf::from(format!("{}-models-{:02}.png", stem.display(), page + 1));
+        write_sheet(&page_path, &page_cells);
+        for (i, entry) in sample[start..end].iter().enumerate() {
+            let failure = failures.get(&entry.key).map(|message| format!("  FAILED: {message}")).unwrap_or_default();
+            legend.push_str(&format!("{:02} r{} c{}  {}{failure}\n", page + 1, i / 8 + 1, i % 8 + 1, entry.rel));
+        }
+    }
+    let legend_path = PathBuf::from(format!("{}-models.txt", stem.display()));
+    std::fs::write(&legend_path, legend).expect("write contact sheet legend");
+    println!("    contact sheets: {}-models-NN.png, legend {}", stem.display(), legend_path.display());
 }
 
 /// What playback waits for before the first audio: opening the file and decoding its first
