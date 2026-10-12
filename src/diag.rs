@@ -20,6 +20,11 @@ pub fn report(context: &str, error: impl std::fmt::Display) {
     *LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(line);
 }
 
+/// Records an error that isn't worth showing, such as an update check while offline.
+pub fn note(context: &str, error: impl std::fmt::Display) {
+    append(&format!("{context}: {error}"));
+}
+
 /// The most recent error, for the status bar.
 pub fn last() -> Option<String> {
     LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()

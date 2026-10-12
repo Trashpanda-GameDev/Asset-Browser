@@ -30,7 +30,9 @@ use crate::ui::mode::{Layout as ViewLayout, Mode, ModeView};
 use crate::ui::organize::{self, GroupCommand, GroupEdit, Sidebar, Targets, plural};
 use crate::ui::previews::Previews;
 use crate::ui::sound::{self, Sound};
+use crate::ui::updates::UpdateAction;
 use crate::ui::{theme, widgets};
+use crate::updates::Updates;
 use crate::{db, diag, platform, scan};
 
 pub use crate::ui::format::{format_size, format_time, grouped};
@@ -140,6 +142,7 @@ pub struct BrowserApp {
     previews: Previews,
     inspector: Inspector,
     sound: Sound,
+    updates: Updates,
 
     /// Favorites, collections and categories, and where their members are in the library.
     groups: Groups,
@@ -183,6 +186,10 @@ impl BrowserApp {
             })
             .ok();
         let (scan_tx, scan_rx) = crossbeam_channel::unbounded();
+        let updates = {
+            let ctx = cc.egui_ctx.clone();
+            Updates::start(std::sync::Arc::new(move || ctx.request_repaint()))
+        };
 
         let mut app = Self {
             ctx: cc.egui_ctx.clone(),
@@ -212,6 +219,7 @@ impl BrowserApp {
             previews: Previews::new(&cc.egui_ctx),
             inspector: Inspector::new(&cc.egui_ctx, &db::user_data_path()),
             sound: Sound::start(&cc.egui_ctx),
+            updates,
             groups: Groups::open(&db::user_data_path()),
             membership: Membership::default(),
             membership_dirty: true,
@@ -1653,6 +1661,7 @@ impl BrowserApp {
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin::symmetric(12, 4));
         let mut show = None;
+        let mut update = None;
         egui::Panel::bottom("status").frame(frame).show(ui, |ui| {
             ui.horizontal(|ui| {
                 let small = |text: String| RichText::new(text).size(11.5).color(theme::TEXT_FAINT);
@@ -1690,6 +1699,8 @@ impl BrowserApp {
                     ));
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    update = crate::ui::updates::status(ui, &self.updates);
+                    widgets::divider(ui);
                     let stats = &self.thumbs.stats;
                     let made = stats.made.load(std::sync::atomic::Ordering::Relaxed);
                     let micros = stats.make_micros.load(std::sync::atomic::Ordering::Relaxed);
@@ -1723,6 +1734,18 @@ impl BrowserApp {
         });
         if let Some(index) = show {
             self.reveal(index);
+        }
+        match update {
+            Some(UpdateAction::Check) => self.updates.check_now(),
+            Some(UpdateAction::Restart) => {
+                // Saved before the updater starts: it waits for the app to close, but if it can't
+                // watch the process it goes ahead and stops it.
+                self.save_settings();
+                if self.updates.restart() {
+                    self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+            None => {}
         }
     }
 
@@ -2054,6 +2077,7 @@ impl eframe::App for BrowserApp {
         self.previews.begin_frame();
         self.poll_scans();
         self.poll_deleting();
+        self.updates.poll();
         self.take_dropped_folders(&ctx);
         self.previews.drain(&self.thumbs, &ctx);
         self.inspector.poll(&ctx);
@@ -2090,6 +2114,8 @@ impl eframe::App for BrowserApp {
     }
 
     fn on_exit(&mut self) {
+        // Settings first: once the updater starts it may stop the app.
         self.save_settings();
+        self.updates.on_exit();
     }
 }

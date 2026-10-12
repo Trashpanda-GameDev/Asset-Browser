@@ -541,10 +541,12 @@ mod tests {
 
     #[test]
     fn several_roots_make_one_library() {
+        // Forward slashes, which every OS splits paths on, so the second root is named "Audio" on
+        // Linux and macOS too.
         let library = Library::build(vec![
             (PathBuf::from("F:\\Resources"), vec![file("ui/a.png", AssetKind::Image, 1, 1)]),
             (
-                PathBuf::from("D:\\Audio"),
+                PathBuf::from("D:/Audio"),
                 vec![file("ui/a.png", AssetKind::Image, 1, 1), file("hit.wav", AssetKind::Audio, 1, 1)],
             ),
         ]);
@@ -569,9 +571,9 @@ mod tests {
         assert_eq!(library.locate("d:/audio/gone.wav"), Located::Missing);
         assert_eq!(library.locate("c:/elsewhere/x.png"), Located::Outside);
         let hit = &library.entries[library.find(1, "hit.wav").unwrap() as usize];
-        assert_eq!(library.path_of(hit), Path::new("D:\\Audio").join("hit.wav"));
+        assert_eq!(library.path_of(hit), Path::new("D:/Audio").join("hit.wav"));
         assert_eq!(library.folder_label(hit), "Audio");
-        assert_eq!(library.root_index(Path::new("D:\\Audio\\")), Some(1));
+        assert_eq!(library.root_index(Path::new("D:/Audio/")), Some(1));
 
         // Taking a root's files back out gives what built it, so the library can be rebuilt
         // without it, or with it rescanned.
@@ -582,7 +584,7 @@ mod tests {
         assert!(!without.same_files_as(&library));
         let again = Library::build(vec![
             (PathBuf::from("F:\\Resources"), library.files_of(0)),
-            (PathBuf::from("D:\\Audio"), library.files_of(1)),
+            (PathBuf::from("D:/Audio"), library.files_of(1)),
         ]);
         assert!(again.same_files_as(&library));
     }

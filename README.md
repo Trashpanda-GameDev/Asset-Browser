@@ -13,12 +13,67 @@ cargo run --release -- F:\Resources  # adds this folder to the library (or shows
 
 ## Share it
 
-`cargo build --release` makes `target\release\asset_browser.exe`: one file, with its icon and the C runtime built in,
-so it runs as it is on 64-bit Windows 10 and 11. Zip it and send it; it keeps its data in each user's own folders
-(see below). Until the exe is code-signed, Windows warns about it when it comes from the internet ("Windows protected
-your PC": **More info**, **Run anyway**). Builds for macOS and Linux have to be made on those systems.
+People get it from the repository's [Releases](https://github.com/Trashpanda-GameDev/Asset-Browser/releases), for
+64-bit Windows 10 and 11, in either of two forms. Both update themselves.
+
+- **`TrashpandaAssetBrowser-win-Setup.exe`** installs it for the current user, without admin rights, into
+  `%LOCALAPPDATA%\TrashpandaAssetBrowser`, with Start menu and desktop shortcuts, then starts it. It's uninstalled
+  from Windows' **Installed apps**.
+- **`TrashpandaAssetBrowser-win-Portable.zip`** runs from wherever it's unzipped: start **Asset Browser.exe** in it.
+
+The app checks for a newer release when it starts, every 6 hours, and when you click its version at the right end of
+the status bar. It downloads one in the background and shows **Restart to update**; if you don't, the update is
+installed when you close the app. The library, favorites and settings live in each user's own folders (see
+[Where things are](#where-things-are)), so updating, uninstalling or deleting the portable folder leaves them alone.
+A copy built with `cargo build` doesn't update itself.
+
+Until the app is code-signed, Windows warns about the download ("Windows protected your PC": **More info**,
+**Run anyway**); the updates it downloads itself aren't warned about. Builds for macOS and Linux would have to be made
+on those systems, and aren't released yet.
 
 The icon is `assets/icon.png` (1024 px); `assets/icon.ico` holds every size Windows uses, made from it.
+
+### Making a release
+
+1. Set `version` in `Cargo.toml` (say to `0.2.0`), and commit and push it.
+2. Tag that commit and push the tag:
+
+   ```
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+`.github/workflows/release.yml` builds the app on Windows, packs it with [Velopack](https://velopack.io) into the
+setup program, the portable zip and the update packages (with a smaller delta from the last release), and publishes
+them as a GitHub release whose notes are the commits since the last one. It stops if the tag doesn't match
+`Cargo.toml`. To try the build and packing without publishing, run the workflow by hand (**Actions**, **Release**,
+**Run workflow**): the files are kept with the run.
+
+The app id the workflow packs with, `TrashpandaAssetBrowser`, must never change, because installed copies find their
+updates by it. Velopack's packer, `vpk`, is installed at the version of the `velopack` crate in `Cargo.lock`; the two
+have to match.
+
+### Trying an update before releasing it
+
+With the .NET 8 SDK or later, pack a build twice, as two versions, into one folder:
+
+```
+dotnet tool install -g vpk --version 1.2.161
+cargo build --release
+mkdir target\publish
+copy target\release\asset_browser.exe target\publish\
+vpk pack -u AssetBrowserTest -v 0.1.0 -p target\publish -e asset_browser.exe -r win-x64 -o target\velopack
+```
+
+Unzip `target\velopack\AssetBrowserTest-win-Portable.zip` somewhere and run the `vpk pack` line again with `-v 0.1.1`.
+Then start the unzipped copy with `ASSET_BROWSER_UPDATE_FEED` set to that folder, from PowerShell in the repository:
+
+```
+$env:ASSET_BROWSER_UPDATE_FEED = "$PWD\target\velopack"
+& "<where you unzipped it>\AssetBrowserTest.exe"
+```
+
+It looks there instead of on GitHub, finds 0.1.1 and updates to it. The test id keeps it apart from a real install.
 
 ## Use it
 
@@ -163,14 +218,18 @@ Measured on F:\Resources (60,648 assets, spinning laptop disk, 20 threads), 12 O
 | `src/platform.rs` | Open / show in file manager, the Recycle Bin and whether a drive has one: the only per-OS code |
 | `src/deletion.rs` | Deleting to the Recycle Bin on its own thread, and which files actually went |
 | `src/diag.rs` | Error log and panic hook (release builds have no console) |
+| `src/updates.rs` | Updates through Velopack: checking the releases, downloading, installing on a restart or on closing |
+| `src/ui/updates.rs` | The version and the updater's news at the end of the status bar |
 | `src/bin/bench.rs` | The benchmark |
 | `build.rs`, `assets/` | The app icon, and putting it with the app's name into the Windows exe (`src/main.rs` sets the window's) |
 | `.cargo/config.toml` | Links the C runtime into Windows builds, so they need no Visual C++ redistributable |
+| `.github/workflows/` | `ci.yml` checks every push on Windows, macOS and Linux; `release.yml` publishes a release for a version tag |
 
 The cache and log live in the OS's per-user cache folder (`%LOCALAPPDATA%\AssetBrowser\cache` on Windows). Settings
 (mode, layouts, volume and so on) are saved in the same file. What you make yourself is kept apart, so clearing the
 cache can't lose it: the library's folders, favorites, collections, categories and sprite sheet choices are in
-`%APPDATA%\AssetBrowser\data\user.sqlite`.
+`%APPDATA%\AssetBrowser\data\user.sqlite`. Failed update checks go in the app's log too; Velopack's own updater logs
+to `%LOCALAPPDATA%\velopack\velopack_TrashpandaAssetBrowser.log`.
 
 ## Adding to a mode
 
