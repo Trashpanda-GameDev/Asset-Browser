@@ -35,13 +35,19 @@ The icon is `assets/icon.png` (1024 px); `assets/icon.ico` holds every size Wind
 
 ### Making a release
 
-1. Set `version` in `Cargo.toml` (say to `0.2.0`), and commit and push it.
-2. Tag that commit and push the tag:
+1. Set `version` in `Cargo.toml` (say to `0.2.0`) and run `cargo build`, which writes it into `Cargo.lock` too.
+   Commit both: the release builds with `--locked`, so it stops if `Cargo.lock` still has the old version.
+2. Merge it into `main`, then tag `main` and push the tag:
 
    ```
+   git switch main
+   git pull
    git tag v0.2.0
    git push origin v0.2.0
    ```
+
+Don't make the release on GitHub's website (**Draft a new release**): the workflow makes it, and fails if the tag has
+one already.
 
 `.github/workflows/release.yml` builds the app on Windows, packs it with [Velopack](https://velopack.io) into the
 setup program, the portable zip and the update packages (with a smaller delta from the last release), and publishes

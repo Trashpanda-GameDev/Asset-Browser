@@ -1,7 +1,8 @@
 # Publishes a release of the Windows app when a version tag is pushed:
 #
-#   1. Set `version` in Cargo.toml (say to 0.2.0), and commit and push it.
-#   2. git tag v0.2.0 && git push origin v0.2.0
+#   1. Set `version` in Cargo.toml (say to 0.2.0) and run `cargo build` so Cargo.lock has it too (the
+#      build below is --locked). Commit both and merge them into main.
+#   2. On main: git tag v0.2.0 && git push origin v0.2.0
 #
 # Velopack packs the build into a setup program, a portable zip, and the update package that the
 # copies already out there download (src/updates.rs). Run by hand (Actions > Release > Run
