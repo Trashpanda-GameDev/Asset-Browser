@@ -19,3 +19,4 @@ pub mod scan;
 pub mod sheets;
 pub mod thumbs;
 pub mod ui;
+pub mod updates;

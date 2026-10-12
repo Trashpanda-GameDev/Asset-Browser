@@ -11,5 +11,6 @@ pub mod previews;
 pub mod sheet_view;
 pub mod sound;
 pub mod theme;
+pub mod updates;
 pub mod viewport;
 pub mod widgets;
