@@ -111,6 +111,8 @@ pub enum MenuAction {
     Open,
     Reveal,
     CopyPaths,
+    /// Ask "Delete?" for the selection (to the Recycle Bin).
+    Delete,
 }
 
 /// The tile grid.
@@ -282,6 +284,17 @@ fn item_response(browse: &Browse<'_>, index: u32, response: &egui::Response, out
         let targets = browse.targets(index);
         if let Some(command) = organize::menu_items(ui, browse.groups, browse.membership, &targets, browse.viewing) {
             output.commands.push(command);
+        }
+        ui.separator();
+        let delete = if count > 1 {
+            format!("{}  Delete {count}…", icon::TRASH)
+        } else {
+            format!("{}  Delete…", icon::TRASH)
+        };
+        let hint = format!("To the {} (Del)", crate::platform::trash_name());
+        if ui.button(delete).on_hover_text(hint).clicked() {
+            output.menu = Some(MenuAction::Delete);
+            ui.close();
         }
     });
 }

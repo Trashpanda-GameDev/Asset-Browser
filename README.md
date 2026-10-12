@@ -60,10 +60,17 @@ The icon is `assets/icon.png` (1024 px); `assets/icon.ico` holds every size Wind
     click to take them out.
 - **Selecting:** click; **Ctrl+click** adds or removes; **Shift+click** selects a range; **Ctrl+A** selects everything
   shown. With several selected, the pane shows how many, their size and their thumbnails, and Copy path copies them all.
+- **Deleting:** **Delete** (or right-click, **Delete…**) asks, then moves the selected files to the Recycle Bin (the
+  Trash on macOS and Linux); right-click a folder in the tree for **Delete folder…**, which takes everything in it.
+  The asset after them is selected next. They can be put back from the Recycle Bin, favorites, collections and
+  categories included: those keep them meanwhile, flagged as missing. While a collection or category is browsed,
+  the question also offers to just take them out of it. On a drive without a Recycle Bin (a USB stick, a network
+  drive) the question says it can't be undone. The library's own folders are never deleted from here, only removed
+  from the library.
 - **Keys:** arrows move the selection (Shift extends it), Page Up/Down and Home/End jump, **Enter** opens the file in
   its default app (so does double-click), **Space** plays or pauses, **Esc** stops the sound or else clears the
-  selection, **Ctrl+F** searches, **Ctrl+C** copies the selected paths, **F** stars them. Right-click for Open, Show
-  in folder, Copy path, Favorites, collections and categories.
+  selection, **Ctrl+F** searches, **Ctrl+C** copies the selected paths, **F** stars them, **Delete** deletes them
+  (after asking). Right-click for Open, Show in folder, Copy path, Favorites, collections and categories, and Delete.
 - The left panel filters by folder (including everything below it). The search box matches every word against the
   file's path in its folder and its categories, so folder names work too.
 
@@ -142,7 +149,8 @@ Measured on F:\Resources (60,648 assets, spinning laptop disk, 20 threads), 12 O
 | `src/ui/sheet_view.rs` | The pane's sprite sheet player and grid |
 | `src/ui/previews.rs` | Thumbnails on the GPU, waveforms and model facts the window has |
 | `src/ui/theme.rs`, `widgets.rs`, `format.rs` | Colours, fonts and icons; the hand-drawn controls; numbers and dates |
-| `src/platform.rs` | Open / show in file manager: the only per-OS code |
+| `src/platform.rs` | Open / show in file manager, the Recycle Bin and whether a drive has one: the only per-OS code |
+| `src/deletion.rs` | Deleting to the Recycle Bin on its own thread, and which files actually went |
 | `src/diag.rs` | Error log and panic hook (release builds have no console) |
 | `src/bin/bench.rs` | The benchmark |
 | `build.rs`, `assets/` | The app icon, and putting it with the app's name into the Windows exe (`src/main.rs` sets the window's) |

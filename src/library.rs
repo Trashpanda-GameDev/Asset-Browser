@@ -319,12 +319,37 @@ impl Library {
     /// The files of root `root` as a scan reports them, for building the library again with a
     /// root added, removed or rescanned.
     pub fn files_of(&self, root: u16) -> Vec<ScannedFile> {
+        self.files_without(root, &[])
+    }
+
+    /// The files of root `root` other than those at or below `gone` (lowercase paths relative to
+    /// the root, as `place_of` gives them): what's left after they were deleted.
+    pub fn files_without(&self, root: u16, gone: &[String]) -> Vec<ScannedFile> {
+        let removed = |lower: &str| {
+            gone.iter().any(|gone| {
+                lower
+                    .strip_prefix(gone.as_str())
+                    .is_some_and(|rest| gone.is_empty() || rest.is_empty() || rest.starts_with('/'))
+            })
+        };
         let start = self.entries.partition_point(|entry| entry.root < root);
         self.entries[start..]
             .iter()
             .take_while(|entry| entry.root == root)
+            .filter(|entry| !removed(&entry.lower))
             .map(|entry| ScannedFile { rel: entry.rel.clone(), kind: entry.kind, size: entry.size, mtime: entry.mtime })
             .collect()
+    }
+
+    /// Which root `path` is in, and its lowercase path relative to that root ("" for the root
+    /// itself).
+    pub fn place_of(&self, path: &Path) -> Option<(u16, String)> {
+        let key = path_key(path);
+        self.roots.iter().enumerate().find_map(|(index, root)| {
+            let rest = key.strip_prefix(root.path_key.as_str())?;
+            let rel = if rest.is_empty() { "" } else { rest.strip_prefix('/')? };
+            Some((index as u16, rel.to_owned()))
+        })
     }
 
     /// The root `path` is, if it is one (by `root_string`).
@@ -560,6 +585,29 @@ mod tests {
             (PathBuf::from("D:\\Audio"), library.files_of(1)),
         ]);
         assert!(again.same_files_as(&library));
+    }
+
+    #[test]
+    fn deleted_files_and_folders_leave_the_rest() {
+        let library = Library::build(vec![(
+            PathBuf::from("F:\\Art"),
+            vec![
+                file("ui/A.png", AssetKind::Image, 1, 1),
+                file("ui/icons/b.png", AssetKind::Image, 1, 1),
+                file("uix/c.png", AssetKind::Image, 1, 1),
+                file("d.png", AssetKind::Image, 1, 1),
+            ],
+        )]);
+        assert_eq!(library.place_of(Path::new("f:\\art\\UI")), Some((0, "ui".to_owned())));
+        assert_eq!(library.place_of(Path::new("F:\\Art")), Some((0, String::new())));
+        assert_eq!(library.place_of(Path::new("F:\\Artwork\\x.png")), None, "a name starting the same isn't inside");
+        let rels = |files: Vec<ScannedFile>| files.into_iter().map(|file| file.rel).collect::<Vec<_>>();
+        // A folder takes what's below it, but not a sibling whose name starts the same.
+        assert_eq!(rels(library.files_without(0, &["ui".to_owned()])), ["d.png", "uix/c.png"]);
+        assert_eq!(
+            rels(library.files_without(0, &["ui/a.png".to_owned(), "d.png".to_owned()])),
+            ["ui/icons/b.png", "uix/c.png"]
+        );
     }
 
     #[test]

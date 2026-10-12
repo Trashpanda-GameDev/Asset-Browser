@@ -6,6 +6,7 @@ pub mod app;
 pub mod asset;
 pub mod audio;
 pub mod db;
+pub mod deletion;
 pub mod detail;
 pub mod diag;
 pub mod groups;

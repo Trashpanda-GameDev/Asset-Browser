@@ -30,6 +30,8 @@ pub enum FolderAction {
     AddRoot,
     /// Take one of the library's folders out (its files are untouched).
     RemoveRoot(PathBuf),
+    /// Ask "Delete?" for a folder inside the library's folders (to the Recycle Bin).
+    Delete(u32),
 }
 
 /// Which folders are open, by `DirNode::key`, so it survives rescans and folders coming and
@@ -260,6 +262,16 @@ fn folder_menu(response: &Response, library: &Library, dir: u32) -> Option<Folde
                 .on_hover_text("The files stay where they are");
             if remove.clicked() {
                 action = Some(FolderAction::RemoveRoot(path));
+                ui.close();
+            }
+        } else if node.root.is_some() {
+            // Folders inside the library's folders; those themselves are only ever removed.
+            ui.separator();
+            let delete = ui
+                .button(format!("{}  Delete folder…", icon::TRASH))
+                .on_hover_text(format!("To the {}, with everything in it", crate::platform::trash_name()));
+            if delete.clicked() {
+                action = Some(FolderAction::Delete(dir));
                 ui.close();
             }
         }
