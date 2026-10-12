@@ -271,6 +271,7 @@ dependencies = [
  "egui-phosphor",
  "fast_image_resize",
  "flate2",
+ "gif",
  "gltf",
  "image",
  "naga",

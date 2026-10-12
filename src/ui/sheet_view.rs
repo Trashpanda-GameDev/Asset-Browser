@@ -5,6 +5,9 @@
 //!
 //! What the user chooses for a picture (to animate it, their grid, the speed) is saved per file
 //! in the user data file, so it's the same next time.
+//!
+//! An animated GIF plays here too, as a sheet of its own frames (`animated`). The frame is drawn
+//! through the picture view (`ImageView`), so it zooms and pans like a picture.
 
 use std::path::Path;
 
@@ -17,10 +20,11 @@ use crate::sheets::{self, Frame, Guess, Pixels, Saved, Sheet, SheetStore, Source
 use crate::thumbs::ThumbPixels;
 
 use super::browse::fit_rect;
-use super::image_view::Backdrop;
+use super::image_view::ImageView;
 use super::{theme, widgets};
 
-const DEFAULT_FPS: f32 = 12.0;
+/// Frames per second when the frames have no timing of their own and no speed was picked.
+const DEFAULT_FPS: f32 = 8.0;
 
 pub struct SheetView {
     store: SheetStore,
@@ -39,7 +43,9 @@ pub struct SheetView {
     /// The frame shown while paused (a position in the animation).
     paused_at: usize,
     fps: f32,
-    /// Play the frame durations the data file gives instead of `fps`.
+    /// The user picked `fps` for this picture (or else it follows `DEFAULT_FPS`).
+    fps_chosen: bool,
+    /// Play the frame durations the file gives (a data file's, a GIF's) instead of `fps`.
     file_timing: bool,
 }
 
@@ -56,6 +62,7 @@ impl SheetView {
             started: 0.0,
             paused_at: 0,
             fps: DEFAULT_FPS,
+            fps_chosen: false,
             file_timing: true,
         }
     }
@@ -67,16 +74,19 @@ impl SheetView {
     /// Takes a newly shown picture: what was detected in it, and the user's choices for it.
     pub fn load(&mut self, key: String, detected: Option<Sheet>, pixels: &ThumbPixels, now: f64) {
         let saved = self.store.get(&key);
-        let from_data = matches!(detected, Some(Sheet { source: Source::Data(_), .. }));
+        // A data file's or a GIF's own frames aren't overridden by a grid.
+        let from_file = matches!(detected, Some(Sheet { source: Source::Data(_) | Source::Animated { .. }, .. }));
         self.sheet = match saved.and_then(|saved| saved.grid) {
-            Some(grid) if !from_data => Some(sheets::from_grid(grid, &view(pixels), Guess::User)),
+            Some(grid) if !from_file => Some(sheets::from_grid(grid, &view(pixels), Guess::User)),
             _ => detected.clone(),
         };
         self.animate = match saved {
             Some(saved) => saved.animate && self.sheet.is_some(),
             None => self.sheet.as_ref().is_some_and(Sheet::is_certain),
         };
-        self.fps = saved.map_or(DEFAULT_FPS, |saved| saved.fps.clamp(1.0, 60.0));
+        let chosen = saved.and_then(|saved| saved.fps);
+        self.fps = chosen.map_or(DEFAULT_FPS, |fps| fps.clamp(1.0, 60.0));
+        self.fps_chosen = chosen.is_some();
         self.detected = detected;
         self.key = Some(key);
         self.animation = 0;
@@ -118,7 +128,8 @@ impl SheetView {
             Source::Grid(grid, Guess::User | Guess::Default) => Some(grid),
             _ => None,
         });
-        self.store.set(key, &Saved { animate: self.animate, grid, fps: self.fps });
+        let fps = self.fps_chosen.then_some(self.fps);
+        self.store.set(key, &Saved { animate: self.animate, grid, fps });
     }
 
     /// Where in the animation playback is (a position in its frame list).
@@ -157,35 +168,39 @@ impl SheetView {
         sheet.animations.get(self.animation.min(sheet.animations.len().saturating_sub(1)))
     }
 
-    /// Draws the current frame in `rect`, over the backdrop, and keeps the animation moving.
+    /// Draws the current frame in `rect` through the picture view (zoom, pan, backdrop), and
+    /// keeps the animation moving. `key` is the asset's, for the view to keep its zoom.
+    #[expect(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         ui: &mut Ui,
         rect: Rect,
+        key: i64,
         texture: TextureId,
         sheet_size: [u32; 2],
-        backdrop: Backdrop,
+        view: &mut ImageView,
         checker: TextureId,
     ) {
-        let painter = ui.painter_at(rect);
-        let background = if backdrop == Backdrop::Light { Backdrop::LIGHT } else { theme::WELL };
-        painter.rect_filled(rect, theme::CARD_RADIUS, background);
         let now = ui.input(|input| input.time);
         let position = self.position(now);
         let (Some(sheet), Some(animation)) = (self.sheet.as_ref(), self.current_animation()) else { return };
         let Some(frame) = animation.frames.get(position).and_then(|&index| sheet.frames.get(index)) else { return };
-        let pixels_per_point = ui.ctx().pixels_per_point();
-        let canvas = fit_rect(rect.shrink(14.0), frame.size[0] as f32, frame.size[1] as f32, true, pixels_per_point);
-        if backdrop == Backdrop::Checker {
-            let uv = Rect::from_min_max(Pos2::ZERO, pos2(canvas.width() / 12.0, canvas.height() / 12.0));
-            painter.image(checker, canvas, uv, Color32::WHITE);
-        }
-        draw_frame(&painter, canvas, texture, sheet_size, frame);
+        // One box for all of the animation's frames, so a zoom holds still while it plays.
+        let size = animation
+            .frames
+            .iter()
+            .filter_map(|&index| sheet.frames.get(index))
+            .fold([1, 1], |[w, h], frame| [w.max(frame.size[0]), h.max(frame.size[1])]);
+        view.show_with(ui, rect, key, size, true, checker, |painter, area| {
+            let scale = area.width() / size[0] as f32;
+            let inset = vec2((size[0] - frame.size[0]) as f32, (size[1] - frame.size[1]) as f32) * scale / 2.0;
+            let shown = vec2(frame.size[0] as f32, frame.size[1] as f32) * scale;
+            draw_frame(painter, Rect::from_min_size(area.min + inset, shown), texture, sheet_size, frame);
+        });
 
         let count = animation.frames.len();
         let label = format!("{} / {count}", position + 1);
-        widgets::badge(&painter, rect.left_bottom() + vec2(8.0, -8.0), Align2::LEFT_BOTTOM, &label, theme::TEXT);
-        painter.rect_stroke(rect, theme::CARD_RADIUS, Stroke::new(1.0, theme::BORDER), StrokeKind::Inside);
+        widgets::badge(&ui.painter_at(rect), rect.left_top() + vec2(8.0, 8.0), Align2::LEFT_TOP, &label, theme::TEXT);
         if self.playing && count > 1 {
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f32(1.0 / 60.0));
         }
@@ -224,15 +239,11 @@ impl SheetView {
             let timed = sheet.frames.iter().any(|frame| frame.duration_ms.is_some());
             if timed {
                 let mut file = self.file_timing;
-                if widgets::toggle_chip(
-                    ui,
-                    icon::CLOCK,
-                    "File timing",
-                    &mut file,
-                    "Play the frame durations saved in the data file",
-                )
-                .changed()
-                {
+                let tip = match sheet.source {
+                    Source::Animated { .. } => "Play the GIF at its own speed",
+                    _ => "Play the frame durations saved in the data file",
+                };
+                if widgets::toggle_chip(ui, icon::CLOCK, "File timing", &mut file, tip).changed() {
                     self.file_timing = file;
                     self.started = now;
                 }
@@ -242,6 +253,7 @@ impl SheetView {
                     egui::DragValue::new(&mut self.fps).range(1.0..=60.0).speed(0.2).suffix(" fps").max_decimals(0);
                 if ui.add(speed).on_hover_text("Frames per second").changed() {
                     self.started = now - position as f64 / self.fps as f64;
+                    self.fps_chosen = true;
                     save = true;
                 }
             }
@@ -262,6 +274,10 @@ impl SheetView {
         }
 
         let source = match &sheet.source {
+            Source::Animated { total, .. } if *total > sheet.frames.len() => {
+                format!("The first {} of the GIF's {} frames", sheet.frames.len(), total)
+            }
+            Source::Animated { .. } => "The GIF's own frames".to_owned(),
             Source::Data(name) => format!("Frames and animations from {name}"),
             Source::Grid(_, Guess::FileName) => "Frames counted from the file name".to_owned(),
             Source::Grid(_, Guess::Gaps) => "Frames found between transparent gaps".to_owned(),

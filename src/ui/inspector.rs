@@ -16,7 +16,7 @@ use crate::detail::{Detail, DetailLoader};
 use crate::groups::{FAVORITES, GroupKind, Groups, Membership};
 use crate::library::{Entry, Library};
 use crate::model::Model;
-use crate::sheets::Sheet;
+use crate::sheets::{Sheet, Source};
 use crate::thumbs::ThumbPixels;
 
 use super::browse::{Look, MenuAction, channels, draw_preview};
@@ -208,7 +208,9 @@ impl Inspector {
             }
             widgets::section_label(ui, "Details");
             match entry.kind {
-                AssetKind::Image => image_properties(ui, entry, previews, self.detail_size(entry.key)),
+                AssetKind::Image => {
+                    image_properties(ui, entry, previews, self.detail_size(entry.key), self.gif_length(entry.key));
+                }
                 AssetKind::Audio => sound_properties(ui, entry, previews, sound),
                 AssetKind::Model => self.model_properties(ui, entry, previews),
             }
@@ -236,7 +238,27 @@ impl Inspector {
 
     fn detail_size(&self, key: i64) -> Option<[u32; 2]> {
         match &self.detail {
-            Some((detail_key, DetailState::Image { size, .. })) if *detail_key == key => Some(*size),
+            Some((detail_key, DetailState::Image { size, sheet, .. })) if *detail_key == key => Some(match sheet {
+                // What's loaded of a GIF is its frames side by side, not its size.
+                Some(Sheet { source: Source::Animated { width, height, .. }, .. }) => [*width, *height],
+                _ => *size,
+            }),
+            _ => None,
+        }
+    }
+
+    /// An animated GIF's frame count and length, once its frames are loaded.
+    fn gif_length(&self, key: i64) -> Option<(usize, u32)> {
+        match &self.detail {
+            Some((detail_key, DetailState::Image { sheet: Some(sheet), .. }))
+                if *detail_key == key && matches!(sheet.source, Source::Animated { .. }) =>
+            {
+                let total = match sheet.source {
+                    Source::Animated { total, .. } => total,
+                    _ => sheet.frames.len(),
+                };
+                Some((total, sheet.frames.iter().filter_map(|frame| frame.duration_ms).sum()))
+            }
             _ => None,
         }
     }
@@ -261,7 +283,7 @@ impl Inspector {
 
         match (&loaded, animating) {
             (Some((texture, size, _, _)), true) => {
-                self.sheet.draw(ui, rect, *texture, *size, self.image.backdrop, previews.checker.id());
+                self.sheet.draw(ui, rect, entry.key, *texture, *size, &mut self.image, previews.checker.id());
             }
             _ => {
                 let picture = match (&loaded, previews.texture(entry.key)) {
@@ -415,11 +437,21 @@ fn sound_properties(ui: &mut Ui, entry: &Entry, previews: &Previews, sound: &Sou
     }
 }
 
-fn image_properties(ui: &mut Ui, entry: &Entry, previews: &Previews, detail: Option<[u32; 2]>) {
+/// `animation` is an animated GIF's frame count and length (ms), once loaded.
+fn image_properties(
+    ui: &mut Ui,
+    entry: &Entry,
+    previews: &Previews,
+    detail: Option<[u32; 2]>,
+    animation: Option<(usize, u32)>,
+) {
     if let Some([w, h]) = detail.or(previews.dimensions(entry.key)) {
         widgets::property(ui, "Dimensions", format!("{w} × {h} px"));
     } else if let Some(message) = previews.failed.get(&entry.key) {
         widgets::property(ui, "Preview", RichText::new(message).color(theme::ERROR));
+    }
+    if let Some((frames, ms)) = animation {
+        widgets::property(ui, "Frames", format!("{} · {}", grouped(frames), format_time(f64::from(ms) / 1000.0)));
     }
     let format = entry.extension().to_uppercase();
     let format = if format == "PSD" { "PSD (flattened picture)".to_owned() } else { format };

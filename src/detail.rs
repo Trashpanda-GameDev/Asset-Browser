@@ -1,14 +1,16 @@
 //! Loads the large preview of the one asset the inspector shows: the picture at up to
-//! `DETAIL_MAX` pixels, or the whole model for the 3D view. One thread, newest request wins: when
-//! the selection moves on while something loads, only the latest one is loaded next.
+//! `DETAIL_MAX` pixels (an animated GIF's frames instead), or the whole model for the 3D view.
+//! One thread, newest request wins: when the selection moves on while something loads, only the
+//! latest one is loaded next, and a long GIF gives up between frames.
 
 use std::panic::AssertUnwindSafe;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
 use crossbeam_channel::{Receiver, Sender};
 use fast_image_resize as fr;
 
+use crate::animated;
 use crate::asset::AssetKind;
 use crate::model::{self, LoadOptions, Model};
 use crate::sheets::{self, Sheet};
@@ -18,7 +20,8 @@ use crate::thumbs::{self, ThumbPixels};
 pub const DETAIL_MAX: u32 = 2048;
 
 pub enum Detail {
-    /// The picture, and its frames if it looks like a sprite sheet.
+    /// The picture and its frames: a sprite sheet's, or for an animated GIF all its frames laid
+    /// out side by side (`animated`).
     Image(ThumbPixels, Option<Sheet>),
     Model(Arc<Model>),
 }
@@ -95,19 +98,14 @@ fn run(slot: &(Mutex<Slot>, Condvar), results: &Sender<Loaded>, on_result: &(dyn
                 slot = wake.wait(slot).unwrap();
             }
         };
+        // A newer request (or closing) makes a long load give up between frames.
+        let superseded = || {
+            let slot = slot.0.lock().unwrap();
+            slot.next.is_some() || slot.shutdown
+        };
         // Decoders can panic on malformed files; that file just fails.
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| match request.kind {
-            AssetKind::Image => thumbs::make_image(&request.path, &mut resizer, DETAIL_MAX).map(|pixels| {
-                let view = sheets::Pixels {
-                    rgba: &pixels.rgba,
-                    w: pixels.w,
-                    h: pixels.h,
-                    src_w: pixels.src_w,
-                    src_h: pixels.src_h,
-                };
-                let sheet = sheets::detect(&request.path, &view);
-                Detail::Image(pixels, sheet)
-            }),
+            AssetKind::Image => load_picture(&request.path, &mut resizer, &superseded),
             AssetKind::Model => model::load(&request.path, &LoadOptions { max_texture: DETAIL_MAX })
                 .map(|model| Detail::Model(Arc::new(model))),
             AssetKind::Audio => Err("sounds have no large preview".to_owned()),
@@ -118,4 +116,23 @@ fn run(slot: &(Mutex<Slot>, Condvar), results: &Sender<Loaded>, on_result: &(dyn
         }
         on_result();
     }
+}
+
+/// The picture, and its frames: an animated GIF's own, or a sprite sheet's when it looks like one.
+fn load_picture(path: &Path, resizer: &mut fr::Resizer, superseded: &dyn Fn() -> bool) -> Result<Detail, String> {
+    if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("gif")) {
+        let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+        match animated::load_gif(&bytes, resizer, superseded) {
+            Ok(Some((pixels, sheet))) => return Ok(Detail::Image(pixels, Some(sheet))),
+            // A still GIF is a picture like any other; so is one whose frames can't all be read.
+            Ok(None) => {}
+            Err(err) if superseded() => return Err(err),
+            Err(_) => {}
+        }
+    }
+    let pixels = thumbs::make_image(path, resizer, DETAIL_MAX)?;
+    let view =
+        sheets::Pixels { rgba: &pixels.rgba, w: pixels.w, h: pixels.h, src_w: pixels.src_w, src_h: pixels.src_h };
+    let sheet = sheets::detect(path, &view);
+    Ok(Detail::Image(pixels, sheet))
 }

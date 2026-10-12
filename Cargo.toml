@@ -8,6 +8,8 @@ publish = false
 [dependencies]
 eframe = "0.36"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tga", "tiff", "webp", "ico", "qoi"] }
+# The version `image` uses: counts an animated GIF's frames without decoding them.
+gif = "0.14"
 fast_image_resize = "6"
 rayon = "1.12"
 crossbeam-channel = "0.5"

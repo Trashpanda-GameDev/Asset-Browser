@@ -36,7 +36,10 @@ The icon is `assets/icon.png` (1024 px); `assets/icon.ico` holds every size Wind
     (`run-1`, `run-2`…), with the file's frame timing. So does GameMaker's `name_strip8.png`. For other sheets the
     film-strip button shows how many frames were found between transparent gaps; adjust the grid (across, down,
     border, gap, an animation per row or column, or one) and it's remembered for that file. The overview below marks
-    the frame shown: click one to see it.
+    the frame shown: click one to see it. Frames without timing of their own play at 8 fps until you pick a speed.
+  - **Animated GIFs** play at once, at their own speed (**File timing**; turn it off to pick one), with every frame
+    in the overview. A big one is scaled down evenly so all its frames fit in 64 MB.
+  - **Animations zoom and pan like pictures:** scroll, drag, double-click for actual pixels, while they play.
   - **Sounds:** the waveform (click or drag on it to jump), play/pause, stop, loop and volume. Sounds play as soon as
     they're selected; turn off **Auto-play** in the toolbar to stop that.
   - **Models:** a 3D view. Drag to orbit, right-drag to pan, scroll to zoom; buttons for a turntable, the wireframe and
@@ -98,12 +101,13 @@ The icon is `assets/icon.png` (1024 px); `assets/icon.ico` holds every size Wind
 ## Measure it
 
 ```
-cargo run --release --bin bench -- <folder> [--thumbs N] [--sounds N] [--models N] [--only TEXT] [--offset K] [--threads N] [--sheet out.png]
+cargo run --release --bin bench -- <folder> [--thumbs N] [--sounds N] [--models N] [--gifs N] [--only TEXT] [--offset K] [--threads N] [--sheet out.png]
 ```
 
 Prints scan, index and search timings, then makes thumbnails, waveforms and model thumbnails for an even sample of the
 folder's images, sounds and models, twice each: cold (into a throwaway cache) and warm. Then it times how long a sound
-takes to start, from disk and from memory. `--only .psd` limits the sample to matching paths, `--offset` picks a different
+takes to start, from disk and from memory, and loads the frames of the GIFs as the preview pane does. `--only .psd`
+limits the sample to matching paths, `--offset` picks a different
 sample (the OS keeps recently read files in memory, so compare settings on fresh files), and `--sheet` writes the
 thumbnails to one image to check by eye.
 
@@ -122,6 +126,7 @@ Measured on F:\Resources (60,648 assets, spinning laptop disk, 20 threads), 12 O
 | Model thumbnails, all 557 models, cold / files already in memory | 138/s / 1,456/s, 0 failures |
 | Model thumbnails, from cache | 21,760/s |
 | Model thumbnail, one thread, files in memory: load / render | median 0.4 / 3.2 ms; worst 88 / 20 ms |
+| GIF frames for the preview pane, all 559 GIFs (544 animated) | median 0.1 ms, worst 0.8 s (104 frames of 1270 × 698), 0 failures |
 
 ## Where things are
 
@@ -134,19 +139,20 @@ Measured on F:\Resources (60,648 assets, spinning laptop disk, 20 threads), 12 O
 | `src/audio.rs` | Playback (cpal + symphonia, lock-free ring buffer), read-ahead, waveforms |
 | `src/psd_composite.rs` | Reads a PSD/PSB's flattened picture at reduced size |
 | `src/model/` | 3D models: the loaders, the CPU thumbnail renderer, and the lighting shared with the 3D view |
-| `src/detail.rs` | Loads the preview pane's large picture or whole model |
+| `src/detail.rs` | Loads the preview pane's large picture (or a GIF's frames) or whole model |
 | `src/groups.rs` | Favorites, collections and categories, and where their members are in the library |
 | `src/sheets.rs` | Sprite sheets: reading Aseprite / TexturePacker data, guessing grids, per-file choices |
+| `src/animated.rs` | Animated GIFs as sheets of their own frames, within a memory budget |
 | `src/app.rs` | The window: panels, keyboard, modes, settings |
 | `src/ui/mode.rs` | The modes, what each remembers, and the selection |
 | `src/ui/browse.rs` | The grid and the list (with each mode's columns) |
 | `src/ui/inspector.rs` | The preview pane, with a section per kind |
-| `src/ui/image_view.rs` | The pane's zoomable picture |
+| `src/ui/image_view.rs` | The pane's zoomable picture, which animations are drawn through too |
 | `src/ui/sound.rs` | The player: transport, waveforms, now playing |
 | `src/ui/viewport.rs` | The pane's 3D view (wgpu) |
 | `src/ui/folders.rs` | The folder tree and the list of the library's folders |
 | `src/ui/organize.rs` | Favorites, collections and categories in the sidebar, menus, chips, dragging |
-| `src/ui/sheet_view.rs` | The pane's sprite sheet player and grid |
+| `src/ui/sheet_view.rs` | The pane's player for sprite sheets and GIFs, and the grid |
 | `src/ui/previews.rs` | Thumbnails on the GPU, waveforms and model facts the window has |
 | `src/ui/theme.rs`, `widgets.rs`, `format.rs` | Colours, fonts and icons; the hand-drawn controls; numbers and dates |
 | `src/platform.rs` | Open / show in file manager, the Recycle Bin and whether a drive has one: the only per-OS code |

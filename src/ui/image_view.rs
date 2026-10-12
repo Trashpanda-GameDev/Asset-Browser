@@ -1,7 +1,10 @@
 //! The inspector's picture view: fit to the pane, scroll to zoom at the cursor, drag to pan,
-//! double-click to switch between fit and actual pixels.
+//! double-click to switch between fit and actual pixels. The sprite sheet player shows its frames
+//! through it too, so an animation zooms the same way.
 
-use eframe::egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, TextureId, Ui, Vec2, pos2, vec2};
+use eframe::egui::{
+    Align2, Color32, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, TextureId, Ui, Vec2, pos2, vec2,
+};
 use egui_phosphor::regular as icon;
 
 use super::{theme, widgets};
@@ -55,7 +58,9 @@ pub struct Picture {
 }
 
 pub struct ImageView {
-    key: Option<i64>,
+    /// What's shown: the asset, and the size of what's drawn of it (the whole picture, or an
+    /// animation's frames). A change of either starts over at fit.
+    key: Option<(i64, [u32; 2])>,
     /// Screen points per picture pixel; `None` fits the picture in the view.
     zoom: Option<f32>,
     /// The picture point (0..1 on each axis) at the centre of the view.
@@ -71,8 +76,27 @@ impl Default for ImageView {
 
 impl ImageView {
     pub fn show(&mut self, ui: &mut Ui, rect: Rect, key: i64, picture: &Picture, checker: TextureId) {
-        if self.key != Some(key) {
-            self.key = Some(key);
+        let texture = picture.texture;
+        self.show_with(ui, rect, key, picture.size, picture.pixel_art, checker, |painter, area| {
+            painter.image(texture, area, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+        });
+    }
+
+    /// Shows `size` pixels of something, zoomed and panned like a picture: `draw` paints it into
+    /// the area it covers on screen (clipped to `rect`).
+    #[expect(clippy::too_many_arguments)]
+    pub fn show_with(
+        &mut self,
+        ui: &mut Ui,
+        rect: Rect,
+        key: i64,
+        size: [u32; 2],
+        pixel_art: bool,
+        checker: TextureId,
+        draw: impl FnOnce(&Painter, Rect),
+    ) {
+        if self.key != Some((key, size)) {
+            self.key = Some((key, size));
             self.zoom = None;
             self.center = Vec2::splat(0.5);
         }
@@ -84,9 +108,9 @@ impl ImageView {
         };
         painter.rect_filled(rect, theme::CARD_RADIUS, background);
 
-        let [w, h] = picture.size.map(|side| side.max(1) as f32);
+        let [w, h] = size.map(|side| side.max(1) as f32);
         let pixels_per_point = ui.ctx().pixels_per_point();
-        let fit = self.fit_scale(rect, w, h, picture.pixel_art, pixels_per_point);
+        let fit = self.fit_scale(rect, w, h, pixel_art, pixels_per_point);
         let mut scale = self.zoom.unwrap_or(fit);
 
         // Scroll to zoom around the pointer; the picture point under it stays put.
@@ -122,13 +146,13 @@ impl ImageView {
             self.center = Vec2::splat(0.5);
         }
 
-        let size = vec2(w * scale, h * scale);
-        let mut min = rect.center() - self.center * size;
-        if self.zoom.is_none() || picture.pixel_art {
+        let shown_size = vec2(w * scale, h * scale);
+        let mut min = rect.center() - self.center * shown_size;
+        if self.zoom.is_none() || pixel_art {
             // Whole physical pixels: no shimmering seams in pixel art.
             min = ((min.to_vec2() * pixels_per_point).round() / pixels_per_point).to_pos2();
         }
-        let image_rect = Rect::from_min_size(min, size);
+        let image_rect = Rect::from_min_size(min, shown_size);
         if self.backdrop == Backdrop::Checker {
             let shown = image_rect.intersect(rect);
             let uv = Rect::from_min_max(
@@ -137,7 +161,7 @@ impl ImageView {
             );
             painter.image(checker, shown, uv, Color32::WHITE);
         }
-        painter.image(picture.texture, image_rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+        draw(&painter, image_rect);
 
         // Zoom readout and the fit / 1:1 switch.
         let percent = scale * pixels_per_point * 100.0;

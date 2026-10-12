@@ -398,7 +398,7 @@ pub fn make_image(path: &Path, resizer: &mut fr::Resizer, max: u32) -> Result<Th
 }
 
 /// Fits `w` × `h` pixels (already reduced from `src_w` × `src_h`, or not) into `max`.
-fn shrink(
+pub(crate) fn shrink(
     w: u32,
     h: u32,
     rgba: Vec<u8>,

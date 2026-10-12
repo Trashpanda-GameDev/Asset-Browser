@@ -1,7 +1,7 @@
 //! Measures the parts that decide how fast the browser feels, on a real folder.
 //!
-//!     cargo run --release --bin bench -- <folder> [--thumbs N] [--sounds N] [--models N] [--threads N]
-//!                                                 [--offset K] [--only TEXT] [--sheet OUT.png]
+//!     cargo run --release --bin bench -- <folder> [--thumbs N] [--sounds N] [--models N] [--gifs N]
+//!                                                 [--threads N] [--offset K] [--only TEXT] [--sheet OUT.png]
 //!
 //! Uses a throwaway cache database, so each first preview pass is a true cold run and the second
 //! shows what reopening the folder costs. The OS keeps recently read files in memory, so compare
@@ -24,6 +24,7 @@ struct Options {
     thumbs: usize,
     sounds: usize,
     models: usize,
+    gifs: usize,
     threads: usize,
     offset: usize,
     only: String,
@@ -37,6 +38,7 @@ fn main() {
         thumbs: 2000,
         sounds: 300,
         models: 600,
+        gifs: 600,
         threads: asset_browser::thumbs::default_threads(),
         offset: 0,
         only: String::new(),
@@ -50,6 +52,7 @@ fn main() {
             "--thumbs" => options.thumbs = number(args.next(), "--thumbs"),
             "--sounds" => options.sounds = number(args.next(), "--sounds"),
             "--models" => options.models = number(args.next(), "--models"),
+            "--gifs" => options.gifs = number(args.next(), "--gifs"),
             "--threads" => options.threads = number(args.next(), "--threads"),
             "--offset" => options.offset = number(args.next(), "--offset"),
             "--only" => options.only = args.next().expect("--only needs text to match in paths").to_lowercase(),
@@ -59,7 +62,7 @@ fn main() {
     }
     let Some(root) = root else {
         eprintln!(
-            "usage: bench <folder> [--thumbs N] [--sounds N] [--models N] [--threads N] [--offset K] [--only TEXT] \
+            "usage: bench <folder> [--thumbs N] [--sounds N] [--models N] [--gifs N] [--threads N] [--offset K] [--only TEXT] \
              [--sheet OUT.png]"
         );
         std::process::exit(2);
@@ -114,6 +117,7 @@ fn main() {
     let models = spread(&library, AssetKind::Model, &options, options.models, 0);
     previews("Models", &library, &models, &db_path, &options);
     model_stages(&library, &models);
+    gif_frames(&library, &options);
 
     let size: u64 = ["", "-wal", "-shm"]
         .iter()
@@ -124,6 +128,61 @@ fn main() {
     println!("Cache size:    {:.1} MB for {} previews", size as f64 / 1e6, grouped(count));
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", db_path.display()));
+    }
+}
+
+/// Loads animated GIFs' frames as the preview pane does (`animated::load_gif`): how long it takes
+/// once the file is read, and the biggest sheet of frames it makes.
+fn gif_frames(library: &Library, options: &Options) {
+    let gifs: Vec<&Entry> = library
+        .entries
+        .iter()
+        .filter(|entry| entry.extension().eq_ignore_ascii_case("gif") && entry.lower.contains(&options.only))
+        .collect();
+    let step = (gifs.len() as f64 / options.gifs.max(1) as f64).max(1.0);
+    let sample: Vec<&Entry> = (0..options.gifs.min(gifs.len()))
+        .map(|i| gifs[(i as f64 * step) as usize + options.offset % step as usize])
+        .collect();
+    if sample.is_empty() {
+        return;
+    }
+    let mut resizer = fast_image_resize::Resizer::new();
+    let (mut still, mut failed, mut times) = (0, Vec::new(), Vec::new());
+    let mut biggest = (0u64, String::new());
+    let start = Instant::now();
+    for entry in &sample {
+        let Ok(bytes) = std::fs::read(library.path_of(entry)) else {
+            failed.push(entry.rel.clone());
+            continue;
+        };
+        let loading = Instant::now();
+        match asset_browser::animated::load_gif(&bytes, &mut resizer, &|| false) {
+            Ok(Some((pixels, sheet))) => {
+                times.push((loading.elapsed(), entry.rel.clone()));
+                let size = u64::from(pixels.w) * u64::from(pixels.h);
+                if size > biggest.0 {
+                    biggest = (size, format!("{} x {}, {} frames", pixels.w, pixels.h, sheet.frames.len()));
+                }
+            }
+            Ok(None) => still += 1,
+            Err(err) => failed.push(format!("{}: {err}", entry.rel)),
+        }
+    }
+    times.sort();
+    let median = times.get(times.len() / 2).map_or(0.0, |(time, _)| ms(*time));
+    let (worst, worst_name) = times.last().map_or((0.0, ""), |(time, name)| (ms(*time), name.as_str()));
+    println!(
+        "GIF frames:    {} animated, {} still, {} failed in {:.1} s; median {median:.1} ms, worst {worst:.0} ms ({}); \
+         biggest sheet {}",
+        grouped(times.len()),
+        grouped(still),
+        failed.len(),
+        start.elapsed().as_secs_f64(),
+        worst_name.rsplit('/').next().unwrap_or(worst_name),
+        biggest.1,
+    );
+    for failure in failed.iter().take(5) {
+        println!("    failed: {failure}");
     }
 }
 

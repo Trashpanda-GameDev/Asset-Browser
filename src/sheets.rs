@@ -133,6 +133,13 @@ pub enum Source {
     /// From the data file beside the picture (its file name).
     Data(String),
     Grid(Grid, Guess),
+    /// An animated picture's own frames (a GIF, see `animated`): its canvas size, and how many
+    /// frames it has, which can be more than were kept.
+    Animated {
+        width: u32,
+        height: u32,
+        total: usize,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -146,13 +153,13 @@ impl Sheet {
     /// Whether this is surely meant as an animation, so the preview pane can play it at once:
     /// it came with its data, or its name says how many frames it has.
     pub fn is_certain(&self) -> bool {
-        matches!(self.source, Source::Data(_) | Source::Grid(_, Guess::FileName))
+        matches!(self.source, Source::Data(_) | Source::Grid(_, Guess::FileName) | Source::Animated { .. })
     }
 
     pub fn grid(&self) -> Option<Grid> {
         match self.source {
             Source::Grid(grid, _) => Some(grid),
-            Source::Data(_) => None,
+            Source::Data(_) | Source::Animated { .. } => None,
         }
     }
 }
@@ -440,7 +447,8 @@ fn animations_by_name(names: &[String]) -> Vec<Animation> {
 pub struct Saved {
     pub animate: bool,
     pub grid: Option<Grid>,
-    pub fps: f32,
+    /// The speed the user picked; `None` plays at the default speed, whatever that is now.
+    pub fps: Option<f32>,
 }
 
 /// Per-picture sheet choices, in the user data file beside the favourites and collections.
@@ -468,6 +476,16 @@ impl SheetStore {
                      split INTEGER,
                      fps REAL NOT NULL) WITHOUT ROWID;",
             )?;
+            // Version 1 of the user data file stores the default speed as 0, so changing the
+            // default reaches every picture. Before, the default (12 fps) was saved as a number:
+            // those become the default.
+            let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+            if version < 1 {
+                let tx = conn.unchecked_transaction()?;
+                tx.execute("UPDATE sheets SET fps = 0 WHERE fps = 12", [])?;
+                tx.pragma_update(None, "user_version", 1)?;
+                tx.commit()?;
+            }
             Ok(conn)
         })();
         match opened {
@@ -496,7 +514,8 @@ impl SheetStore {
                     }),
                     None => None,
                 };
-                Ok(Saved { animate: row.get::<_, i64>(0)? != 0, grid, fps: row.get(6)? })
+                let fps: f64 = row.get(6)?;
+                Ok(Saved { animate: row.get::<_, i64>(0)? != 0, grid, fps: (fps > 0.0).then_some(fps as f32) })
             },
         )
         .optional()
@@ -519,7 +538,7 @@ impl SheetStore {
                 grid.map(|g| g.margin),
                 grid.map(|g| g.spacing),
                 grid.map(|g| g.split.to_db()),
-                saved.fps,
+                saved.fps.unwrap_or(0.0),
             ],
         );
         if let Err(err) = result {
@@ -639,14 +658,46 @@ mod tests {
         let saved = Saved {
             animate: true,
             grid: Some(Grid { columns: 8, rows: 2, margin: 1, spacing: 2, split: Split::Columns }),
-            fps: 10.0,
+            fps: Some(10.0),
         };
         store.set("f:/a/hero.png", &saved);
         assert_eq!(store.get("f:/a/hero.png"), Some(saved));
+        let default_speed = Saved { animate: false, grid: None, fps: None };
+        store.set("f:/a/idle.png", &default_speed);
+        assert_eq!(store.get("f:/a/idle.png"), Some(default_speed));
         assert_eq!(store.get("f:/a/other.png"), None);
         drop(store);
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
         }
+    }
+
+    #[test]
+    fn the_old_default_speed_becomes_the_default() {
+        let path = std::env::temp_dir().join(format!("asset_browser_sheets_old_{}.sqlite", std::process::id()));
+        let clean = || {
+            for suffix in ["", "-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+            }
+        };
+        clean();
+        {
+            // A file from before: the default speed (12) saved as a number.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sheets(key TEXT PRIMARY KEY, animate INTEGER NOT NULL, columns INTEGER,
+                     rows INTEGER, margin INTEGER, spacing INTEGER, split INTEGER, fps REAL NOT NULL) WITHOUT ROWID;
+                 INSERT INTO sheets(key, animate, fps) VALUES('a', 1, 12), ('b', 1, 6);",
+            )
+            .unwrap();
+        }
+        let store = SheetStore::open(&path);
+        assert_eq!(store.get("a").unwrap().fps, None, "12 was the default");
+        assert_eq!(store.get("b").unwrap().fps, Some(6.0), "a speed picked by hand stays");
+        // Picked by hand now, 12 stays 12: the change is made once.
+        store.set("a", &Saved { animate: true, grid: None, fps: Some(12.0) });
+        drop(store);
+        assert_eq!(SheetStore::open(&path).get("a").unwrap().fps, Some(12.0));
+        clean();
     }
 }

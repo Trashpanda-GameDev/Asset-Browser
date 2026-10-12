@@ -2,6 +2,7 @@
 //!
 //! The app (`src/main.rs`) and the benchmark (`src/bin/bench.rs`) share these modules.
 
+pub mod animated;
 pub mod app;
 pub mod asset;
 pub mod audio;
