@@ -24,13 +24,35 @@ pub const ACCENT: Color32 = Color32::from_rgb(108, 140, 255);
 /// Selected rows and tiles: the accent, see-through.
 pub const ACCENT_SOFT: Color32 = Color32::from_rgba_unmultiplied_const(108, 140, 255, 46);
 pub const ERROR: Color32 = Color32::from_rgb(244, 102, 102);
+/// The favourite star.
+pub const FAVORITE: Color32 = Color32::from_rgb(250, 199, 72);
+/// What categories are coloured with, in the order new ones take them (`groups::CATEGORY_COLORS`).
+pub const CATEGORY_COLORS: [Color32; 8] = [
+    Color32::from_rgb(239, 99, 99),
+    Color32::from_rgb(242, 153, 74),
+    Color32::from_rgb(236, 201, 75),
+    Color32::from_rgb(104, 196, 104),
+    Color32::from_rgb(64, 190, 180),
+    Color32::from_rgb(92, 152, 240),
+    Color32::from_rgb(167, 123, 240),
+    Color32::from_rgb(236, 112, 178),
+];
 
 pub const RADIUS: u8 = 6;
 pub const CARD_RADIUS: u8 = 8;
 
+pub fn category_color(index: u8) -> Color32 {
+    CATEGORY_COLORS[index as usize % CATEGORY_COLORS.len()]
+}
+
 /// The family used for titles.
 pub fn semibold() -> FontFamily {
     FontFamily::Name("semibold".into())
+}
+
+/// Phosphor's filled icons (a filled star for favourites); the outlined ones are in every family.
+pub fn filled_icons() -> FontFamily {
+    FontFamily::Name("phosphor-fill".into())
 }
 
 pub fn apply(ctx: &egui::Context) {
@@ -141,6 +163,7 @@ fn fonts() -> FontDefinitions {
     }
     // Icons go right after the text font, so they're found in ordinary labels.
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    egui_phosphor::add_font_bytes_as_family(&mut fonts, "phosphor-fill", egui_phosphor::Variant::Fill.font_bytes());
     semibold_family.insert(semibold_family.len().min(1), "phosphor".into());
     fonts.families.insert(semibold(), semibold_family);
     fonts

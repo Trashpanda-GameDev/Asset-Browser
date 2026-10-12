@@ -11,13 +11,15 @@ use fast_image_resize as fr;
 
 use crate::asset::AssetKind;
 use crate::model::{self, LoadOptions, Model};
+use crate::sheets::{self, Sheet};
 use crate::thumbs::{self, ThumbPixels};
 
 /// Longest side of an inspector picture, and of a model's textures in the 3D view.
 pub const DETAIL_MAX: u32 = 2048;
 
 pub enum Detail {
-    Image(ThumbPixels),
+    /// The picture, and its frames if it looks like a sprite sheet.
+    Image(ThumbPixels, Option<Sheet>),
     Model(Arc<Model>),
 }
 
@@ -95,7 +97,17 @@ fn run(slot: &(Mutex<Slot>, Condvar), results: &Sender<Loaded>, on_result: &(dyn
         };
         // Decoders can panic on malformed files; that file just fails.
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| match request.kind {
-            AssetKind::Image => thumbs::make_image(&request.path, &mut resizer, DETAIL_MAX).map(Detail::Image),
+            AssetKind::Image => thumbs::make_image(&request.path, &mut resizer, DETAIL_MAX).map(|pixels| {
+                let view = sheets::Pixels {
+                    rgba: &pixels.rgba,
+                    w: pixels.w,
+                    h: pixels.h,
+                    src_w: pixels.src_w,
+                    src_h: pixels.src_h,
+                };
+                let sheet = sheets::detect(&request.path, &view);
+                Detail::Image(pixels, sheet)
+            }),
             AssetKind::Model => model::load(&request.path, &LoadOptions { max_texture: DETAIL_MAX })
                 .map(|model| Detail::Model(Arc::new(model))),
             AssetKind::Audio => Err("sounds have no large preview".to_owned()),

@@ -1,14 +1,14 @@
 # AssetBrowser
 
-A fast, native browser for folders of game assets: point it at a folder and browse its images, sounds and models
-with previews. Written in Rust with [egui](https://github.com/emilk/egui) on wgpu. Windows first; macOS and Linux
+A fast, native browser for folders of game assets: add your asset folders and browse their images, sounds and models
+together, with previews. Written in Rust with [egui](https://github.com/emilk/egui) on wgpu. Windows first; macOS and Linux
 are kept buildable.
 
 ## Run
 
 ```
-cargo run --release                  # opens the last folder you used
-cargo run --release -- F:\Resources  # opens this folder
+cargo run --release                  # opens the library: the folders you added
+cargo run --release -- F:\Resources  # adds this folder to the library (or shows it, if it's in already)
 ```
 
 ## Use it
@@ -22,25 +22,46 @@ cargo run --release -- F:\Resources  # opens this folder
   folder and Copy path. The button at the top right hides it.
   - **Images:** scroll to zoom at the pointer, drag to pan, double-click for actual pixels. Checkerboard, dark or light
     behind transparency, for the tiles too.
+  - **Sprite sheets** play as animations. A sheet with Aseprite or TexturePacker JSON beside it (`hero.json` for
+    `hero.png`) plays at once, with each animation to pick: Aseprite's tags, or an atlas's frames grouped by name
+    (`run-1`, `run-2`…), with the file's frame timing. So does GameMaker's `name_strip8.png`. For other sheets the
+    film-strip button shows how many frames were found between transparent gaps; adjust the grid (across, down,
+    border, gap, an animation per row or column, or one) and it's remembered for that file. The overview below marks
+    the frame shown: click one to see it.
   - **Sounds:** the waveform (click or drag on it to jump), play/pause, stop, loop and volume. Sounds play as soon as
     they're selected; turn off **Auto-play** in the toolbar to stop that.
   - **Models:** a 3D view. Drag to orbit, right-drag to pan, scroll to zoom; buttons for a turntable, the wireframe and
     resetting the view. FBX, OBJ (with its .mtl), glTF/GLB, STL, PLY, 3DS and Collada are read with their materials and
     base-colour textures; Blender files show the preview picture Blender saved in them. The pane lists triangles,
     vertices, meshes, materials, textures (and any that couldn't be found), size in metres and animations.
+- **Folders:** add as many as you like with **+** beside Folders, from the folder list at the top left, or by dropping
+  a folder on the window. They're browsed together: **All folders** shows everything, and each folder has its own
+  tree below it. Right-click one to open it, copy its path or remove it from the library; its files are untouched,
+  and its favorites, collections and categories come back if it's added again. A folder that can't be read (an
+  unplugged drive, say) keeps what was found there last time, marked with a warning.
+- **Favorites, collections and categories**, in the sidebar, gather assets from any folder without moving a file.
+  - **Favorites:** the star on a tile or row, the pane's Favorite button, or **F** for the selection.
+  - **Collections** are lists for a purpose ("Forest level props"), browsed like a folder.
+  - **Categories** are coloured labels ("Footsteps", "UI"): dots on the tiles, chips in the list and the pane, and the
+    search box finds assets by them. **Uncategorized** holds everything in no category: put assets in categories from
+    there and they leave it, the next one taking the selection, so you can work through it.
+  - Make one with **+**, or by dropping assets on "New collection" or "New category"; add to one by dragging assets
+    onto it (with the rest of the selection), from the right-click menu, or with the pane's chips. Right-click one to
+    rename, recolour or delete it (the files stay where they are). Files moved or deleted since are flagged, with a
+    click to take them out.
 - **Selecting:** click; **Ctrl+click** adds or removes; **Shift+click** selects a range; **Ctrl+A** selects everything
   shown. With several selected, the pane shows how many, their size and their thumbnails, and Copy path copies them all.
 - **Keys:** arrows move the selection (Shift extends it), Page Up/Down and Home/End jump, **Enter** opens the file in
   its default app (so does double-click), **Space** plays or pauses, **Esc** stops the sound or else clears the
-  selection, **Ctrl+F** searches, **Ctrl+C** copies the selected paths. Right-click for Open, Show in folder and Copy
-  path.
+  selection, **Ctrl+F** searches, **Ctrl+C** copies the selected paths, **F** stars them. Right-click for Open, Show
+  in folder, Copy path, Favorites, collections and categories.
 - The left panel filters by folder (including everything below it). The search box matches every word against the
-  file's path, so folder names work too.
+  file's path in its folder and its categories, so folder names work too.
 
 ## How it stays fast
 
-- **The index is cached.** Reopening a folder shows the last scan at once (22 ms for 60k files) and rescans in the
-  background. A scan walks the tree on every core (51 ms for 60k files in 5k folders once the OS has the folders
+- **The index is cached.** The library opens with the last scan of each folder at once (22 ms for 60k files) and
+  rescans them in the background. A scan walks the tree on every core (51 ms for 60k files in 5k folders once the OS has the folders
   cached).
 - **Thumbnails are made once.** They're stored in one SQLite file, not thousands of small files, keyed by path, size
   and modification time: an edited file gets a new thumbnail. Served from the cache, 50,000 thumbnails/s.
@@ -91,13 +112,15 @@ Measured on F:\Resources (60,648 assets, spinning laptop disk, 20 threads), 12 O
 | File | What it does |
 |---|---|
 | `src/scan.rs` | Parallel folder walk; which files count as assets |
-| `src/library.rs` | Sorted entries, folder tree, filtering |
+| `src/library.rs` | The library's folders: sorted entries, one folder tree over all of them, filtering |
 | `src/db.rs` | SQLite: folder index, thumbnail, waveform and model-facts caches, settings |
 | `src/thumbs.rs` | Preview worker pool and cache writer; image decoding and resizing |
 | `src/audio.rs` | Playback (cpal + symphonia, lock-free ring buffer), read-ahead, waveforms |
 | `src/psd_composite.rs` | Reads a PSD/PSB's flattened picture at reduced size |
 | `src/model/` | 3D models: the loaders, the CPU thumbnail renderer, and the lighting shared with the 3D view |
 | `src/detail.rs` | Loads the preview pane's large picture or whole model |
+| `src/groups.rs` | Favorites, collections and categories, and where their members are in the library |
+| `src/sheets.rs` | Sprite sheets: reading Aseprite / TexturePacker data, guessing grids, per-file choices |
 | `src/app.rs` | The window: panels, keyboard, modes, settings |
 | `src/ui/mode.rs` | The modes, what each remembers, and the selection |
 | `src/ui/browse.rs` | The grid and the list (with each mode's columns) |
@@ -105,7 +128,9 @@ Measured on F:\Resources (60,648 assets, spinning laptop disk, 20 threads), 12 O
 | `src/ui/image_view.rs` | The pane's zoomable picture |
 | `src/ui/sound.rs` | The player: transport, waveforms, now playing |
 | `src/ui/viewport.rs` | The pane's 3D view (wgpu) |
-| `src/ui/folders.rs` | The folder tree |
+| `src/ui/folders.rs` | The folder tree and the list of the library's folders |
+| `src/ui/organize.rs` | Favorites, collections and categories in the sidebar, menus, chips, dragging |
+| `src/ui/sheet_view.rs` | The pane's sprite sheet player and grid |
 | `src/ui/previews.rs` | Thumbnails on the GPU, waveforms and model facts the window has |
 | `src/ui/theme.rs`, `widgets.rs`, `format.rs` | Colours, fonts and icons; the hand-drawn controls; numbers and dates |
 | `src/platform.rs` | Open / show in file manager: the only per-OS code |
@@ -113,7 +138,9 @@ Measured on F:\Resources (60,648 assets, spinning laptop disk, 20 threads), 12 O
 | `src/bin/bench.rs` | The benchmark |
 
 The cache and log live in the OS's per-user cache folder (`%LOCALAPPDATA%\AssetBrowser\cache` on Windows). Settings
-(mode, layouts, volume and so on) are saved in the same file.
+(mode, layouts, volume and so on) are saved in the same file. What you make yourself is kept apart, so clearing the
+cache can't lose it: the library's folders, favorites, collections, categories and sprite sheet choices are in
+`%APPDATA%\AssetBrowser\data\user.sqlite`.
 
 ## Adding to a mode
 

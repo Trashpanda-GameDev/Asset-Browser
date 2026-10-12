@@ -2,27 +2,31 @@
 //! a list, the inspector on the right, and a status bar.
 //!
 //! Nothing here touches the disk or decodes a file on the UI thread, apart from loading the cached
-//! index when a folder is opened. Scanning, previews, large previews and sound arrive from
-//! background threads, and the views only draw (and only ask previews for) the rows on screen.
+//! index of the library's folders at the start and when one is added. Scanning, previews, large
+//! previews and sound arrive from background threads, and the views only draw (and only ask
+//! previews for) the rows on screen.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, Sender};
 use eframe::egui::{self, Align, Frame, Key, Layout, Margin, Modifiers, RichText, Sense, vec2};
 use eframe::egui_wgpu::RenderState;
 use egui_phosphor::regular as icon;
 use rusqlite::Connection;
 
 use crate::asset::AssetKind;
-use crate::library::{Library, SortBy, root_string};
+use crate::groups::{self, FAVORITES, GroupKind, Groups, Membership, UNCATEGORIZED};
+use crate::library::{self, Library, SortBy, folder_name, path_key, root_string};
+use crate::scan::ScannedFile;
 use crate::thumbs::ThumbService;
 use crate::ui::browse::{self, Browse, BrowseOutput, MenuAction};
-use crate::ui::folders::{FolderTree, root_name};
+use crate::ui::folders::{FolderAction, FolderTree};
 use crate::ui::image_view::Backdrop;
 use crate::ui::inspector::{Inspector, InspectorArgs};
 use crate::ui::mode::{Layout as ViewLayout, Mode, ModeView};
+use crate::ui::organize::{self, GroupCommand, GroupEdit, Sidebar, Targets, plural};
 use crate::ui::previews::Previews;
 use crate::ui::sound::{self, Sound};
 use crate::ui::{theme, widgets};
@@ -30,13 +34,30 @@ use crate::{db, diag, platform, scan};
 
 pub use crate::ui::format::{format_size, format_time, grouped};
 
+/// The one folder that was open, from before the library could have several: it becomes the
+/// library's first folder.
 const SETTING_LAST_ROOT: &str = "last_root";
 /// More files than this opened at once is surely a slip: only the focused one opens.
 const OPEN_MANY_MAX: usize = 12;
+/// How long a confirmation ("Added 3 to Forest props") stays up.
+const TOAST_TIME: Duration = Duration::from_millis(2600);
 
+/// A scan of some of the library's folders, and the library built with what it found.
 struct ScanDone {
-    library: Library,
+    /// The folders the library was built for.
+    roots: Vec<PathBuf>,
+    /// The library built with what was found and the files the other folders had when the scan
+    /// started. When a folder couldn't be read, its files stay as they were, which only the app
+    /// knows: then it's just what was found, for the app to build the library with.
+    built: Result<Library, Vec<(PathBuf, Vec<ScannedFile>)>>,
+    /// The folders scanned, and those that couldn't be read (unplugged, moved or renamed).
+    scanned: Vec<PathBuf>,
+    unreadable: Vec<PathBuf>,
+    /// `BrowserApp::library_version` when the scan started. If the library has changed since,
+    /// `built` is out of date for the folders that weren't scanned.
+    version: u64,
     elapsed: Duration,
+    assets: usize,
     dirs_visited: usize,
     skipped: usize,
 }
@@ -52,11 +73,21 @@ pub struct BrowserApp {
     ctx: egui::Context,
     db_path: PathBuf,
     conn: Option<Connection>,
+    /// The user data file, for the library's folders.
+    user_conn: Option<Connection>,
     thumbs: ThumbService,
     render_state: Option<RenderState>,
+    /// The folders the library is made of, in the order they were added.
+    roots: Vec<PathBuf>,
+    /// `None` when there are no folders.
     library: Option<Library>,
+    /// Counts the libraries put in, so a scan can tell whether the one it started from is current.
+    library_version: u64,
     index_note: Option<String>,
-    scan_rx: Option<Receiver<ScanDone>>,
+    scan_tx: Sender<ScanDone>,
+    scan_rx: Receiver<ScanDone>,
+    /// Scans running.
+    scans: usize,
     scan_started: Instant,
     last_scan: Option<LastScan>,
 
@@ -75,6 +106,21 @@ pub struct BrowserApp {
     inspector: Inspector,
     sound: Sound,
 
+    /// Favorites, collections and categories, and where their members are in the library.
+    groups: Groups,
+    membership: Membership,
+    membership_dirty: bool,
+    /// Browsing one of them instead of the folder.
+    group: Option<i64>,
+    /// A group being named in the sidebar.
+    edit: Option<GroupEdit>,
+    /// A group waiting for "Delete?" to be confirmed.
+    confirm_delete: Option<i64>,
+    toast: Option<(String, Instant)>,
+    /// The membership changed by the user's hand: an asset that leaves the group being browsed
+    /// hands the focus on to the next one.
+    follow_focus: bool,
+
     /// Assets per row and rows per screen in the current view, for the keyboard.
     columns: usize,
     page_rows: usize,
@@ -92,18 +138,28 @@ impl BrowserApp {
             .ok();
         let ctx = cc.egui_ctx.clone();
         let thumbs = ThumbService::start(db_path.clone(), std::sync::Arc::new(move || ctx.request_repaint()));
-        let root = start_root
-            .or_else(|| conn.as_ref().and_then(|conn| db::get_setting(conn, SETTING_LAST_ROOT)).map(PathBuf::from));
+        let user_path = db::user_data_path();
+        let user_conn = db::open_user(&user_path)
+            .map_err(|err| {
+                diag::report(&format!("The library's folders can't be saved ({})", user_path.display()), err)
+            })
+            .ok();
+        let (scan_tx, scan_rx) = crossbeam_channel::unbounded();
 
         let mut app = Self {
             ctx: cc.egui_ctx.clone(),
             db_path,
             conn,
+            user_conn,
             thumbs,
             render_state: cc.wgpu_render_state.clone(),
+            roots: Vec::new(),
             library: None,
+            library_version: 0,
             index_note: None,
-            scan_rx: None,
+            scan_tx,
+            scan_rx,
+            scans: 0,
             scan_started: Instant::now(),
             last_scan: None,
             mode: Mode::All,
@@ -116,18 +172,350 @@ impl BrowserApp {
             show_inspector: true,
             folders: FolderTree::default(),
             previews: Previews::new(&cc.egui_ctx),
-            inspector: Inspector::new(&cc.egui_ctx),
+            inspector: Inspector::new(&cc.egui_ctx, &db::user_data_path()),
             sound: Sound::start(&cc.egui_ctx),
+            groups: Groups::open(&db::user_data_path()),
+            membership: Membership::default(),
+            membership_dirty: true,
+            group: None,
+            edit: None,
+            confirm_delete: None,
+            toast: None,
+            follow_focus: false,
             columns: 1,
             page_rows: 1,
             scroll: (0.0, 0.0),
             scroll_to_focus: false,
         };
         app.load_settings();
-        if let Some(root) = root {
-            app.open_root(&root, &cc.egui_ctx);
-        }
+        app.open_library(start_root);
         app
+    }
+
+    /// Shows the library's folders from the cached index at once, then rescans them all in the
+    /// background. `start` (from the command line) is added to them, or shown if it's in already.
+    fn open_library(&mut self, start: Option<PathBuf>) {
+        self.roots = self.saved_roots();
+        let mut show = None;
+        if let Some(path) = start {
+            let path = std::path::absolute(&path).unwrap_or(path);
+            if path.is_dir() {
+                if library::add_root(&mut self.roots, path.clone()).is_ok() {
+                    self.save_roots();
+                }
+                show = Some(path_key(&path));
+            } else {
+                self.notify(format!("{} isn't a folder", platform::native(&path)));
+            }
+        }
+        let start = Instant::now();
+        let files: Vec<(PathBuf, Vec<ScannedFile>)> =
+            self.roots.iter().map(|root| (root.clone(), self.cached_index(root))).collect();
+        if !files.is_empty() {
+            self.set_library(Some(Library::build(files)));
+            self.index_note = Some(format!("Index from cache in {} ms", start.elapsed().as_millis()));
+        }
+        if let Some(dir) = show.and_then(|key| self.library.as_ref()?.find_dir(&key)) {
+            self.select_dir(dir);
+        }
+        self.update_title();
+        self.scan(self.roots.clone());
+    }
+
+    /// The library's folders as saved; the first time, the one folder that was open before the
+    /// library could have several.
+    fn saved_roots(&self) -> Vec<PathBuf> {
+        let Some(user) = &self.user_conn else {
+            return self.legacy_root().into_iter().collect();
+        };
+        let roots = db::load_roots(user).unwrap_or_else(|err| {
+            diag::report("Loading the library's folders", err);
+            Vec::new()
+        });
+        if !roots.is_empty() {
+            return roots;
+        }
+        let Some(root) = self.legacy_root() else { return roots };
+        let roots = vec![root];
+        match db::save_roots(user, &roots) {
+            // Saved in its new place, it mustn't come back after being taken out.
+            Ok(()) => {
+                if let Some(conn) = &self.conn {
+                    let _ = db::remove_setting(conn, SETTING_LAST_ROOT);
+                }
+            }
+            Err(err) => diag::report("Saving the library's folders", err),
+        }
+        roots
+    }
+
+    fn legacy_root(&self) -> Option<PathBuf> {
+        self.conn.as_ref().and_then(|conn| db::get_setting(conn, SETTING_LAST_ROOT)).map(PathBuf::from)
+    }
+
+    fn save_roots(&self) {
+        if let Some(user) = &self.user_conn
+            && let Err(err) = db::save_roots(user, &self.roots)
+        {
+            diag::report("Saving the library's folders", err);
+        }
+    }
+
+    /// The files the last scan of `root` found, or none if it was never scanned.
+    fn cached_index(&self, root: &Path) -> Vec<ScannedFile> {
+        let Some(conn) = &self.conn else { return Vec::new() };
+        match db::load_index(conn, &root_string(root)) {
+            Ok(files) => files.unwrap_or_default(),
+            Err(err) => {
+                diag::report("Loading the cached index", err);
+                Vec::new()
+            }
+        }
+    }
+
+    fn update_title(&self) {
+        let title = match self.roots.as_slice() {
+            [] => "Asset Browser".to_owned(),
+            [root] => format!("Asset Browser - {}", platform::native(root)),
+            roots => {
+                let names: Vec<String> = roots.iter().map(|root| folder_name(root)).collect();
+                format!("Asset Browser - {}", names.join(", "))
+            }
+        };
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+    }
+
+    /// Adds a folder to the library and scans it, or shows it if it's in the library already.
+    fn add_root(&mut self, path: &Path) {
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        if !path.is_dir() {
+            self.notify(format!("{} isn't a folder", platform::native(&path)));
+            return;
+        }
+        let name = folder_name(&path);
+        match library::add_root(&mut self.roots, path.clone()) {
+            Err(index) => {
+                if let Some(dir) = self.library.as_ref().and_then(|library| library.find_dir(&path_key(&path))) {
+                    self.select_dir(dir);
+                }
+                let root = folder_name(&self.roots[index]);
+                self.notify(if path_key(&path) == path_key(&self.roots[index]) {
+                    format!("{root} is in the library already")
+                } else {
+                    format!("{name} is in {root}, which is in the library already")
+                });
+            }
+            Ok(replaced) => {
+                self.save_roots();
+                // What the cache has of it shows at once; the scan brings it up to date.
+                let cached = self.cached_index(&path);
+                self.rebuild_library(vec![(path.clone(), cached)]);
+                self.scan(vec![path.clone()]);
+                if let Some(index) = self.library.as_ref().and_then(|library| library.root_index(&path)) {
+                    self.select_dir(Library::root_dir(index));
+                }
+                self.update_title();
+                let replaced: Vec<String> = replaced.iter().map(|root| folder_name(root)).collect();
+                self.notify(match replaced.as_slice() {
+                    [] => format!("Added {name} to the library"),
+                    _ => format!("Added {name} in place of {}, which it holds", replaced.join(", ")),
+                });
+            }
+        }
+    }
+
+    /// Takes a folder out of the library. Its files, and the favorites, collections and
+    /// categories they're in, are untouched: adding it back brings them all back.
+    fn remove_root(&mut self, index: usize) {
+        if index >= self.roots.len() {
+            return;
+        }
+        let removed = self.roots.remove(index);
+        self.save_roots();
+        self.rebuild_library(Vec::new());
+        self.update_title();
+        self.notify(format!("Took {} out of the library; its files are untouched", folder_name(&removed)));
+    }
+
+    /// The files each folder of the library has now, with `fresh` (newly scanned or loaded)
+    /// taking the place of what a folder had.
+    fn current_files(&self, mut fresh: Vec<(PathBuf, Vec<ScannedFile>)>) -> Vec<(PathBuf, Vec<ScannedFile>)> {
+        self.roots
+            .iter()
+            .map(|root| {
+                let files = match fresh.iter().position(|(path, _)| path == root) {
+                    Some(at) => fresh.swap_remove(at).1,
+                    None => self.files_now(root),
+                };
+                (root.clone(), files)
+            })
+            .collect()
+    }
+
+    /// The files the library has of `root` (none if it isn't one of its folders yet).
+    fn files_now(&self, root: &Path) -> Vec<ScannedFile> {
+        self.library.as_ref().and_then(|library| Some(library.files_of(library.root_index(root)?))).unwrap_or_default()
+    }
+
+    /// Builds the library again after its folders changed (on this thread: it's a user's action).
+    fn rebuild_library(&mut self, fresh: Vec<(PathBuf, Vec<ScannedFile>)>) {
+        let library = (!self.roots.is_empty()).then(|| Library::build(self.current_files(fresh)));
+        self.set_library(library);
+    }
+
+    /// Puts in a new library, keeping the selections, the folder and the playing sound: entry
+    /// indices change, keys don't.
+    fn set_library(&mut self, library: Option<Library>) {
+        self.library_version += 1;
+        self.follow_focus = false;
+        match (&self.library, &library) {
+            (Some(old), Some(new)) => {
+                let new_index = new.index_by_key();
+                let old_keys: Vec<i64> = old.entries.iter().map(|entry| entry.key).collect();
+                for view in &mut self.modes {
+                    view.selection.remap(&old_keys, &new_index);
+                }
+                let dir = old.dirs.get(self.selected_dir as usize).and_then(|dir| new.find_dir(&dir.key));
+                // The top only shows with several folders.
+                self.selected_dir = dir.unwrap_or(new.home()).max(new.home());
+                self.sound.remap(&new_index);
+            }
+            (None, Some(new)) => self.selected_dir = new.home(),
+            (_, None) => {
+                for view in &mut self.modes {
+                    view.selection.clear();
+                }
+                self.selected_dir = 0;
+                self.sound.reset();
+            }
+        }
+        self.library = library;
+        self.previews.forget_wanted();
+        self.view_dirty = true;
+        self.membership_dirty = true;
+    }
+
+    /// Scans `targets` (some of the library's folders) in the background, then builds the
+    /// library with what was found and the files the other folders have now.
+    fn scan(&mut self, targets: Vec<PathBuf>) {
+        if targets.is_empty() {
+            return;
+        }
+        let roots = self.roots.clone();
+        let others: Vec<(PathBuf, Vec<ScannedFile>)> = self
+            .roots
+            .iter()
+            .filter(|root| !targets.contains(root))
+            .map(|root| (root.clone(), self.files_now(root)))
+            .collect();
+        let version = self.library_version;
+        let tx = self.scan_tx.clone();
+        let db_path = self.db_path.clone();
+        let ctx = self.ctx.clone();
+        let spawned = std::thread::Builder::new().name("scan".into()).spawn(move || {
+            let mut conn = db::open(&db_path).map_err(|err| diag::report("Saving the index", err)).ok();
+            let (mut elapsed, mut assets, mut dirs_visited, mut skipped) = (Duration::ZERO, 0, 0, 0);
+            let mut fresh = Vec::new();
+            let mut unreadable = Vec::new();
+            for root in &targets {
+                // A folder that can't be read keeps what was found there last time, in the index
+                // too: an unplugged drive mustn't empty its favorites and collections.
+                if let Err(err) = std::fs::read_dir(root) {
+                    let context =
+                        format!("Can't read {} (showing what was found there last time)", platform::native(root));
+                    diag::report(&context, err);
+                    unreadable.push(root.clone());
+                    continue;
+                }
+                let result = scan::scan(root);
+                if result.dirs_visited == 0 {
+                    unreadable.push(root.clone());
+                    continue;
+                }
+                if let Some(conn) = &mut conn
+                    && let Err(err) = db::save_index(conn, &root_string(root), &result.files)
+                {
+                    diag::report("Saving the index", err);
+                }
+                elapsed += result.elapsed;
+                assets += result.files.len();
+                dirs_visited += result.dirs_visited;
+                skipped += result.skipped_files;
+                fresh.push((root.clone(), result.files));
+            }
+            let scanned: Vec<PathBuf> = fresh.iter().map(|(root, _)| root.clone()).collect();
+            let built = if unreadable.is_empty() {
+                let mut others = others;
+                let files = roots
+                    .iter()
+                    .map(|root| {
+                        let from = if targets.contains(root) { &mut fresh } else { &mut others };
+                        let files = from.iter().position(|(path, _)| path == root).map(|at| from.swap_remove(at).1);
+                        (root.clone(), files.unwrap_or_default())
+                    })
+                    .collect();
+                Ok(Library::build(files))
+            } else {
+                Err(fresh)
+            };
+            let done = ScanDone { roots, built, scanned, unreadable, version, elapsed, assets, dirs_visited, skipped };
+            // Fails only when the window has closed.
+            let _ = tx.send(done);
+            ctx.request_repaint();
+        });
+        match spawned {
+            Ok(_) => {
+                if self.scans == 0 {
+                    self.scan_started = Instant::now();
+                }
+                self.scans += 1;
+            }
+            Err(err) => diag::report("Starting the scan", err),
+        }
+    }
+
+    fn poll_scans(&mut self) {
+        while let Ok(done) = self.scan_rx.try_recv() {
+            self.scans = self.scans.saturating_sub(1);
+            self.last_scan = Some(LastScan {
+                elapsed: done.elapsed,
+                assets: done.assets,
+                dirs_visited: done.dirs_visited,
+                skipped: done.skipped,
+            });
+            for root in &done.scanned {
+                self.folders.unreadable.remove(&path_key(root));
+            }
+            for root in &done.unreadable {
+                self.folders.unreadable.insert(path_key(root));
+            }
+            let current = done.version == self.library_version && done.roots == self.roots;
+            let library = match done.built {
+                Ok(library) if current => Some(library),
+                built => {
+                    // The library changed while scanning (a folder added or taken out, or another
+                    // scan finished), or a folder couldn't be read: use what was found, and the
+                    // files the rest have now.
+                    let found = match built {
+                        Ok(library) => done
+                            .scanned
+                            .iter()
+                            .filter_map(|root| Some((root.clone(), library.files_of(library.root_index(root)?))))
+                            .collect(),
+                        Err(found) => found,
+                    };
+                    (!self.roots.is_empty()).then(|| Library::build(self.current_files(found)))
+                }
+            };
+            let unchanged = match (&self.library, &library) {
+                (Some(old), Some(new)) => old.same_files_as(new),
+                (None, None) => true,
+                _ => false,
+            };
+            if !unchanged {
+                self.set_library(library);
+            }
+        }
     }
 
     fn mode_view(&self) -> &ModeView {
@@ -138,110 +526,98 @@ impl BrowserApp {
         &mut self.modes[self.mode.index()]
     }
 
-    /// Shows the cached index at once, then rescans in the background.
-    fn open_root(&mut self, path: &Path, ctx: &egui::Context) {
-        let root = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-        let root_key = root_string(&root);
-        self.library = None;
-        self.index_note = None;
-        self.view.clear();
-        for view in &mut self.modes {
-            view.selection.clear();
-        }
-        self.selected_dir = 0;
-        self.folders = FolderTree::default();
-        self.previews.clear(&self.thumbs);
-        self.sound.reset();
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("Asset Browser - {}", platform::native(&root))));
-
-        if let Some(conn) = &self.conn {
-            if let Err(err) = db::set_setting(conn, SETTING_LAST_ROOT, &root_key) {
-                diag::report("Saving the last folder", err);
-            }
-            let start = Instant::now();
-            match db::load_index(conn, &root_key) {
-                Ok(Some(files)) => {
-                    self.library = Some(Library::build(&root, files));
-                    self.index_note = Some(format!("Index from cache in {} ms", start.elapsed().as_millis()));
-                    self.view_dirty = true;
-                }
-                Ok(None) => {}
-                Err(err) => diag::report("Loading the cached index", err),
-            }
-        }
-
-        let (tx, rx) = crossbeam_channel::bounded(1);
-        let db_path = self.db_path.clone();
-        let ctx = ctx.clone();
-        let spawned = std::thread::Builder::new().name("scan".into()).spawn(move || {
-            let result = scan::scan(&root);
-            let saved = db::open(&db_path).and_then(|mut conn| db::save_index(&mut conn, &root_key, &result.files));
-            if let Err(err) = saved {
-                diag::report("Saving the index", err);
-            }
-            let library = Library::build(&root, result.files);
-            // Fails only if another folder was opened meanwhile; that result is no longer wanted.
-            let _ = tx.send(ScanDone {
-                library,
-                elapsed: result.elapsed,
-                dirs_visited: result.dirs_visited,
-                skipped: result.skipped_files,
-            });
-            ctx.request_repaint();
-        });
-        if let Err(err) = spawned {
-            diag::report("Starting the scan", err);
-        }
-        self.scan_rx = Some(rx);
-        self.scan_started = Instant::now();
-    }
-
-    fn poll_scan(&mut self) {
-        let Some(done) = self.scan_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else { return };
-        self.scan_rx = None;
-        self.last_scan = Some(LastScan {
-            elapsed: done.elapsed,
-            assets: done.library.entries.len(),
-            dirs_visited: done.dirs_visited,
-            skipped: done.skipped,
-        });
-        if self.library.as_ref().is_some_and(|old| old.same_files_as(&done.library)) {
+    /// Re-finds the groups' members in the library after either changed.
+    fn refresh_membership(&mut self) {
+        if !self.membership_dirty {
             return;
         }
-        // Keep the selections, folder and playing sound across the swap: entry indices change,
-        // keys don't.
-        let library = done.library;
-        let new_index = library.index_by_key();
-        if let Some(old) = &self.library {
-            let old_keys: Vec<i64> = old.entries.iter().map(|entry| entry.key).collect();
-            for view in &mut self.modes {
-                view.selection.remap(&old_keys, &new_index);
-            }
-            let dir_lower = old.dirs.get(self.selected_dir as usize).map(|dir| dir.lower.clone());
-            self.selected_dir = dir_lower.and_then(|lower| library.find_dir(&lower)).unwrap_or(0);
+        self.membership_dirty = false;
+        self.membership = match &self.library {
+            Some(library) => Membership::build(library, &self.groups),
+            None => Membership::default(),
+        };
+        if self.group.is_some_and(|id| id != UNCATEGORIZED && self.groups.get(id).is_none()) {
+            self.group = None;
         }
-        self.sound.remap(&new_index);
-        self.library = Some(library);
+        // Group views and searches (which match category names) both depend on it.
         self.view_dirty = true;
+    }
+
+    /// Whether the browsed assets are in a group's own order (the order they were added) or
+    /// ordered like a folder's. Uncategorized was never added to, so it's ordered like a folder.
+    fn in_group_order(&self) -> bool {
+        self.group.is_some_and(|id| id != UNCATEGORIZED)
     }
 
     fn rebuild_view(&mut self) {
         self.view_dirty = false;
+        let follow_focus = std::mem::take(&mut self.follow_focus);
         let Some(library) = &self.library else {
             self.view.clear();
             return;
         };
         if self.selected_dir as usize >= library.dirs.len() {
-            self.selected_dir = 0;
+            self.selected_dir = library.home();
         }
+        let in_group_order = self.in_group_order();
+        let query = self.query.to_lowercase();
+        let words: Vec<&str> = query.split_whitespace().collect();
+        let (groups, membership) = (&self.groups, &self.membership);
+        let by_category = |index: u32, word: &str| membership.category_matches(groups, index, word);
+        let kinds = self.mode.kinds();
         let mode_view = &mut self.modes[self.mode.index()];
-        let mut view = library.filter(self.selected_dir, self.mode.kinds(), &self.query.to_lowercase());
-        library.sort(&mut view, mode_view.sort, mode_view.descending);
+        let (sort, descending) = mode_view.order(in_group_order);
+        let mut view = match self.group {
+            Some(id) => {
+                let members = membership.entries.get(&id).map_or(&[][..], Vec::as_slice);
+                let mut view: Vec<u32> = members
+                    .iter()
+                    .copied()
+                    .filter(|&index| library.matches(index, kinds, &words, &by_category))
+                    .collect();
+                // The group's own order is the order things were added.
+                if in_group_order && sort == SortBy::Added && descending {
+                    view.reverse();
+                }
+                view
+            }
+            None => library.filter_with(self.selected_dir, kinds, &query, by_category),
+        };
+        if !(in_group_order && sort == SortBy::Added) {
+            library.sort(&mut view, sort, descending);
+        }
+        let mut focus_moved = None;
         if !mode_view.selection.is_empty() {
             let shown: HashSet<u32> = view.iter().copied().collect();
+            // Put in a category from Uncategorized, say: the next asset (or else the one before)
+            // takes the focus, so working through a group keeps its place.
+            let next =
+                mode_view.selection.focus.filter(|focus| follow_focus && !shown.contains(focus)).and_then(|focus| {
+                    let at = self.view.iter().position(|&index| index == focus)?;
+                    self.view[at + 1..].iter().chain(self.view[..at].iter().rev()).copied().find(|i| shown.contains(i))
+                });
             mode_view.selection.retain(&shown);
+            if let Some(next) = next
+                && mode_view.selection.is_empty()
+            {
+                mode_view.selection.only(next);
+                focus_moved = Some(next);
+            }
         }
         self.view = view;
+        if let Some(index) = focus_moved {
+            self.focused(index);
+            self.scroll_to_focus = true;
+        }
+    }
+
+    /// Browse a group instead of a folder, or go back to the folder.
+    fn show_group(&mut self, group: Option<i64>) {
+        if self.group != group {
+            self.group = group;
+            self.view_dirty = true;
+            self.scroll_to_focus = true;
+        }
     }
 
     fn set_mode(&mut self, mode: Mode) {
@@ -256,10 +632,205 @@ impl BrowserApp {
 
     fn select_dir(&mut self, dir: u32) {
         self.selected_dir = dir;
+        self.group = None;
         self.view_dirty = true;
         if let Some(library) = &self.library {
             self.folders.reveal(library, dir);
         }
+    }
+
+    /// Counts of each kind in what's browsed: the folder or the group.
+    fn source_totals(&self) -> [u32; 3] {
+        match (self.group, &self.library) {
+            (Some(id), _) => self.membership.totals(id),
+            (None, Some(library)) => library.dirs.get(self.selected_dir as usize).map_or([0; 3], |dir| dir.totals),
+            (None, None) => [0; 3],
+        }
+    }
+
+    fn paths_of(&self, indices: &[u32]) -> Vec<PathBuf> {
+        let Some(library) = &self.library else { return Vec::new() };
+        indices.iter().map(|&index| library.path_of(&library.entries[index as usize])).collect()
+    }
+
+    fn resolve(&self, targets: Targets) -> Vec<PathBuf> {
+        match targets {
+            Targets::Selection => self.paths_of(&self.selected_in_order()),
+            Targets::Paths(paths) => paths,
+        }
+    }
+
+    fn notify(&mut self, text: String) {
+        self.toast = Some((text, Instant::now()));
+    }
+
+    /// Applies what the user asked for from the sidebar, a menu, a star, a drop or the pane.
+    fn run_group_command(&mut self, command: GroupCommand) {
+        let name_of = |groups: &Groups, id: i64| groups.get(id).map_or_else(String::new, |group| group.name.clone());
+        // These can take assets out of the group being browsed (Uncategorized included).
+        if matches!(
+            command,
+            GroupCommand::Add(..)
+                | GroupCommand::Remove(..)
+                | GroupCommand::ToggleFavorite(_)
+                | GroupCommand::FinishEdit(_)
+        ) {
+            self.follow_focus = true;
+        }
+        match command {
+            GroupCommand::Show(id) => self.show_group(Some(id)),
+            GroupCommand::Add(id, targets) => {
+                let paths = self.resolve(targets);
+                let added = self.groups.add(id, &paths);
+                self.membership_dirty = true;
+                let name = name_of(&self.groups, id);
+                self.notify(match added {
+                    0 if paths.is_empty() => return,
+                    0 => format!("Already in {name}"),
+                    n => format!("Added {} to {name}", plural(n, "asset")),
+                });
+            }
+            GroupCommand::Remove(id, targets) => {
+                let keys: Vec<String> = self.resolve(targets).iter().map(|path| groups::path_key(path)).collect();
+                let removed = self.groups.remove(id, &keys);
+                self.membership_dirty = true;
+                if removed > 0 {
+                    let name = name_of(&self.groups, id);
+                    self.notify(format!(
+                        "Took {} out of {name}; the files stay where they are",
+                        plural(removed, "asset")
+                    ));
+                }
+            }
+            GroupCommand::ToggleFavorite(targets) => {
+                let paths = self.resolve(targets);
+                if paths.is_empty() {
+                    return;
+                }
+                let keys: Vec<String> = paths.iter().map(|path| groups::path_key(path)).collect();
+                if keys.iter().all(|key| self.groups.contains(FAVORITES, key)) {
+                    let removed = self.groups.remove(FAVORITES, &keys);
+                    self.notify(format!("Took {} out of Favorites", plural(removed, "asset")));
+                } else {
+                    let added = self.groups.add(FAVORITES, &paths);
+                    self.notify(format!("Added {} to Favorites", plural(added, "asset")));
+                }
+                self.membership_dirty = true;
+            }
+            GroupCommand::New(kind, targets) => {
+                let paths = self.resolve(targets);
+                self.edit = Some(GroupEdit::new(kind, self.groups.unused_name(kind), paths));
+            }
+            GroupCommand::StartRename(id) => {
+                self.edit = self.groups.get(id).map(GroupEdit::rename);
+            }
+            GroupCommand::FinishEdit(edit) => match edit.id {
+                Some(id) => {
+                    self.groups.rename(id, &edit.name);
+                }
+                None => {
+                    if let Some(id) = self.groups.create(edit.kind, &edit.name) {
+                        let added = self.groups.add(id, &edit.add);
+                        self.membership_dirty = true;
+                        if added > 0 {
+                            self.notify(format!("Made {} with {}", edit.name.trim(), plural(added, "asset")));
+                        }
+                    }
+                }
+            },
+            GroupCommand::Recolor(id, color) => self.groups.set_color(id, color),
+            GroupCommand::AskDelete(id) => self.confirm_delete = Some(id),
+            GroupCommand::RemoveMissing(id) => {
+                let keys = self.membership.missing.get(&id).cloned().unwrap_or_default();
+                let removed = self.groups.remove(id, &keys);
+                self.membership_dirty = true;
+                self.notify(format!("Took out {} that weren't found", plural(removed, "missing asset")));
+            }
+        }
+    }
+
+    /// "Delete this collection?" The files are never touched.
+    fn delete_dialog(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.confirm_delete else { return };
+        let Some(group) = self.groups.get(id) else {
+            self.confirm_delete = None;
+            return;
+        };
+        let (name, noun, count) = (group.name.clone(), group.kind.noun(), group.members.len());
+        let mut decision = None;
+        let modal = egui::Modal::new(egui::Id::new("delete-group")).show(ctx, |ui| {
+            ui.set_width(340.0);
+            ui.label(
+                RichText::new(format!("Delete the {noun} \u{201c}{name}\u{201d}?"))
+                    .font(egui::FontId::new(15.0, theme::semibold())),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(format!(
+                    "{} will stay where {} now.",
+                    plural(count, "file"),
+                    if count == 1 { "it is" } else { "they are" }
+                ))
+                .color(theme::TEXT_WEAK),
+            );
+            ui.add_space(12.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if widgets::button(ui, icon::TRASH, "Delete").clicked() {
+                    decision = Some(true);
+                }
+                if widgets::button(ui, "", "Cancel").clicked() {
+                    decision = Some(false);
+                }
+            });
+        });
+        if modal.should_close() && decision.is_none() {
+            decision = Some(false);
+        }
+        match decision {
+            Some(true) => {
+                if self.groups.delete(id) {
+                    self.membership_dirty = true;
+                    if self.group == Some(id) {
+                        self.show_group(None);
+                    }
+                    self.notify(format!("Deleted the {noun} \u{201c}{name}\u{201d}"));
+                }
+                self.confirm_delete = None;
+            }
+            Some(false) => self.confirm_delete = None,
+            None => {}
+        }
+    }
+
+    /// The brief confirmation at the bottom of the window.
+    fn draw_toast(&mut self, ctx: &egui::Context) {
+        let Some((text, at)) = &self.toast else { return };
+        let age = at.elapsed();
+        if age > TOAST_TIME {
+            self.toast = None;
+            return;
+        }
+        let fade = 1.0 - ((age.as_secs_f32() - (TOAST_TIME.as_secs_f32() - 0.4)) / 0.4).clamp(0.0, 1.0);
+        let screen = ctx.content_rect();
+        egui::Area::new(egui::Id::new("toast"))
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .pivot(egui::Align2::CENTER_BOTTOM)
+            .fixed_pos(screen.center_bottom() + vec2(0.0, -48.0))
+            .show(ctx, |ui| {
+                ui.set_opacity(fade);
+                Frame::new()
+                    .fill(egui::Color32::from_rgb(40, 43, 51))
+                    .stroke(egui::Stroke::new(1.0, theme::BORDER))
+                    .corner_radius(10)
+                    .inner_margin(Margin::symmetric(14, 8))
+                    .shadow(ui.visuals().popup_shadow)
+                    .show(ui, |ui| {
+                        let text = RichText::new(format!("{}  {text}", icon::CHECK_CIRCLE)).color(theme::TEXT);
+                        ui.add(egui::Label::new(text).extend());
+                    });
+            });
+        ctx.request_repaint_after(Duration::from_millis(50));
     }
 
     /// The focus moved to `index` (by click or key): a sound starts when auto-play is on, and the
@@ -303,14 +874,17 @@ impl BrowserApp {
         if let Some(action) = output.menu {
             self.run_action(action);
         }
+        for command in output.commands {
+            self.run_group_command(command);
+        }
         if let Some(sort) = output.sort_clicked {
+            let in_group = self.in_group_order();
             let view = self.mode_view_mut();
-            if view.sort == sort {
-                view.descending = !view.descending;
+            let (current, descending) = view.order(in_group);
+            if current == sort {
+                view.set_order(in_group, sort, !descending);
             } else {
-                view.sort = sort;
-                // Biggest and newest first is what people look for.
-                view.descending = matches!(sort, SortBy::Size | SortBy::Modified);
+                view.set_order(in_group, sort, sort.starts_descending());
             }
             self.view_dirty = true;
         }
@@ -379,6 +953,9 @@ impl BrowserApp {
         }
         if command(Key::C) {
             self.run_action(MenuAction::CopyPaths);
+        }
+        if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::F)) {
+            self.run_group_command(GroupCommand::ToggleFavorite(Targets::Selection));
         }
 
         let pressed = |modifiers, key| ctx.input_mut(|input| input.consume_key(modifiers, key));
@@ -450,31 +1027,43 @@ impl BrowserApp {
         }
     }
 
-    fn header(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn header(&mut self, ui: &mut egui::Ui) {
         let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin::symmetric(12, 8));
-        let mut open = None;
+        let mut action = None;
         egui::Panel::top("header").frame(frame).show(ui, |ui| {
             ui.horizontal(|ui| {
-                // The folder being browsed; click to open another.
-                let name = self.library.as_ref().map_or_else(|| "Open a folder".to_owned(), root_name);
-                let label = format!("{}  {name}  {}", icon::FOLDER_SIMPLE, icon::CARET_DOWN);
-                let tooltip = match &self.library {
-                    Some(library) => format!("{}\nClick to open another folder", platform::native(&library.root)),
-                    None => "Choose a folder of assets".to_owned(),
+                // The library's folders: click for the list, to go to one, add one or take one out.
+                let (glyph, name) = match self.roots.as_slice() {
+                    [] => (icon::FOLDER_PLUS, "Add a folder".to_owned()),
+                    [root] => (icon::FOLDER_SIMPLE, folder_name(root)),
+                    roots => (icon::FOLDERS, format!("{} folders", roots.len())),
                 };
+                let label = format!("{glyph}  {name}  {}", icon::CARET_DOWN);
                 let button = egui::Button::new(RichText::new(label).font(egui::FontId::new(14.0, theme::semibold())))
                     .frame_when_inactive(false)
                     .min_size(vec2(0.0, 30.0));
-                if ui.add(button).on_hover_text(tooltip).clicked() {
-                    open = rfd::FileDialog::new().set_title("Choose an asset folder").pick_folder();
+                let response = ui.add(button);
+                match &self.library {
+                    Some(library) => {
+                        let paths: Vec<String> = self.roots.iter().map(|root| platform::native(root)).collect();
+                        let response = response.on_hover_text(format!(
+                            "{}\nClick to go to a folder, add one or take one out",
+                            paths.join("\n")
+                        ));
+                        let kinds = self.mode.kinds();
+                        egui::Popup::menu(&response).show(|ui| {
+                            action = crate::ui::folders::library_menu(ui, library, kinds);
+                        });
+                    }
+                    None => {
+                        if response.on_hover_text("Choose a folder of assets, or drop one on the window").clicked() {
+                            action = Some(FolderAction::AddRoot);
+                        }
+                    }
                 }
                 ui.add_space(8.0);
 
-                let totals = self
-                    .library
-                    .as_ref()
-                    .and_then(|library| library.dirs.get(self.selected_dir as usize))
-                    .map(|dir| dir.totals);
+                let totals = self.library.as_ref().map(|_| self.source_totals());
                 // Narrow windows lose the counts first, then the labels.
                 let room = ui.available_width();
                 let (show_counts, show_labels) = (room > 960.0, room > 780.0);
@@ -531,25 +1120,133 @@ impl BrowserApp {
                 });
             });
         });
-        if let Some(dir) = open {
-            self.open_root(&dir, ctx);
+        if let Some(action) = action {
+            self.run_folder_action(action);
         }
+    }
+
+    fn run_folder_action(&mut self, action: FolderAction) {
+        let dir_path = |app: &Self, dir: u32| app.library.as_ref().and_then(|library| library.dir_path(dir));
+        match action {
+            FolderAction::Select(dir) => self.select_dir(dir),
+            FolderAction::Open(dir) => {
+                if let Some(path) = dir_path(self, dir)
+                    && let Err(err) = platform::open(&path)
+                {
+                    diag::report("Opening the folder", err);
+                }
+            }
+            FolderAction::CopyPath(dir) => {
+                if let Some(path) = dir_path(self, dir) {
+                    self.ctx.copy_text(platform::native(&path));
+                    self.notify("Copied the folder's path".to_owned());
+                }
+            }
+            FolderAction::AddRoot => {
+                let picked = rfd::FileDialog::new().set_title("Add a folder of assets to the library").pick_folder();
+                if let Some(path) = picked {
+                    self.add_root(&path);
+                }
+            }
+            FolderAction::RemoveRoot(path) => {
+                if let Some(index) = self.roots.iter().position(|root| *root == path) {
+                    self.remove_root(index);
+                }
+            }
+        }
+    }
+
+    /// Folders dropped on the window go into the library.
+    fn take_dropped_folders(&mut self, ctx: &egui::Context) {
+        let dropped: Vec<PathBuf> =
+            ctx.input(|input| input.raw.dropped_files.iter().map(|file| file.path().to_path_buf()).collect());
+        if dropped.is_empty() {
+            return;
+        }
+        let folders: Vec<PathBuf> = dropped.into_iter().filter(|path| path.is_dir()).collect();
+        if folders.is_empty() {
+            self.notify("Drop a folder to add it to the library".to_owned());
+        }
+        for folder in folders {
+            self.add_root(&folder);
+        }
+    }
+
+    /// While something is dragged over the window: what dropping it does.
+    fn draw_drop_hint(&self, ctx: &egui::Context) {
+        if ctx.input(|input| input.raw.hovered_files.is_empty()) {
+            return;
+        }
+        let screen = ctx.content_rect();
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop-hint")));
+        painter.rect_filled(screen, 0.0, theme::BG.gamma_multiply(0.8));
+        let area = screen.shrink(24.0);
+        painter.rect_stroke(area, 14.0, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
+        painter.text(
+            area.center(),
+            egui::Align2::CENTER_CENTER,
+            format!("{}  Drop a folder to add it to the library", icon::FOLDER_PLUS),
+            egui::FontId::new(18.0, theme::semibold()),
+            theme::TEXT,
+        );
     }
 
     /// Above the assets: where you are, how many there are, and how they're shown.
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         let Some(library) = &self.library else { return };
-        let crumbs: Vec<(u32, String)> = library
-            .dir_chain(self.selected_dir)
-            .into_iter()
-            .map(|dir| (dir, if dir == 0 { root_name(library) } else { library.dirs[dir as usize].name.clone() }))
-            .collect();
+        // A folder's path, or the group's name with what's not here.
+        let crumbs: Vec<(u32, String)> = match self.group {
+            Some(_) => Vec::new(),
+            None => library
+                .dir_chain(self.selected_dir)
+                .into_iter()
+                // "All folders" only with several.
+                .filter(|&dir| dir >= library.home())
+                .map(|dir| (dir, library.dirs[dir as usize].name.clone()))
+                .collect(),
+        };
+        // `None` for the kind is Uncategorized.
+        let group_title = match self.group {
+            Some(UNCATEGORIZED) => Some((None, groups::UNCATEGORIZED_NAME.to_owned(), 0)),
+            Some(id) => self.groups.get(id).map(|group| (Some(group.kind), group.name.clone(), group.color)),
+            None => None,
+        };
+        let missing = self.group.and_then(|id| self.membership.missing.get(&id)).map_or(0, Vec::len);
+        let elsewhere = self.group.and_then(|id| self.membership.elsewhere.get(&id)).copied().unwrap_or(0);
+        let outside = match library.roots.as_slice() {
+            [root] => root.name.clone(),
+            _ => "the library's folders".to_owned(),
+        };
         let mode = self.mode;
+        let in_group = self.in_group_order();
         let shown = self.view.len();
         let mut go_to = None;
+        let mut command = None;
         ui.horizontal(|ui| {
             ui.set_min_height(32.0);
             ui.spacing_mut().item_spacing.x = 2.0;
+            if let Some((kind, name, color)) = &group_title {
+                let title = RichText::new(name).font(egui::FontId::new(13.5, theme::semibold())).color(theme::TEXT);
+                match kind {
+                    Some(GroupKind::Favorites) => {
+                        let star = RichText::new(icon::STAR).family(theme::filled_icons()).color(theme::FAVORITE);
+                        ui.label(star);
+                    }
+                    Some(GroupKind::Collection) => {
+                        ui.label(RichText::new(icon::STACK).size(14.0).color(theme::TEXT_WEAK));
+                    }
+                    Some(GroupKind::Category) => {
+                        let (dot, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                        ui.painter().circle_filled(dot.center(), 5.0, theme::category_color(*color));
+                    }
+                    None => {
+                        let (dot, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                        ui.painter().circle_stroke(dot.center(), 4.5, egui::Stroke::new(1.5, theme::TEXT_WEAK));
+                    }
+                }
+                ui.add_space(4.0);
+                ui.label(title);
+            }
             for (i, (dir, name)) in crumbs.iter().enumerate() {
                 if i > 0 {
                     ui.label(RichText::new(icon::CARET_RIGHT).size(11.0).color(theme::TEXT_FAINT));
@@ -570,7 +1267,25 @@ impl BrowserApp {
             if view.selection.len() > 1 {
                 count.push_str(&format!(" · {} selected", grouped(view.selection.len())));
             }
+            if elsewhere > 0 {
+                count.push_str(&format!(" · {} outside {outside}", grouped(elsewhere)));
+            }
             ui.label(RichText::new(count).size(12.0).color(theme::TEXT_FAINT));
+            if missing > 0
+                && let Some(id) = self.group
+            {
+                ui.add_space(6.0);
+                let text = RichText::new(format!("{}  {} missing", icon::WARNING, grouped(missing)))
+                    .size(12.0)
+                    .color(theme::ERROR);
+                let response = ui.add(egui::Label::new(text).sense(Sense::click()));
+                if response
+                    .on_hover_text("Moved, renamed or deleted since they were added. Click to take them out.")
+                    .clicked()
+                {
+                    command = Some(GroupCommand::RemoveMissing(id));
+                }
+            }
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
@@ -579,23 +1294,24 @@ impl BrowserApp {
                         .on_hover_text("Tile size");
                     ui.label(RichText::new(icon::SQUARES_FOUR).size(14.0).color(theme::TEXT_FAINT));
                 }
-                let arrow = if view.descending { icon::SORT_DESCENDING } else { icon::SORT_ASCENDING };
-                let sort_menu = ui.menu_button(format!("{arrow}  {}", view.sort.label()), |ui| {
+                let (sort, descending) = view.order(in_group);
+                let arrow = if descending { icon::SORT_DESCENDING } else { icon::SORT_ASCENDING };
+                let options: &[SortBy] = if in_group { &SortBy::IN_GROUPS } else { &SortBy::ALL };
+                let sort_menu = ui.menu_button(format!("{arrow}  {}", sort.label()), |ui| {
                     ui.set_min_width(150.0);
-                    for option in SortBy::ALL {
-                        if ui.selectable_label(option == view.sort, option.label()).clicked() {
-                            view.sort = option;
-                            view.descending = matches!(option, SortBy::Size | SortBy::Modified);
+                    for &option in options {
+                        if ui.selectable_label(option == sort, option.label()).clicked() {
+                            view.set_order(in_group, option, option.starts_descending());
                             self.view_dirty = true;
                             ui.close();
                         }
                     }
                     ui.separator();
-                    for (descending, glyph, label) in
+                    for (down, glyph, label) in
                         [(false, icon::SORT_ASCENDING, "Ascending"), (true, icon::SORT_DESCENDING, "Descending")]
                     {
-                        if ui.selectable_label(view.descending == descending, format!("{glyph}  {label}")).clicked() {
-                            view.descending = descending;
+                        if ui.selectable_label(descending == down, format!("{glyph}  {label}")).clicked() {
+                            view.set_order(in_group, sort, down);
                             self.view_dirty = true;
                             ui.close();
                         }
@@ -629,6 +1345,9 @@ impl BrowserApp {
         if let Some(dir) = go_to {
             self.select_dir(dir);
         }
+        if let Some(command) = command {
+            self.run_group_command(command);
+        }
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
@@ -648,7 +1367,7 @@ impl BrowserApp {
                     ui.label(small(format!("{} assets", grouped(library.entries.len()))));
                     widgets::divider(ui);
                 }
-                if self.scan_rx.is_some() {
+                if self.scans > 0 {
                     ui.add(egui::Spinner::new().size(12.0));
                     ui.label(small(format!("Scanning… {:.1} s", self.scan_started.elapsed().as_secs_f32())));
                     ui.ctx().request_repaint_after(Duration::from_millis(100));
@@ -724,30 +1443,60 @@ impl BrowserApp {
         self.scroll_to_focus = true;
     }
 
+    /// The left side: Favorites, collections and categories, then the folders.
     fn folder_panel(&mut self, ui: &mut egui::Ui) {
         let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin { left: 6, right: 6, top: 10, bottom: 6 });
-        let mut clicked = None;
+        let mut action = None;
+        let mut commands = Vec::new();
         egui::Panel::left("folders").resizable(true).default_size(250.0).min_size(160.0).frame(frame).show(ui, |ui| {
+            // However many groups there are, the folders keep at least half the height.
+            let max_height = (ui.available_height() * 0.5).max(120.0);
+            egui::ScrollArea::vertical().id_salt("groups").max_height(max_height).auto_shrink([false, true]).show(
+                ui,
+                |ui| {
+                    let sidebar = Sidebar {
+                        groups: &self.groups,
+                        membership: &self.membership,
+                        kinds: self.mode.kinds(),
+                        viewing: self.group,
+                        edit: &mut self.edit,
+                    };
+                    commands = sidebar.show(ui);
+                },
+            );
+            ui.add_space(10.0);
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
                 widgets::section_label(ui, "Folders");
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.add_space(4.0);
+                    let add = widgets::icon_button_sized(ui, icon::PLUS, "Add a folder to the library", false, 20.0);
+                    if add.clicked() {
+                        action = Some(FolderAction::AddRoot);
+                    }
+                });
             });
             ui.add_space(2.0);
             let Some(library) = &self.library else {
-                ui.add_space(8.0);
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new(if self.scan_rx.is_some() { "Scanning…" } else { "No folder open" })
-                            .color(theme::TEXT_FAINT),
-                    );
+                    ui.add_space(12.0);
+                    let hint = "Folders of assets, browsed together. Press + or drop one on the window.";
+                    ui.add(egui::Label::new(RichText::new(hint).size(11.5).color(theme::TEXT_FAINT)).wrap());
                 });
                 return;
             };
-            clicked = self.folders.show(ui, library, self.mode.kinds(), self.selected_dir);
+            // No folder is highlighted while a group is browsed.
+            let selected = if self.group.is_some() { u32::MAX } else { self.selected_dir };
+            if let Some(asked) = self.folders.show(ui, library, self.mode.kinds(), selected) {
+                action = Some(asked);
+            }
         });
-        if let Some(dir) = clicked {
-            self.select_dir(dir);
+        if let Some(action) = action {
+            self.run_folder_action(action);
+        }
+        for command in commands {
+            self.run_group_command(command);
         }
     }
 
@@ -764,18 +1513,27 @@ impl BrowserApp {
                     ui.label(RichText::new("Open a folder to see its assets here.").color(theme::TEXT_FAINT));
                     return;
                 };
+                let totals = match self.group {
+                    Some(id) => self.membership.totals(id),
+                    None => library.dirs.get(self.selected_dir as usize).map_or([0; 3], |dir| dir.totals),
+                };
                 let args = InspectorArgs {
                     library,
                     selection: &self.modes[self.mode.index()].selection,
                     previews: &mut self.previews,
                     sound: &mut self.sound,
                     render_state: self.render_state.as_ref(),
-                    dir: self.selected_dir,
+                    totals,
                     kinds: self.mode.kinds(),
+                    groups: &self.groups,
+                    membership: &self.membership,
                 };
                 output = Some(self.inspector.show(ui, args));
             });
         let Some(output) = output else { return };
+        if let Some(command) = output.command {
+            self.run_group_command(command);
+        }
         if let Some(index) = output.focus {
             let selection = &mut self.mode_view_mut().selection;
             selection.focus = Some(index);
@@ -819,30 +1577,60 @@ impl BrowserApp {
     fn central(&mut self, ui: &mut egui::Ui) {
         let frame = Frame::new().fill(theme::BG).inner_margin(Margin { left: 12, right: 6, top: 6, bottom: 0 });
         let mut output = None;
+        let mut add_folder = false;
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             if self.library.is_none() {
-                ui.centered_and_justified(|ui| {
-                    let text =
-                        if self.scan_rx.is_some() { "Scanning…" } else { "Open a folder to browse its assets." };
-                    ui.label(RichText::new(text).size(15.0).color(theme::TEXT_FAINT));
+                // No folders yet.
+                ui.vertical_centered(|ui| {
+                    ui.add_space((ui.available_height() / 2.0 - 80.0).max(0.0));
+                    ui.label(RichText::new(icon::FOLDERS).size(44.0).color(theme::TEXT_FAINT));
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("Add a folder to browse its assets").size(16.0).color(theme::TEXT_WEAK));
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Or drop one on the window. Add as many as you like: they're browsed together.")
+                            .size(12.5)
+                            .color(theme::TEXT_FAINT),
+                    );
+                    ui.add_space(14.0);
+                    add_folder = widgets::button(ui, icon::FOLDER_PLUS, "Add a folder…").clicked();
                 });
                 return;
             }
             self.toolbar(ui);
             let Some(library) = self.library.as_ref() else { return };
             if self.view.is_empty() {
+                // A folder that's empty only because its first scan hasn't finished.
+                let scanning = self.scans > 0
+                    && self.group.is_none()
+                    && library.dirs.get(self.selected_dir as usize).is_some_and(|dir| dir.totals == [0; 3]);
                 ui.centered_and_justified(|ui| {
                     let what = self.mode.kind().map_or("assets", |kind| match kind {
                         AssetKind::Image => "images",
                         AssetKind::Audio => "sounds",
                         AssetKind::Model => "models",
                     });
-                    let text = if self.query.trim().is_empty() {
-                        format!("No {what} in this folder.")
+                    let place = match self.group {
+                        Some(UNCATEGORIZED) => "without a category".to_owned(),
+                        Some(id) => match self.groups.get(id) {
+                            Some(group) if group.kind == GroupKind::Favorites => {
+                                "in Favorites yet. Star assets with F or the star on their tile".to_owned()
+                            }
+                            Some(group) => {
+                                format!("in \u{201c}{}\u{201d} yet. Drag assets onto it in the sidebar", group.name)
+                            }
+                            None => "here".to_owned(),
+                        },
+                        None => "in this folder".to_owned(),
+                    };
+                    let text = if scanning {
+                        "Scanning…".to_owned()
+                    } else if self.query.trim().is_empty() {
+                        format!("No {what} {place}.")
                     } else {
                         format!("No {what} here match \u{201c}{}\u{201d}.", self.query.trim())
                     };
-                    ui.label(RichText::new(text).size(14.0).color(theme::TEXT_FAINT));
+                    ui.add(egui::Label::new(RichText::new(text).size(14.0).color(theme::TEXT_FAINT)).wrap());
                 });
                 return;
             }
@@ -852,16 +1640,20 @@ impl BrowserApp {
                 .flatten()
                 .and_then(|focus| self.view.iter().position(|&index| index == focus));
             let now = self.sound.now();
+            let (sort, descending) = mode_view.order(self.in_group_order());
             let browse = Browse {
                 library,
                 view: &self.view,
                 selection: &mode_view.selection,
                 now: now.as_ref(),
                 mode: self.mode,
-                sort: mode_view.sort,
-                descending: mode_view.descending,
+                sort,
+                descending,
                 backdrop: self.inspector.image.backdrop,
                 scroll_to,
+                groups: &self.groups,
+                membership: &self.membership,
+                viewing: self.group,
             };
             output = Some(match mode_view.layout {
                 ViewLayout::Grid => browse::grid(ui, &browse, &mut self.previews, mode_view.tile, &mut self.scroll),
@@ -870,6 +1662,9 @@ impl BrowserApp {
         });
         if let Some(output) = output {
             self.apply_browse(output);
+        }
+        if add_folder {
+            self.run_folder_action(FolderAction::AddRoot);
         }
     }
 
@@ -895,6 +1690,10 @@ impl BrowserApp {
                 view.sort = sort;
             }
             view.descending = get(&key("descending")).is_some_and(|value| value == "1");
+            if let Some(sort) = get(&key("group_sort")).as_deref().and_then(SortBy::from_key) {
+                view.group_sort = sort;
+            }
+            view.group_descending = get(&key("group_descending")).is_none_or(|value| value == "1");
         }
         self.sound.autoplay = get("sound.autoplay").is_none_or(|value| value == "1");
         self.sound.looping = get("sound.loop").is_some_and(|value| value == "1");
@@ -934,6 +1733,8 @@ impl BrowserApp {
             settings.push((key("tile"), format!("{:.0}", view.tile)));
             settings.push((key("sort"), view.sort.key().to_owned()));
             settings.push((key("descending"), flag(view.descending).to_owned()));
+            settings.push((key("group_sort"), view.group_sort.key().to_owned()));
+            settings.push((key("group_descending"), flag(view.group_descending).to_owned()));
         }
         let settings: Vec<(&str, &str)> = settings.iter().map(|(key, value)| (key.as_str(), value.as_str())).collect();
         if let Err(err) = db::set_settings(conn, &settings) {
@@ -946,20 +1747,23 @@ impl eframe::App for BrowserApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.previews.begin_frame();
-        self.poll_scan();
+        self.poll_scans();
+        self.take_dropped_folders(&ctx);
         self.previews.drain(&self.thumbs, &ctx);
         self.inspector.poll(&ctx);
+        self.refresh_membership();
         if self.view_dirty {
             self.rebuild_view();
         }
         self.handle_keys(&ctx);
-        self.header(ui, &ctx);
+        self.header(ui);
         self.status_bar(ui);
         if !self.show_inspector {
             self.player_bar(ui);
         }
         self.folder_panel(ui);
         self.inspector_panel(ui);
+        self.refresh_membership();
         if self.view_dirty {
             self.rebuild_view();
         }
@@ -968,6 +1772,10 @@ impl eframe::App for BrowserApp {
             self.previews.submit(&self.thumbs, library);
         }
         self.previews.evict();
+        self.delete_dialog(&ctx);
+        self.draw_toast(&ctx);
+        organize::drag_indicator(&ctx);
+        self.draw_drop_hint(&ctx);
         // Keep the playhead moving while something is audible.
         if self.sound.is_audible() {
             ctx.request_repaint_after(Duration::from_millis(33));

@@ -13,15 +13,19 @@ use egui_phosphor::regular as icon;
 
 use crate::asset::AssetKind;
 use crate::detail::{Detail, DetailLoader};
+use crate::groups::{FAVORITES, GroupKind, Groups, Membership};
 use crate::library::{Entry, Library};
 use crate::model::Model;
-use crate::thumbs::THUMB_MAX;
+use crate::sheets::Sheet;
+use crate::thumbs::ThumbPixels;
 
 use super::browse::{Look, MenuAction, channels, draw_preview};
 use super::format::{format_age, format_size, format_time, grouped};
 use super::image_view::{self, ImageView, Picture};
 use super::mode::Selection;
+use super::organize::{self, GroupCommand, Targets};
 use super::previews::Previews;
+use super::sheet_view::SheetView;
 use super::sound::{self, Sound};
 use super::viewport::Viewport;
 use super::{theme, widgets};
@@ -32,6 +36,7 @@ const STRIP_MAX: usize = 48;
 pub struct Inspector {
     pub image: ImageView,
     pub viewport: Viewport,
+    pub sheet: SheetView,
     loader: DetailLoader,
     /// The large preview of the focused asset, by key.
     detail: Option<(i64, DetailState)>,
@@ -39,7 +44,13 @@ pub struct Inspector {
 
 enum DetailState {
     Loading,
-    Image { texture: TextureHandle, size: [u32; 2] },
+    Image {
+        texture: TextureHandle,
+        size: [u32; 2],
+        /// Kept for the sprite sheet player, which looks for empty frames in it.
+        pixels: Arc<ThumbPixels>,
+        sheet: Option<Sheet>,
+    },
     Model(Arc<Model>),
     Failed(String),
 }
@@ -50,9 +61,11 @@ pub struct InspectorArgs<'a> {
     pub previews: &'a mut Previews,
     pub sound: &'a mut Sound,
     pub render_state: Option<&'a RenderState>,
-    /// The folder being browsed, for the empty state.
-    pub dir: u32,
+    /// What's being browsed, for the empty state: its count of each kind.
+    pub totals: [u32; 3],
     pub kinds: [bool; 3],
+    pub groups: &'a Groups,
+    pub membership: &'a Membership,
 }
 
 #[derive(Default)]
@@ -60,14 +73,17 @@ pub struct InspectorOutput {
     /// A thumbnail in the selection strip was clicked: show that one.
     pub focus: Option<u32>,
     pub action: Option<MenuAction>,
+    pub command: Option<GroupCommand>,
 }
 
 impl Inspector {
-    pub fn new(ctx: &egui::Context) -> Self {
+    /// `user_data` is where per-picture sprite sheet choices are saved.
+    pub fn new(ctx: &egui::Context, user_data: &std::path::Path) -> Self {
         let ctx = ctx.clone();
         Self {
             image: ImageView::default(),
             viewport: Viewport::default(),
+            sheet: SheetView::new(user_data),
             loader: DetailLoader::start(Arc::new(move || ctx.request_repaint())),
             detail: None,
         }
@@ -81,7 +97,7 @@ impl Inspector {
                 continue; // the selection moved on
             }
             *state = match loaded.result {
-                Ok(Detail::Image(pixels)) => {
+                Ok(Detail::Image(pixels, sheet)) => {
                     let image =
                         ColorImage::from_rgba_unmultiplied([pixels.w as usize, pixels.h as usize], &pixels.rgba);
                     let options = TextureOptions {
@@ -91,7 +107,8 @@ impl Inspector {
                         ..TextureOptions::LINEAR
                     };
                     let texture = ctx.load_texture(format!("detail-{key}"), image, options);
-                    DetailState::Image { texture, size: [pixels.src_w, pixels.src_h] }
+                    let size = [pixels.src_w, pixels.src_h];
+                    DetailState::Image { texture, size, pixels: Arc::new(pixels), sheet }
                 }
                 Ok(Detail::Model(model)) => DetailState::Model(model),
                 Err(message) => DetailState::Failed(message),
@@ -105,9 +122,9 @@ impl Inspector {
             return;
         }
         let wanted = match entry.kind {
-            // Waits for the thumbnail, which says how big the picture is; small pictures are their
-            // own thumbnail already.
-            AssetKind::Image => previews.dimensions(entry.key).is_some_and(|[w, h]| w > THUMB_MAX || h > THUMB_MAX),
+            // Every picture, small ones too: the loader also looks for sprite sheet frames in it.
+            // Waits for the thumbnail so it's on screen first.
+            AssetKind::Image => previews.dimensions(entry.key).is_some(),
             // Blender files only have the preview picture Blender saved.
             AssetKind::Model => !entry.extension().eq_ignore_ascii_case("blend"),
             AssetKind::Audio => false,
@@ -123,11 +140,20 @@ impl Inspector {
 
     pub fn show(&mut self, ui: &mut Ui, args: InspectorArgs<'_>) -> InspectorOutput {
         let mut output = InspectorOutput::default();
-        let InspectorArgs { library, selection, previews, sound, render_state, dir, kinds } = args;
+        let InspectorArgs { library, selection, previews, sound, render_state, totals, kinds, groups, membership } =
+            args;
         let Some(focus) = selection.focus.filter(|&focus| (focus as usize) < library.entries.len()) else {
             self.viewport.release();
-            empty_state(ui, library, dir, kinds);
+            empty_state(ui, totals, kinds);
             return output;
+        };
+        // What the pane's buttons act on: the whole selection when the focus is part of it.
+        let targets: Vec<u32> = if selection.contains(focus) {
+            let mut items: Vec<u32> = selection.items.iter().copied().collect();
+            items.sort_unstable();
+            items
+        } else {
+            vec![focus]
         };
         let entry = &library.entries[focus as usize];
         previews.want(focus);
@@ -135,12 +161,18 @@ impl Inspector {
         if entry.kind != AssetKind::Model {
             self.viewport.release();
         }
+        if entry.kind != AssetKind::Image {
+            self.sheet.clear();
+        }
 
         egui::ScrollArea::vertical().id_salt("inspector").auto_shrink([false; 2]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
             let width = ui.available_width();
             match entry.kind {
-                AssetKind::Image => self.image_section(ui, entry, previews, width),
+                AssetKind::Image => {
+                    let path_key = crate::groups::path_key(&library.path_of(entry));
+                    self.image_section(ui, entry, &path_key, previews, width);
+                }
                 AssetKind::Audio => sound_section(ui, library, focus, previews, sound),
                 AssetKind::Model => self.model_section(ui, entry, previews, render_state, width),
             }
@@ -162,8 +194,18 @@ impl Inspector {
                 if widgets::button(ui, icon::COPY, &copy).clicked() {
                     output.action = Some(MenuAction::CopyPaths);
                 }
+                if favorite_button(ui, organize::all_in(membership, FAVORITES, &targets)).clicked() {
+                    output.command = Some(GroupCommand::ToggleFavorite(Targets::Selection));
+                }
             });
             ui.add_space(6.0);
+            for (kind, label) in [(GroupKind::Collection, "Collections"), (GroupKind::Category, "Categories")] {
+                widgets::section_label(ui, label);
+                if let Some(command) = organize::chips(ui, groups, membership, &targets, kind) {
+                    output.command = Some(command);
+                }
+                ui.add_space(4.0);
+            }
             widgets::section_label(ui, "Details");
             match entry.kind {
                 AssetKind::Image => image_properties(ui, entry, previews, self.detail_size(entry.key)),
@@ -172,10 +214,12 @@ impl Inspector {
             }
             widgets::property(ui, "File size", format_size(entry.size));
             widgets::property(ui, "Modified", format_age(entry.mtime));
+            // From the library folder it's in.
+            let root = &library.roots[entry.root as usize].name;
             let folder = if entry.folder().is_empty() {
-                "(top folder)".to_owned()
+                root.clone()
             } else {
-                entry.folder().replace('/', " › ")
+                format!("{root} › {}", entry.folder().replace('/', " › "))
             };
             widgets::property(ui, "Folder", RichText::new(folder).color(theme::TEXT_WEAK));
 
@@ -197,29 +241,64 @@ impl Inspector {
         }
     }
 
-    fn image_section(&mut self, ui: &mut Ui, entry: &Entry, previews: &Previews, width: f32) {
+    fn image_section(&mut self, ui: &mut Ui, entry: &Entry, path_key: &str, previews: &Previews, width: f32) {
         let height = (width * 0.85).clamp(180.0, 440.0);
         let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-        let thumbnail = previews.texture(entry.key);
-        let picture = match (&self.detail, thumbnail) {
-            (Some((key, DetailState::Image { texture, size })), _) if *key == entry.key => {
-                Some(Picture { texture: texture.id(), size: *size, pixel_art: false })
+        let now = ui.input(|input| input.time);
+        // The full picture, once loaded: what the sprite sheet player draws from.
+        let loaded = match &self.detail {
+            Some((key, DetailState::Image { texture, size, pixels, sheet })) if *key == entry.key => {
+                Some((texture.id(), *size, pixels.clone(), sheet))
             }
-            (_, Some(thumbnail)) => Some(Picture {
-                texture: thumbnail.handle.id(),
-                size: thumbnail.src_size,
-                pixel_art: thumbnail.unscaled,
-            }),
             _ => None,
         };
-        match picture {
-            Some(picture) => self.image.show(ui, rect, entry.key, &picture, previews.checker.id()),
-            None => placeholder(ui, rect, entry, previews, Look::new(ui, self.image.backdrop)),
+        if let Some((_, _, pixels, sheet)) = &loaded
+            && !self.sheet.is_for(path_key)
+        {
+            self.sheet.load(path_key.to_owned(), (*sheet).clone(), pixels, now);
+        }
+        let animating = self.sheet.animate && self.sheet.sheet.is_some() && loaded.is_some();
+
+        match (&loaded, animating) {
+            (Some((texture, size, _, _)), true) => {
+                self.sheet.draw(ui, rect, *texture, *size, self.image.backdrop, previews.checker.id());
+            }
+            _ => {
+                let picture = match (&loaded, previews.texture(entry.key)) {
+                    (Some((texture, size, _, _)), _) => {
+                        Some(Picture { texture: *texture, size: *size, pixel_art: false })
+                    }
+                    (None, Some(thumbnail)) => Some(Picture {
+                        texture: thumbnail.handle.id(),
+                        size: thumbnail.src_size,
+                        pixel_art: thumbnail.unscaled,
+                    }),
+                    (None, None) => None,
+                };
+                match picture {
+                    Some(picture) => self.image.show(ui, rect, entry.key, &picture, previews.checker.id()),
+                    None => placeholder(ui, rect, entry, previews, Look::new(ui, self.image.backdrop)),
+                }
+            }
         }
         if matches!(&self.detail, Some((key, DetailState::Loading)) if *key == entry.key) {
             spinner_badge(ui, rect);
         }
-        overlay(ui, rect, |ui| image_view::backdrop_buttons(ui, &mut self.image.backdrop));
+        let (sheet, backdrop) = (&mut self.sheet, &mut self.image.backdrop);
+        overlay(ui, rect, |ui| {
+            image_view::backdrop_buttons(ui, backdrop);
+            if let Some((_, _, pixels, _)) = &loaded {
+                widgets::divider(ui);
+                if animation_button(ui, sheet.animate, sheet.frame_count()).clicked() {
+                    sheet.toggle(pixels, now);
+                }
+            }
+        });
+        if animating && let Some((texture, size, pixels, _)) = &loaded {
+            ui.add_space(4.0);
+            widgets::section_label(ui, "Animation");
+            self.sheet.controls(ui, *texture, *size, pixels);
+        }
     }
 
     fn model_section(
@@ -427,7 +506,7 @@ fn selection_strip(
 }
 
 /// Shown when nothing is selected.
-fn empty_state(ui: &mut Ui, library: &Library, dir: u32, kinds: [bool; 3]) {
+fn empty_state(ui: &mut Ui, totals: [u32; 3], kinds: [bool; 3]) {
     ui.add_space(ui.available_height() * 0.25);
     ui.vertical_centered(|ui| {
         ui.label(RichText::new(icon::CURSOR_CLICK).size(40.0).color(theme::TEXT_FAINT));
@@ -438,23 +517,90 @@ fn empty_state(ui: &mut Ui, library: &Library, dir: u32, kinds: [bool; 3]) {
                 .size(12.0)
                 .color(theme::TEXT_WEAK),
         );
-        if let Some(node) = library.dirs.get(dir as usize) {
-            ui.add_space(18.0);
-            for kind in AssetKind::ALL.into_iter().filter(|kind| kinds[kind.index()]) {
-                let count = node.totals[kind.index()];
-                ui.label(
-                    RichText::new(format!(
-                        "{}  {} {}",
-                        kind.icon(),
-                        grouped(count as usize),
-                        kind.label().to_lowercase()
-                    ))
+        ui.add_space(18.0);
+        for kind in AssetKind::ALL.into_iter().filter(|kind| kinds[kind.index()]) {
+            let count = totals[kind.index()];
+            let noun = if count == 1 { kind.singular() } else { kind.label() }.to_lowercase();
+            ui.label(
+                RichText::new(format!("{}  {} {noun}", kind.icon(), grouped(count as usize)))
                     .size(12.5)
                     .color(if count > 0 { theme::TEXT_WEAK } else { theme::TEXT_FAINT }),
-                );
-            }
+            );
         }
     });
+}
+
+/// Switches the picture to its frames played and back. Lit up with the frame count when frames
+/// were found but aren't shown, as an invitation.
+fn animation_button(ui: &mut Ui, animating: bool, frames: Option<usize>) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(if frames.is_some() && !animating { 52.0 } else { 24.0 }, 24.0), Sense::click());
+    let painter = ui.painter();
+    let invite = frames.is_some() && !animating;
+    let fill = if animating {
+        theme::ACCENT_SOFT
+    } else if response.hovered() {
+        theme::CARD_HOVER
+    } else if invite {
+        theme::ACCENT.gamma_multiply(0.25)
+    } else {
+        Color32::TRANSPARENT
+    };
+    painter.rect_filled(rect, theme::RADIUS, fill);
+    let color = if animating || invite { theme::ACCENT } else { theme::TEXT_WEAK };
+    if invite {
+        painter.text(
+            pos2(rect.left() + 13.0, rect.center().y),
+            Align2::CENTER_CENTER,
+            icon::FILM_STRIP,
+            FontId::proportional(14.0),
+            color,
+        );
+        let count = frames.map(|n| n.to_string()).unwrap_or_default();
+        painter.text(
+            pos2(rect.right() - 8.0, rect.center().y),
+            Align2::RIGHT_CENTER,
+            count,
+            FontId::proportional(12.0),
+            color,
+        );
+    } else {
+        painter.text(rect.center(), Align2::CENTER_CENTER, icon::FILM_STRIP, FontId::proportional(14.0), color);
+    }
+    let tip = match (animating, frames) {
+        (true, _) => "Show the whole picture".to_owned(),
+        (false, Some(n)) => format!("Play its {n} frames as an animation"),
+        (false, None) => "Play it as a sprite sheet (set the grid after)".to_owned(),
+    };
+    response.on_hover_text(tip)
+}
+
+/// The pane's star: "Favorite", filled once it is one.
+fn favorite_button(ui: &mut Ui, favorite: bool) -> egui::Response {
+    let label = if favorite { "Favorite" } else { "Add to Favorites" };
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), FontId::proportional(13.0), theme::TEXT);
+    let size = vec2(galley.size().x + 44.0, 28.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let fill = if favorite {
+        theme::FAVORITE.gamma_multiply(0.18)
+    } else if response.hovered() {
+        theme::CARD_HOVER
+    } else {
+        theme::CARD
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, theme::RADIUS, fill);
+    let family = if favorite { theme::filled_icons() } else { egui::FontFamily::Proportional };
+    let star = if favorite || response.hovered() { theme::FAVORITE } else { theme::TEXT };
+    painter.text(
+        pos2(rect.left() + 18.0, rect.center().y),
+        Align2::CENTER_CENTER,
+        icon::STAR,
+        FontId::new(15.0, family),
+        star,
+    );
+    painter.galley(pos2(rect.left() + 32.0, rect.center().y - galley.size().y / 2.0), galley, theme::TEXT);
+    response.on_hover_text(if favorite { "Remove from Favorites (F)" } else { "Add to Favorites (F)" })
 }
 
 /// A stand-in while the preview is made.

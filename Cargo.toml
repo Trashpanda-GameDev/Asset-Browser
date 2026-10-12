@@ -24,7 +24,9 @@ bytemuck = { version = "1", features = ["derive"] }
 flate2 = "1"
 ruzstd = { version = "0.9", default-features = false, features = ["std"] }
 roxmltree = "0.21"
-egui-phosphor = "0.14"
+# Sprite sheet data (Aseprite / TexturePacker JSON); `preserve_order` keeps Aseprite's frame order.
+serde_json = { version = "1", features = ["preserve_order"] }
+egui-phosphor = { version = "0.14", features = ["regular", "fill"] }
 
 [dev-dependencies]
 # The version wgpu uses: checks the 3D view's shader in tests, without a GPU.

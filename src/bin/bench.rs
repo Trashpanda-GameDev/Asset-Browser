@@ -97,7 +97,7 @@ fn main() {
         grouped(loaded.len())
     );
     let start = Instant::now();
-    let library = Library::build(&root, loaded);
+    let library = Library::build(vec![(root.clone(), loaded)]);
     println!("Build library: {:.0} ms ({} folders with assets)", ms(start.elapsed()), grouped(library.dirs.len()));
     let start = Instant::now();
     let shown = library.filter(0, [true; 3], "png");

@@ -55,6 +55,53 @@ pub fn default_path() -> PathBuf {
         .join("library.sqlite")
 }
 
+/// The user's own data, which isn't a cache and must survive one being cleared: favourites,
+/// collections, categories (`groups`) and sprite sheet choices (`sheets`). The per-user data
+/// folder: `%APPDATA%` on Windows, `~/Library/Application Support` on macOS, `~/.local/share`
+/// on Linux.
+pub fn user_data_path() -> PathBuf {
+    directories::ProjectDirs::from("", "", "AssetBrowser")
+        .map(|dirs| dirs.data_dir().to_path_buf())
+        .unwrap_or_else(|| std::env::temp_dir().join("AssetBrowser"))
+        .join("user.sqlite")
+}
+
+/// Opens the user data file for the library's folders (the other user data has its own
+/// connections: `groups::Groups`, `sheets::SheetStore`).
+pub fn open_user(path: &Path) -> rusqlite::Result<Connection> {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let conn = Connection::open(path)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0))?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS library_roots(
+             position INTEGER PRIMARY KEY,
+             path TEXT NOT NULL);",
+    )?;
+    Ok(conn)
+}
+
+/// The folders the library is made of, in the order they were added.
+pub fn load_roots(conn: &Connection) -> rusqlite::Result<Vec<PathBuf>> {
+    let mut statement = conn.prepare("SELECT path FROM library_roots ORDER BY position")?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    rows.map(|row| row.map(PathBuf::from)).collect()
+}
+
+pub fn save_roots(conn: &Connection, roots: &[PathBuf]) -> rusqlite::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM library_roots", [])?;
+    {
+        let mut insert = tx.prepare("INSERT INTO library_roots(position, path) VALUES(?1, ?2)")?;
+        for (position, root) in roots.iter().enumerate() {
+            insert.execute(params![position as i64, root.to_string_lossy()])?;
+        }
+    }
+    tx.commit()
+}
+
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -273,6 +320,10 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Resul
     set_settings(conn, &[(key, value)])
 }
 
+pub fn remove_setting(conn: &Connection, key: &str) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM settings WHERE key = ?1", [key]).map(drop)
+}
+
 /// Saves several settings in one transaction.
 pub fn set_settings(conn: &Connection, settings: &[(&str, &str)]) -> rusqlite::Result<()> {
     let tx = conn.unchecked_transaction()?;
@@ -319,9 +370,32 @@ mod tests {
         let errors: Vec<String> = threads.into_iter().filter_map(|t| t.join().unwrap().err()).collect();
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(get_setting(&ui, "last_root").as_deref(), Some("X"));
+        remove_setting(&ui, "last_root").expect("remove setting");
+        assert_eq!(get_setting(&ui, "last_root"), None);
         drop(ui);
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
         }
+    }
+
+    #[test]
+    fn library_folders_keep_their_order() {
+        let path = std::env::temp_dir().join(format!("asset_browser_roots_{}.sqlite", std::process::id()));
+        let clean = || {
+            for suffix in ["", "-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+            }
+        };
+        clean();
+        let conn = open_user(&path).expect("user data");
+        assert!(load_roots(&conn).unwrap().is_empty());
+        let roots = [PathBuf::from("F:\\Resources"), PathBuf::from("D:\\Audio"), PathBuf::from("C:\\Art")];
+        save_roots(&conn, &roots).unwrap();
+        save_roots(&conn, &roots[1..]).unwrap();
+        drop(conn);
+        let conn = open_user(&path).expect("user data again");
+        assert_eq!(load_roots(&conn).unwrap(), roots[1..], "saving replaces the list");
+        drop(conn);
+        clean();
     }
 }

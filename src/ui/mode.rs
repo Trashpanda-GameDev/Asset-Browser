@@ -96,8 +96,12 @@ pub enum Layout {
 pub struct ModeView {
     pub layout: Layout,
     pub tile: f32,
+    /// The order in folders.
     pub sort: SortBy,
     pub descending: bool,
+    /// The order in Favorites, collections and categories: newest first unless changed.
+    pub group_sort: SortBy,
+    pub group_descending: bool,
     pub selection: Selection,
 }
 
@@ -109,7 +113,22 @@ impl ModeView {
             tile: 128.0,
             sort: SortBy::Folder,
             descending: false,
+            group_sort: SortBy::Added,
+            group_descending: true,
             selection: Selection::default(),
+        }
+    }
+
+    /// The order in use: the folder's or the groups'.
+    pub fn order(&self, in_group: bool) -> (SortBy, bool) {
+        if in_group { (self.group_sort, self.group_descending) } else { (self.sort, self.descending) }
+    }
+
+    pub fn set_order(&mut self, in_group: bool, sort: SortBy, descending: bool) {
+        if in_group {
+            (self.group_sort, self.group_descending) = (sort, descending);
+        } else {
+            (self.sort, self.descending) = (sort, descending);
         }
     }
 }

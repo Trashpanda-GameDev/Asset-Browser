@@ -69,16 +69,14 @@ impl Previews {
         }
     }
 
-    /// A different folder was opened: none of the previews are wanted any more.
-    pub fn clear(&mut self, thumbs: &ThumbService) {
-        self.textures.clear();
-        self.failed.clear();
-        self.last_wanted.clear();
-        thumbs.set_wanted(Vec::new());
-    }
-
     pub fn begin_frame(&mut self) {
         self.frame += 1;
+        self.forget_wanted();
+    }
+
+    /// The library was rebuilt: what this frame asked for is entry indices into the old one.
+    /// (The previews themselves are kept by cache key, so they stay good.)
+    pub fn forget_wanted(&mut self) {
         self.wanted.clear();
         self.wanted_set.clear();
     }

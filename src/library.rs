@@ -1,4 +1,8 @@
-//! The files of one root folder, sorted, with a folder tree and fast filtering.
+//! The files of the library's folders (its roots), sorted, with one folder tree over all of them
+//! and fast filtering.
+//!
+//! The tree's top (`dirs[0]`, "All folders") holds every root, and each root's folders are under
+//! its own node. A folder is known across rescans by its lowercase absolute path (`DirNode::key`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -7,7 +11,21 @@ use crate::asset::AssetKind;
 use crate::scan::ScannedFile;
 use crate::thumbs::cache_key;
 
+/// One of the folders the library is made of.
+pub struct Root {
+    pub path: PathBuf,
+    /// `root_string(path)`: the root's identity in the index and in every cache key.
+    pub key: String,
+    /// `path_key(path)`, for finding files by absolute path.
+    pub path_key: String,
+    /// The folder's own name ("Resources" for F:\Resources).
+    pub name: String,
+}
+
 pub struct Entry {
+    /// Index into `Library::roots`.
+    pub root: u16,
+    /// Path relative to the root, with `/` separators.
     pub rel: String,
     /// `rel` in lowercase, for sorting and search.
     pub lower: String,
@@ -46,8 +64,12 @@ impl Entry {
 
 pub struct DirNode {
     pub name: String,
-    /// Lowercase path relative to the root ("" for the root itself).
+    /// Lowercase path relative to its root ("" for a root itself, and for the top).
     pub lower: String,
+    /// The lowercase absolute path ("" for the top): how a folder is found again after a rescan.
+    pub key: String,
+    /// The root it's in; `None` for the top, which holds them all.
+    pub root: Option<u16>,
     pub parent: Option<u32>,
     pub children: Vec<u32>,
     /// Assets of each kind in this folder and everything below it.
@@ -62,9 +84,11 @@ impl DirNode {
 }
 
 /// The order of the browsed assets. `Folder` is the library's own order: by path, so each
-/// folder's files stay together.
+/// folder's files stay together. `Added` is the order assets went into a collection or category
+/// (see `groups`); in a folder it's the same as `Folder`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortBy {
+    Added,
     Folder,
     Name,
     Type,
@@ -73,10 +97,14 @@ pub enum SortBy {
 }
 
 impl SortBy {
+    /// The orders a folder offers.
     pub const ALL: [SortBy; 5] = [Self::Folder, Self::Name, Self::Type, Self::Size, Self::Modified];
+    /// The orders a collection or category offers.
+    pub const IN_GROUPS: [SortBy; 6] = [Self::Added, Self::Folder, Self::Name, Self::Type, Self::Size, Self::Modified];
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Added => "Added",
             Self::Folder => "Folder",
             Self::Name => "Name",
             Self::Type => "Type",
@@ -87,6 +115,7 @@ impl SortBy {
 
     pub fn key(self) -> &'static str {
         match self {
+            Self::Added => "added",
             Self::Folder => "folder",
             Self::Name => "name",
             Self::Type => "type",
@@ -96,51 +125,79 @@ impl SortBy {
     }
 
     pub fn from_key(key: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|sort| sort.key() == key)
+        Self::IN_GROUPS.into_iter().find(|sort| sort.key() == key)
+    }
+
+    /// Biggest, newest and most recently added first is what people look for.
+    pub fn starts_descending(self) -> bool {
+        matches!(self, Self::Size | Self::Modified | Self::Added)
     }
 }
 
 pub struct Library {
-    pub root: PathBuf,
-    /// The root as a string, without a trailing separator. Part of every cache key.
-    pub root_str: String,
+    pub roots: Vec<Root>,
+    /// Sorted by root, then lowercase path.
     pub entries: Vec<Entry>,
-    /// `dirs[0]` is the root.
+    /// `dirs[0]` is the top ("All folders"); `dirs[1 + n]` is root `n`.
     pub dirs: Vec<DirNode>,
     pub kind_totals: [usize; 3],
 }
 
+/// Where a file is, by its absolute path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Located {
+    Found(u32),
+    /// Under one of the roots, but not there (moved, renamed or deleted).
+    Missing,
+    /// In none of the roots.
+    Outside,
+}
+
 impl Library {
-    pub fn build(root: &Path, files: Vec<ScannedFile>) -> Self {
-        let root_str = root_string(root);
-        let mut entries: Vec<Entry> = files
-            .into_iter()
-            .map(|file| Entry {
+    /// Builds the library from each root's files, in the roots' order.
+    pub fn build(roots: Vec<(PathBuf, Vec<ScannedFile>)>) -> Self {
+        let mut library_roots = Vec::with_capacity(roots.len());
+        let mut entries = Vec::new();
+        for (index, (path, files)) in roots.into_iter().enumerate() {
+            let key = root_string(&path);
+            entries.extend(files.into_iter().map(|file| Entry {
+                root: index as u16,
                 lower: file.rel.to_lowercase(),
-                key: cache_key(&root_str, &file.rel, file.size, file.mtime, file.kind),
+                key: cache_key(&key, &file.rel, file.size, file.mtime, file.kind),
                 rel: file.rel,
                 kind: file.kind,
                 size: file.size,
                 mtime: file.mtime,
                 dir: 0,
-            })
-            .collect();
-        entries.sort_unstable_by(|a, b| a.lower.cmp(&b.lower));
+            }));
+            library_roots.push(Root { path_key: path_key(&path), name: folder_name(&path), path, key });
+        }
+        entries.sort_unstable_by(|a, b| (a.root, &a.lower).cmp(&(b.root, &b.lower)));
 
-        let mut dirs = vec![DirNode {
-            name: String::new(),
-            lower: String::new(),
-            parent: None,
+        let node = |name: String, lower: String, key: String, root: Option<u16>, parent: Option<u32>| DirNode {
+            name,
+            lower,
+            key,
+            root,
+            parent,
             children: Vec::new(),
             totals: [0; 3],
-        }];
-        let mut by_path: HashMap<String, u32> = HashMap::new();
+        };
+        let mut dirs = vec![node("All folders".to_owned(), String::new(), String::new(), None, None)];
+        for (index, root) in library_roots.iter().enumerate() {
+            dirs.push(node(root.name.clone(), String::new(), root.path_key.clone(), Some(index as u16), Some(0)));
+            dirs[0].children.push(1 + index as u32);
+        }
+        let mut by_path: HashMap<(u16, String), u32> = HashMap::new();
         let mut kind_totals = [0; 3];
         for entry in &mut entries {
             kind_totals[entry.kind.index()] += 1;
             let dir = match entry.rel.rfind('/') {
-                None => 0,
-                Some(slash) => dir_index(&entry.rel[..slash], &mut dirs, &mut by_path),
+                None => 1 + entry.root as u32,
+                Some(slash) => {
+                    let root = &library_roots[entry.root as usize];
+                    dir_index(entry.root, &root.path_key, &entry.rel[..slash], &mut dirs, &mut by_path)
+                }
             };
             entry.dir = dir;
             let mut node = Some(dir);
@@ -149,37 +206,84 @@ impl Library {
                 node = dirs[index as usize].parent;
             }
         }
-        for index in 0..dirs.len() {
+        // Folders by name; the roots stay in the order they were added.
+        for index in 1..dirs.len() {
             let mut children = std::mem::take(&mut dirs[index].children);
             children.sort_unstable_by(|&a, &b| dirs[a as usize].lower.cmp(&dirs[b as usize].lower));
             dirs[index].children = children;
         }
 
-        Self { root: root.to_path_buf(), root_str, entries, dirs, kind_totals }
+        Self { roots: library_roots, entries, dirs, kind_totals }
+    }
+
+    /// Where the folder tree starts: the top when there are several roots, the root itself when
+    /// there's one.
+    pub fn home(&self) -> u32 {
+        if self.roots.len() == 1 { 1 } else { 0 }
+    }
+
+    /// The folder node of root `index`.
+    pub fn root_dir(index: u16) -> u32 {
+        1 + index as u32
     }
 
     pub fn path_of(&self, entry: &Entry) -> PathBuf {
-        self.root.join(&entry.rel)
+        self.roots[entry.root as usize].path.join(&entry.rel)
     }
 
     /// Entries in `dir` (and below it) of the enabled kinds whose path contains every word of
     /// `query` (lowercase, whitespace separated).
     pub fn filter(&self, dir: u32, kinds: [bool; 3], query: &str) -> Vec<u32> {
-        let prefix = match self.dirs.get(dir as usize) {
-            Some(node) if !node.lower.is_empty() => format!("{}/", node.lower),
-            _ => String::new(),
+        self.filter_with(dir, kinds, query, |_, _| false)
+    }
+
+    /// `filter`, where a word missing from an entry's path can still match through `also`
+    /// (entry index, word): e.g. the names of the categories the entry is in.
+    pub fn filter_with(&self, dir: u32, kinds: [bool; 3], query: &str, also: impl Fn(u32, &str) -> bool) -> Vec<u32> {
+        let (root, prefix) = match self.dirs.get(dir as usize) {
+            Some(node) if !node.lower.is_empty() => (node.root, format!("{}/", node.lower)),
+            Some(node) => (node.root, String::new()),
+            None => (None, String::new()),
         };
         let words: Vec<&str> = query.split_whitespace().collect();
         self.entries
             .iter()
             .enumerate()
-            .filter(|(_, entry)| {
-                kinds[entry.kind.index()]
+            .filter(|(index, entry)| {
+                root.is_none_or(|root| entry.root == root)
                     && entry.lower.starts_with(&prefix)
-                    && words.iter().all(|word| entry.lower.contains(word))
+                    && self.matches(*index as u32, kinds, &words, &also)
             })
             .map(|(index, _)| index as u32)
             .collect()
+    }
+
+    /// Whether the entry is of an enabled kind and has every word in its path (or in `also`).
+    pub fn matches(&self, index: u32, kinds: [bool; 3], words: &[&str], also: &impl Fn(u32, &str) -> bool) -> bool {
+        let entry = &self.entries[index as usize];
+        kinds[entry.kind.index()] && words.iter().all(|word| entry.lower.contains(word) || also(index, word))
+    }
+
+    /// The entry of root `root` whose lowercase relative path is `lower`.
+    pub fn find(&self, root: u16, lower: &str) -> Option<u32> {
+        self.entries
+            .binary_search_by(|entry| (entry.root, entry.lower.as_str()).cmp(&(root, lower)))
+            .ok()
+            .map(|index| index as u32)
+    }
+
+    /// Where the file with this `path_key` is.
+    pub fn locate(&self, key: &str) -> Located {
+        for (index, root) in self.roots.iter().enumerate() {
+            let rel = key.strip_prefix(root.path_key.as_str()).and_then(|rest| rest.strip_prefix('/'));
+            if let Some(rel) = rel {
+                return match self.find(index as u16, rel) {
+                    Some(found) => Located::Found(found),
+                    None => Located::Missing,
+                };
+            }
+        }
+        Located::Outside
     }
 
     /// Puts `view` (indices into `entries`, in library order) in the given order. Ties keep the
@@ -189,7 +293,7 @@ impl Library {
         view.sort_unstable_by(|a, b| {
             let (x, y) = (entry(a), entry(b));
             let order = match by {
-                SortBy::Folder => std::cmp::Ordering::Equal,
+                SortBy::Folder | SortBy::Added => std::cmp::Ordering::Equal,
                 SortBy::Name => x.lower_name().cmp(y.lower_name()),
                 SortBy::Type => {
                     x.lower_extension().cmp(y.lower_extension()).then_with(|| x.lower_name().cmp(y.lower_name()))
@@ -199,18 +303,62 @@ impl Library {
             };
             let order = if descending { order.reverse() } else { order };
             // Library order breaks ties (and is the whole order for `Folder`).
-            order.then(if by == SortBy::Folder && descending { b.cmp(a) } else { a.cmp(b) })
+            let whole = matches!(by, SortBy::Folder | SortBy::Added);
+            order.then(if whole && descending { b.cmp(a) } else { a.cmp(b) })
         });
     }
 
-    /// Same set of files with the same versions: a rescan found nothing new.
+    /// Same folders and the same files in them, at the same versions: a rescan found nothing new.
     pub fn same_files_as(&self, other: &Library) -> bool {
-        self.entries.len() == other.entries.len()
+        self.roots.len() == other.roots.len()
+            && self.roots.iter().zip(&other.roots).all(|(a, b)| a.key == b.key)
+            && self.entries.len() == other.entries.len()
             && self.entries.iter().zip(&other.entries).all(|(a, b)| a.key == b.key)
     }
 
-    pub fn find_dir(&self, lower: &str) -> Option<u32> {
-        self.dirs.iter().position(|node| node.lower == lower).map(|index| index as u32)
+    /// The files of root `root` as a scan reports them, for building the library again with a
+    /// root added, removed or rescanned.
+    pub fn files_of(&self, root: u16) -> Vec<ScannedFile> {
+        let start = self.entries.partition_point(|entry| entry.root < root);
+        self.entries[start..]
+            .iter()
+            .take_while(|entry| entry.root == root)
+            .map(|entry| ScannedFile { rel: entry.rel.clone(), kind: entry.kind, size: entry.size, mtime: entry.mtime })
+            .collect()
+    }
+
+    /// The root `path` is, if it is one (by `root_string`).
+    pub fn root_index(&self, path: &Path) -> Option<u16> {
+        let key = root_string(path);
+        self.roots.iter().position(|root| root.key == key).map(|index| index as u16)
+    }
+
+    /// The entry's folder for showing in a list: relative to its root, after the root's name
+    /// when the library has several.
+    pub fn folder_label(&self, entry: &Entry) -> String {
+        let folder = entry.folder();
+        if self.roots.len() < 2 {
+            return folder.to_owned();
+        }
+        let root = &self.roots[entry.root as usize].name;
+        if folder.is_empty() { root.clone() } else { format!("{root}/{folder}") }
+    }
+
+    /// The folder whose `DirNode::key` (lowercase absolute path, "" for the top) is `key`.
+    pub fn find_dir(&self, key: &str) -> Option<u32> {
+        self.dirs.iter().position(|node| node.key == key).map(|index| index as u32)
+    }
+
+    /// The folder's path on disk (`None` for the top, which is all the roots).
+    pub fn dir_path(&self, dir: u32) -> Option<PathBuf> {
+        let chain = self.dir_chain(dir);
+        let root = self.dirs.get(dir as usize)?.root?;
+        // The chain is the top, the root, then the folders down to `dir`, each with its own name.
+        let mut path = self.roots[root as usize].path.clone();
+        for &index in chain.iter().skip(2) {
+            path.push(&self.dirs[index as usize].name);
+        }
+        Some(path)
     }
 
     /// `dir` and its parents, root first.
@@ -231,24 +379,33 @@ impl Library {
     }
 }
 
-fn dir_index(rel_dir: &str, dirs: &mut Vec<DirNode>, by_path: &mut HashMap<String, u32>) -> u32 {
-    if let Some(&index) = by_path.get(rel_dir) {
+fn dir_index(
+    root: u16,
+    root_key: &str,
+    rel_dir: &str,
+    dirs: &mut Vec<DirNode>,
+    by_path: &mut HashMap<(u16, String), u32>,
+) -> u32 {
+    if let Some(&index) = by_path.get(&(root, rel_dir.to_owned())) {
         return index;
     }
     let (parent, name) = match rel_dir.rfind('/') {
-        None => (0, rel_dir),
-        Some(slash) => (dir_index(&rel_dir[..slash], dirs, by_path), &rel_dir[slash + 1..]),
+        None => (Library::root_dir(root), rel_dir),
+        Some(slash) => (dir_index(root, root_key, &rel_dir[..slash], dirs, by_path), &rel_dir[slash + 1..]),
     };
     let index = dirs.len() as u32;
+    let lower = rel_dir.to_lowercase();
     dirs.push(DirNode {
         name: name.to_owned(),
-        lower: rel_dir.to_lowercase(),
+        key: format!("{root_key}/{lower}"),
+        lower,
+        root: Some(root),
         parent: Some(parent),
         children: Vec::new(),
         totals: [0; 3],
     });
     dirs[parent as usize].children.push(index);
-    by_path.insert(rel_dir.to_owned(), index);
+    by_path.insert((root, rel_dir.to_owned()), index);
     index
 }
 
@@ -260,14 +417,49 @@ pub fn root_string(root: &Path) -> String {
     if trimmed.ends_with(':') { text.into_owned() } else { trimmed.to_owned() }
 }
 
+/// A file's or folder's identity across the app: its absolute path with `/` separators, in
+/// lowercase, without a trailing separator. Favorites, collections and categories hold files by
+/// it, and folders are found again by it after a rescan.
+pub fn path_key(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase()
+}
+
+/// The last part of a path ("Resources"), or the whole path for a drive ("F:\").
+pub fn folder_name(path: &Path) -> String {
+    path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string())
+}
+
+/// Whether `inner` is `outer` or inside it.
+pub fn is_within(inner: &Path, outer: &Path) -> bool {
+    let (inner, outer) = (path_key(inner), path_key(outer));
+    inner == outer || inner.strip_prefix(&outer).is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Adds `path` to a library's folders, keeping each file in one root: a folder that's in the
+/// library already (a root, or inside one) isn't added, and `Err` has the root it's in. Otherwise
+/// it goes in, in place of any roots inside it, and `Ok` has those.
+pub fn add_root(roots: &mut Vec<PathBuf>, path: PathBuf) -> Result<Vec<PathBuf>, usize> {
+    if let Some(index) = roots.iter().position(|root| is_within(&path, root)) {
+        return Err(index);
+    }
+    let at = roots.iter().position(|root| is_within(root, &path)).unwrap_or(roots.len());
+    let (inside, kept): (Vec<PathBuf>, Vec<PathBuf>) = roots.drain(..).partition(|root| is_within(root, &path));
+    *roots = kept;
+    roots.insert(at, path);
+    Ok(inside)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn file(rel: &str, kind: AssetKind, size: u64, mtime: i64) -> ScannedFile {
+        ScannedFile { rel: rel.to_owned(), kind, size, mtime }
+    }
+
     fn library() -> Library {
-        let file = |rel: &str, kind, size, mtime| ScannedFile { rel: rel.to_owned(), kind, size, mtime };
-        Library::build(
-            Path::new("/assets"),
+        Library::build(vec![(
+            PathBuf::from("/assets"),
             vec![
                 file("ui/b.png", AssetKind::Image, 30, 3),
                 file("ui/A.png", AssetKind::Image, 10, 1),
@@ -275,7 +467,7 @@ mod tests {
                 file("sfx/deep/boom.ogg", AssetKind::Audio, 20, 5),
                 file("rock.fbx", AssetKind::Model, 40, 4),
             ],
-        )
+        )])
     }
 
     fn names(library: &Library, view: &[u32]) -> Vec<String> {
@@ -308,13 +500,84 @@ mod tests {
     #[test]
     fn folders_count_each_kind() {
         let library = library();
-        let sfx = library.find_dir("sfx").unwrap();
-        let deep = library.find_dir("sfx/deep").unwrap();
+        let sfx = library.find_dir("/assets/sfx").unwrap();
+        let deep = library.find_dir("/assets/sfx/deep").unwrap();
         assert_eq!(library.dirs[sfx as usize].totals, [0, 2, 0]);
         assert_eq!(library.dirs[0].total([true, false, true]), 3);
-        assert_eq!(library.dir_chain(deep), [0, sfx, deep]);
+        assert_eq!(library.home(), 1, "with one root, the tree starts at it");
+        assert_eq!(library.dir_chain(deep), [0, 1, sfx, deep]);
+        assert_eq!(library.dir_path(deep), Some(PathBuf::from("/assets/sfx/deep")));
+        assert_eq!(library.dir_path(1), Some(PathBuf::from("/assets")));
+        assert_eq!(library.dir_path(0), None, "the top is every root");
         assert_eq!(library.filter(sfx, [false, true, false], "boom").len(), 1);
         let by_key = library.index_by_key();
         assert!(library.entries.iter().enumerate().all(|(index, entry)| by_key[&entry.key] == index as u32));
+    }
+
+    #[test]
+    fn several_roots_make_one_library() {
+        let library = Library::build(vec![
+            (PathBuf::from("F:\\Resources"), vec![file("ui/a.png", AssetKind::Image, 1, 1)]),
+            (
+                PathBuf::from("D:\\Audio"),
+                vec![file("ui/a.png", AssetKind::Image, 1, 1), file("hit.wav", AssetKind::Audio, 1, 1)],
+            ),
+        ]);
+        assert_eq!(library.home(), 0, "with several roots, the tree starts above them");
+        assert_eq!(library.dirs[0].totals, [2, 1, 0]);
+        assert_eq!(library.dirs[Library::root_dir(1) as usize].name, "Audio");
+        // The same relative path in two roots is two files, in two folders.
+        let ui_resources = library.find_dir("f:/resources/ui").unwrap();
+        let ui_audio = library.find_dir("d:/audio/ui").unwrap();
+        assert_ne!(ui_resources, ui_audio);
+        assert_eq!(library.filter(ui_audio, [true; 3], "").len(), 1);
+        assert_eq!(library.filter(Library::root_dir(1), [true; 3], "").len(), 2);
+        assert_eq!(library.filter(0, [true; 3], "").len(), 3);
+        let (a, b) = (library.find(0, "ui/a.png").unwrap(), library.find(1, "ui/a.png").unwrap());
+        assert_ne!(
+            library.entries[a as usize].key, library.entries[b as usize].key,
+            "each root's files have their own cache keys"
+        );
+
+        let found = library.locate("d:/audio/hit.wav");
+        assert!(matches!(found, Located::Found(index) if library.entries[index as usize].rel == "hit.wav"));
+        assert_eq!(library.locate("d:/audio/gone.wav"), Located::Missing);
+        assert_eq!(library.locate("c:/elsewhere/x.png"), Located::Outside);
+        let hit = &library.entries[library.find(1, "hit.wav").unwrap() as usize];
+        assert_eq!(library.path_of(hit), Path::new("D:\\Audio").join("hit.wav"));
+        assert_eq!(library.folder_label(hit), "Audio");
+        assert_eq!(library.root_index(Path::new("D:\\Audio\\")), Some(1));
+
+        // Taking a root's files back out gives what built it, so the library can be rebuilt
+        // without it, or with it rescanned.
+        let audio: Vec<String> = library.files_of(1).into_iter().map(|file| file.rel).collect();
+        assert_eq!(audio, ["hit.wav", "ui/a.png"]);
+        let without = Library::build(vec![(PathBuf::from("F:\\Resources"), library.files_of(0))]);
+        assert_eq!(without.entries.len(), 1);
+        assert!(!without.same_files_as(&library));
+        let again = Library::build(vec![
+            (PathBuf::from("F:\\Resources"), library.files_of(0)),
+            (PathBuf::from("D:\\Audio"), library.files_of(1)),
+        ]);
+        assert!(again.same_files_as(&library));
+    }
+
+    #[test]
+    fn each_file_is_in_one_root() {
+        assert!(is_within(Path::new("F:/resources/2D"), Path::new("F:\\Resources")));
+        assert!(is_within(Path::new("F:\\Resources\\"), Path::new("f:\\resources")));
+        assert!(is_within(Path::new("F:\\Resources"), Path::new("F:\\")));
+        assert!(!is_within(Path::new("F:\\Resources2"), Path::new("F:\\Resources")));
+        assert!(!is_within(Path::new("F:\\Resources"), Path::new("F:\\Resources\\2D")));
+        assert!(!is_within(Path::new("D:\\A"), Path::new("F:\\A")));
+
+        let mut roots = vec![PathBuf::from("F:\\Resources")];
+        assert_eq!(add_root(&mut roots, PathBuf::from("D:\\Audio")), Ok(vec![]));
+        assert_eq!(add_root(&mut roots, PathBuf::from("f:\\resources")), Err(0), "already a root");
+        assert_eq!(add_root(&mut roots, PathBuf::from("F:\\Resources\\2D")), Err(0), "inside a root");
+        assert_eq!(roots.len(), 2);
+        // A folder holding roots takes their place (where the first of them was).
+        assert_eq!(add_root(&mut roots, PathBuf::from("F:\\")), Ok(vec![PathBuf::from("F:\\Resources")]));
+        assert_eq!(roots, [PathBuf::from("F:\\"), PathBuf::from("D:\\Audio")]);
     }
 }

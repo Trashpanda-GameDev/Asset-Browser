@@ -11,11 +11,13 @@ use egui_phosphor::regular as icon;
 
 use crate::asset::AssetKind;
 use crate::audio::NowPlaying;
+use crate::groups::{GroupKind, Groups, Membership};
 use crate::library::{Entry, Library, SortBy};
 
 use super::format::{format_age, format_size, format_time, grouped};
 use super::image_view::Backdrop;
 use super::mode::{Mode, Selection};
+use super::organize::{self, DraggedAssets, GroupCommand, Targets};
 use super::previews::{CachedTexture, Previews};
 use super::sound::draw_waveform;
 use super::{theme, widgets};
@@ -40,6 +42,39 @@ pub struct Browse<'a> {
     pub backdrop: Backdrop,
     /// Bring this position in `view` into sight (after moving with the keyboard).
     pub scroll_to: Option<usize>,
+    pub groups: &'a Groups,
+    pub membership: &'a Membership,
+    /// The group being browsed, if it's not a folder.
+    pub viewing: Option<i64>,
+}
+
+impl Browse<'_> {
+    /// What a click, drag or menu on `index` acts on: the whole selection if it's part of it.
+    fn targets(&self, index: u32) -> Vec<u32> {
+        if self.selection.contains(index) {
+            self.view.iter().copied().filter(|&i| self.selection.contains(i)).collect()
+        } else {
+            vec![index]
+        }
+    }
+
+    /// Lets the asset be dragged onto a collection or category (with the rest of the selection).
+    fn drag_source(&self, index: u32, response: &egui::Response) {
+        if response.drag_started() {
+            let paths =
+                self.targets(index).iter().map(|&i| self.library.path_of(&self.library.entries[i as usize])).collect();
+            response.dnd_set_drag_payload(DraggedAssets(paths));
+        }
+    }
+
+    /// The categories the entry is in, for its dots and chips.
+    fn categories(&self, index: u32) -> impl Iterator<Item = &crate::groups::Group> {
+        self.membership
+            .groups_of(index)
+            .iter()
+            .filter_map(|&id| self.groups.get(id))
+            .filter(|group| group.kind == GroupKind::Category)
+    }
 }
 
 /// How previews are drawn: the screen's pixel density and what goes behind transparent pictures.
@@ -64,6 +99,8 @@ pub struct BrowseOutput {
     pub secondary_clicked: Option<u32>,
     pub menu: Option<MenuAction>,
     pub sort_clicked: Option<SortBy>,
+    /// Favorites, collections and categories asked for.
+    pub commands: Vec<GroupCommand>,
     /// Assets per row and rows per screen, for the arrow and page keys.
     pub columns: usize,
     pub page_rows: usize,
@@ -170,9 +207,12 @@ pub fn list(ui: &mut Ui, browse: &Browse<'_>, previews: &mut Previews, scroll: &
         for position in row_range {
             let index = browse.view[position];
             let entry = &browse.library.entries[index as usize];
-            let (rect, response) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::click());
+            let (rect, response) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::click_and_drag());
             let row = ListRow { browse, entry, index, previews, look };
-            row.show(ui, rect, &response, &layout);
+            if let Some(command) = row.show(ui, rect, &response, &layout) {
+                output.commands.push(command);
+            }
+            browse.drag_source(index, &response);
             item_response(browse, index, &response, &mut output);
         }
     });
@@ -220,7 +260,7 @@ fn item_response(browse: &Browse<'_>, index: u32, response: &egui::Response, out
     }
     let count = if browse.selection.contains(index) { browse.selection.len() } else { 1 };
     response.context_menu(|ui| {
-        ui.set_min_width(180.0);
+        ui.set_min_width(190.0);
         if ui.button(format!("{}  Open", icon::ARROW_SQUARE_OUT)).clicked() {
             output.menu = Some(MenuAction::Open);
             ui.close();
@@ -238,7 +278,38 @@ fn item_response(browse: &Browse<'_>, index: u32, response: &egui::Response, out
             output.menu = Some(MenuAction::CopyPaths);
             ui.close();
         }
+        ui.separator();
+        let targets = browse.targets(index);
+        if let Some(command) = organize::menu_items(ui, browse.groups, browse.membership, &targets, browse.viewing) {
+            output.commands.push(command);
+        }
     });
+}
+
+/// The favourite star in a tile's or row's corner: filled when it's a favourite, an outline to
+/// click while the pointer is over the asset. Clicking it stars that one asset.
+fn star_button(ui: &Ui, browse: &Browse<'_>, index: u32, center: Pos2, show_outline: bool) -> Option<GroupCommand> {
+    let favorite = browse.membership.is_favorite(index);
+    let rect = Rect::from_center_size(center, vec2(22.0, 22.0));
+    let response = ui.interact(rect, egui::Id::new(("star", index)), Sense::click());
+    if !favorite && !show_outline && !response.hovered() {
+        return None;
+    }
+    let painter = ui.painter();
+    let (family, color) = if favorite {
+        (theme::filled_icons(), theme::FAVORITE)
+    } else if response.hovered() {
+        (egui::FontFamily::Proportional, theme::FAVORITE)
+    } else {
+        (egui::FontFamily::Proportional, theme::TEXT.gamma_multiply(0.7))
+    };
+    // A dark halo keeps the star readable over light pictures.
+    painter.circle_filled(rect.center(), 10.0, Color32::from_black_alpha(if favorite { 110 } else { 80 }));
+    painter.text(rect.center(), Align2::CENTER_CENTER, icon::STAR, FontId::new(14.0, family), color);
+    let tip = if favorite { "Remove from Favorites (F)" } else { "Add to Favorites (F)" };
+    let clicked = response.on_hover_text(tip).clicked();
+    let path = browse.library.path_of(&browse.library.entries[index as usize]);
+    clicked.then(|| GroupCommand::ToggleFavorite(Targets::Paths(vec![path])))
 }
 
 struct Tile<'a, 'b> {
@@ -252,7 +323,7 @@ struct Tile<'a, 'b> {
 impl Tile<'_, '_> {
     fn show(self, ui: &mut Ui, rect: Rect, output: &mut BrowseOutput) {
         let entry = self.entry;
-        let response = ui.interact(rect, egui::Id::new(("tile", entry.key)), Sense::click());
+        let response = ui.interact(rect, egui::Id::new(("tile", entry.key)), Sense::click_and_drag());
         let selected = self.browse.selection.contains(self.index);
         let focused = self.browse.selection.focus == Some(self.index);
         let painter = ui.painter();
@@ -291,8 +362,29 @@ impl Tile<'_, '_> {
         let label_pos = pos2(rect.center().x - galley.size().x / 2.0, card.bottom() + 5.0);
         painter.galley(label_pos, galley, color);
 
+        // Category dots along the bottom of the picture.
+        let mut categories = Vec::new();
+        for (n, group) in self.browse.categories(self.index).enumerate() {
+            if n < 5 {
+                let center = pos2(card.left() + 11.0 + n as f32 * 11.0, card.bottom() - 11.0);
+                painter.circle_filled(center, 5.0, Color32::from_black_alpha(120));
+                painter.circle_filled(center, 3.5, theme::category_color(group.color));
+            }
+            categories.push(group.name.as_str());
+        }
+
+        let pointer_over = response.contains_pointer();
+        let star_center = card.right_top() + vec2(-15.0, 15.0);
+        if let Some(command) = star_button(ui, self.browse, self.index, star_center, pointer_over) {
+            output.commands.push(command);
+        }
+        self.browse.drag_source(self.index, &response);
         item_response(self.browse, self.index, &response, output);
-        response.on_hover_text_at_pointer(&entry.rel);
+        if categories.is_empty() {
+            response.on_hover_text_at_pointer(&entry.rel);
+        } else {
+            response.on_hover_text_at_pointer(format!("{}\n{}", entry.rel, categories.join(" · ")));
+        }
     }
 }
 
@@ -405,6 +497,8 @@ pub fn fit_rect(area: Rect, w: f32, h: f32, pixel_exact: bool, pixels_per_point:
 /// triangle count, and so on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Column {
+    /// The favourite star.
+    Star,
     Name,
     Type,
     Details,
@@ -413,6 +507,7 @@ pub enum Column {
     Length,
     Format,
     Triangles,
+    Categories,
     Folder,
     Size,
     Modified,
@@ -426,6 +521,8 @@ enum Width {
 impl Column {
     fn label(self) -> &'static str {
         match self {
+            Self::Star => "",
+            Self::Categories => "Categories",
             Self::Name => "Name",
             Self::Type => "Type",
             Self::Details => "Details",
@@ -442,6 +539,8 @@ impl Column {
 
     fn width(self) -> Width {
         match self {
+            Self::Star => Width::Fixed(26.0),
+            Self::Categories => Width::Fixed(150.0),
             Self::Name => Width::Flex(1.0),
             Self::Folder => Width::Flex(0.8),
             Self::Type => Width::Fixed(64.0),
@@ -476,10 +575,10 @@ impl Column {
 pub fn columns(mode: Mode) -> &'static [Column] {
     use Column::*;
     match mode {
-        Mode::All => &[Name, Type, Details, Folder, Size, Modified],
-        Mode::Images => &[Name, Type, Dimensions, Folder, Size, Modified],
-        Mode::Sounds => &[Name, Waveform, Length, Format, Folder, Size, Modified],
-        Mode::Models => &[Name, Type, Triangles, Details, Folder, Size, Modified],
+        Mode::All => &[Star, Name, Type, Details, Categories, Folder, Size, Modified],
+        Mode::Images => &[Star, Name, Type, Dimensions, Categories, Folder, Size, Modified],
+        Mode::Sounds => &[Star, Name, Waveform, Length, Format, Categories, Folder, Size, Modified],
+        Mode::Models => &[Star, Name, Type, Triangles, Details, Categories, Folder, Size, Modified],
     }
 }
 
@@ -490,10 +589,18 @@ fn column_layout(mode: Mode, width: f32) -> Vec<(Column, Range<f32>)> {
     let fixed = |columns: &[Column]| -> f32 {
         columns.iter().map(|c| if let Width::Fixed(w) = c.width() { w } else { 0.0 }).sum::<f32>()
     };
-    while fixed(&shown) + 260.0 > width && shown.len() > 2 {
-        let drop = [Column::Folder, Column::Modified, Column::Details, Column::Format, Column::Type, Column::Size]
-            .into_iter()
-            .find(|column| shown.contains(column));
+    while fixed(&shown) + 260.0 > width && shown.len() > 3 {
+        let drop = [
+            Column::Folder,
+            Column::Categories,
+            Column::Modified,
+            Column::Details,
+            Column::Format,
+            Column::Type,
+            Column::Size,
+        ]
+        .into_iter()
+        .find(|column| shown.contains(column));
         match drop {
             Some(column) => shown.retain(|c| *c != column),
             None => break,
@@ -533,8 +640,16 @@ struct ListRow<'a, 'b> {
 }
 
 impl ListRow<'_, '_> {
-    fn show(self, ui: &Ui, rect: Rect, response: &egui::Response, layout: &[(Column, Range<f32>)]) {
+    /// Draws the row; returns what its star asked for.
+    fn show(
+        self,
+        ui: &Ui,
+        rect: Rect,
+        response: &egui::Response,
+        layout: &[(Column, Range<f32>)],
+    ) -> Option<GroupCommand> {
         let entry = self.entry;
+        let mut command = None;
         let painter = ui.painter();
         let selected = self.browse.selection.contains(self.index);
         let row = rect.shrink2(vec2(4.0, 1.0));
@@ -560,6 +675,40 @@ impl ListRow<'_, '_> {
                 painter.text(anchor, align, text, FontId::proportional(12.5), theme::TEXT_WEAK);
             };
             match column {
+                Column::Star => {
+                    command = star_button(ui, self.browse, self.index, cell.center(), response.contains_pointer());
+                }
+                Column::Categories => {
+                    let mut x = cell.left() + 4.0;
+                    let font = FontId::proportional(11.5);
+                    for group in self.browse.categories(self.index) {
+                        let galley = painter.layout_no_wrap(group.name.clone(), font.clone(), theme::TEXT_WEAK);
+                        let width = galley.size().x + 20.0;
+                        if x + width > cell.right() - 4.0 {
+                            painter.text(
+                                pos2(x, cell.center().y),
+                                Align2::LEFT_CENTER,
+                                "…",
+                                font.clone(),
+                                theme::TEXT_FAINT,
+                            );
+                            break;
+                        }
+                        let pill = Rect::from_min_size(pos2(x, cell.center().y - 9.0), vec2(width, 18.0));
+                        painter.rect_filled(pill, CornerRadius::same(9), theme::CARD_HOVER);
+                        painter.circle_filled(
+                            pos2(pill.left() + 8.0, pill.center().y),
+                            3.5,
+                            theme::category_color(group.color),
+                        );
+                        painter.galley(
+                            pos2(pill.left() + 15.0, pill.center().y - galley.size().y / 2.0),
+                            galley,
+                            theme::TEXT_WEAK,
+                        );
+                        x += width + 4.0;
+                    }
+                }
                 Column::Name => {
                     let thumb = Rect::from_min_size(pos2(cell.left() + 2.0, cell.top() + 4.0), vec2(26.0, 26.0));
                     painter.rect_filled(thumb, CornerRadius::same(4), theme::CARD);
@@ -633,7 +782,7 @@ impl ListRow<'_, '_> {
                 ),
                 Column::Folder => {
                     let mut job = egui::text::LayoutJob::simple_singleline(
-                        entry.folder().to_owned(),
+                        self.browse.library.folder_label(entry),
                         FontId::proportional(12.5),
                         theme::TEXT_FAINT,
                     );
@@ -655,6 +804,7 @@ impl ListRow<'_, '_> {
             }
         }
         response.clone().on_hover_text_at_pointer(&entry.rel);
+        command
     }
 
     /// One line about the asset, whatever its kind.

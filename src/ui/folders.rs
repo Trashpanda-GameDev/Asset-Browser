@@ -1,12 +1,17 @@
-//! The folder tree. Counts follow the mode, and folders with nothing of the mode's kind are left
-//! out. Only the rows on screen are drawn, however many folders are open.
+//! The folder tree, and the header's list of the library's folders. Counts follow the mode, and
+//! folders with nothing of the mode's kind are left out. Only the rows on screen are drawn,
+//! however many folders are open.
+//!
+//! With one folder in the library the tree starts at it; with several, at "All folders" above
+//! them. Neither changes anything itself: they report a `FolderAction` for the app to carry out.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 
-use eframe::egui::{self, Align2, FontId, Rect, Sense, Ui, pos2, vec2};
+use eframe::egui::{self, Align2, FontId, Rect, Response, Sense, Ui, pos2, vec2};
 use egui_phosphor::regular as icon;
 
-use crate::library::Library;
+use crate::library::{DirNode, Library};
 
 use super::format::grouped;
 use super::theme;
@@ -14,10 +19,29 @@ use super::theme;
 const ROW_HEIGHT: f32 = 26.0;
 const INDENT: f32 = 14.0;
 
-/// Which folders are open, by lowercase path. The root is always open.
+/// What the user asked of a folder.
+pub enum FolderAction {
+    /// Browse it.
+    Select(u32),
+    /// Open it in the file manager.
+    Open(u32),
+    CopyPath(u32),
+    /// Choose a folder to add to the library.
+    AddRoot,
+    /// Take one of the library's folders out (its files are untouched).
+    RemoveRoot(PathBuf),
+}
+
+/// Which folders are open, by `DirNode::key`, so it survives rescans and folders coming and
+/// going. The tree's first row is always open; the library's folders start open.
 #[derive(Default)]
 pub struct FolderTree {
     expanded: HashSet<String>,
+    /// The library's folders that were closed.
+    collapsed: HashSet<String>,
+    /// The library's folders that couldn't be read at their last scan, by key: they show what
+    /// was found there before.
+    pub unreadable: HashSet<String>,
 }
 
 struct Row {
@@ -26,19 +50,45 @@ struct Row {
     has_children: bool,
 }
 
+/// One of the library's folders (rather than a folder inside one, or the top).
+fn is_root(node: &DirNode) -> bool {
+    node.root.is_some() && node.lower.is_empty()
+}
+
 impl FolderTree {
+    fn is_open(&self, library: &Library, dir: u32) -> bool {
+        let node = &library.dirs[dir as usize];
+        if dir == library.home() {
+            true
+        } else if is_root(node) {
+            !self.collapsed.contains(&node.key)
+        } else {
+            self.expanded.contains(&node.key)
+        }
+    }
+
+    fn set_open(&mut self, library: &Library, dir: u32, open: bool) {
+        let node = &library.dirs[dir as usize];
+        let (set, insert) = if is_root(node) { (&mut self.collapsed, !open) } else { (&mut self.expanded, open) };
+        if insert {
+            set.insert(node.key.clone());
+        } else {
+            set.remove(&node.key);
+        }
+    }
+
     /// Opens every folder above `dir`, so it can be seen.
     pub fn reveal(&mut self, library: &Library, dir: u32) {
         let chain = library.dir_chain(dir);
         for &index in &chain[..chain.len().saturating_sub(1)] {
-            self.expanded.insert(library.dirs[index as usize].lower.clone());
+            self.set_open(library, index, true);
         }
     }
 
-    /// Draws the tree; returns the folder clicked.
-    pub fn show(&mut self, ui: &mut Ui, library: &Library, kinds: [bool; 3], selected: u32) -> Option<u32> {
+    /// Draws the tree; returns what was asked of a folder.
+    pub fn show(&mut self, ui: &mut Ui, library: &Library, kinds: [bool; 3], selected: u32) -> Option<FolderAction> {
         let rows = self.rows(library, kinds);
-        let mut clicked = None;
+        let mut action = None;
         let mut toggled = None;
         // `show_rows` adds the item spacing to every row: set it to nothing before, not inside.
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -52,7 +102,7 @@ impl FolderTree {
                     let (rect, response) =
                         ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
                     let is_selected = row.dir == selected;
-                    let open = row.dir == 0 || self.expanded.contains(&node.lower);
+                    let open = self.is_open(library, row.dir);
                     let painter = ui.painter();
                     let row_rect = rect.shrink2(vec2(4.0, 1.0));
                     if is_selected {
@@ -64,7 +114,7 @@ impl FolderTree {
                     let y = rect.center().y;
                     // The caret opens and closes; the rest of the row picks the folder.
                     let caret = Rect::from_center_size(pos2(x + 6.0, y), vec2(18.0, ROW_HEIGHT));
-                    if row.has_children && row.dir != 0 {
+                    if row.has_children && row.dir != library.home() {
                         let caret_response = ui.interact(caret, ui.id().with(("caret", row.dir)), Sense::click());
                         let color = if caret_response.hovered() { theme::TEXT } else { theme::TEXT_FAINT };
                         let glyph = if open { icon::CARET_DOWN } else { icon::CARET_RIGHT };
@@ -74,14 +124,25 @@ impl FolderTree {
                         }
                     }
                     x += 16.0;
-                    let folder_glyph = if row.dir == 0 {
+                    let unreadable = is_root(node) && self.unreadable.contains(&node.key);
+                    let folder_glyph = if node.root.is_none() {
+                        icon::FOLDERS
+                    } else if unreadable {
+                        icon::WARNING_CIRCLE
+                    } else if is_root(node) {
                         icon::HARD_DRIVES
                     } else if open && row.has_children {
                         icon::FOLDER_OPEN
                     } else {
                         icon::FOLDER
                     };
-                    let folder_color = if is_selected { theme::ACCENT } else { theme::TEXT_WEAK };
+                    let folder_color = if unreadable {
+                        theme::ERROR
+                    } else if is_selected {
+                        theme::ACCENT
+                    } else {
+                        theme::TEXT_WEAK
+                    };
                     painter.text(
                         pos2(x, y),
                         Align2::LEFT_CENTER,
@@ -94,10 +155,12 @@ impl FolderTree {
                     let count = grouped(node.total(kinds) as usize);
                     let count_galley = painter.layout_no_wrap(count, FontId::proportional(11.5), theme::TEXT_FAINT);
                     let count_x = rect.right() - 12.0 - count_galley.size().x;
-                    let name = if row.dir == 0 { root_name(library) } else { node.name.clone() };
                     let name_color = if is_selected { theme::TEXT } else { theme::TEXT.gamma_multiply(0.88) };
-                    let mut job =
-                        egui::text::LayoutJob::simple_singleline(name, FontId::proportional(13.0), name_color);
+                    let mut job = egui::text::LayoutJob::simple_singleline(
+                        node.name.clone(),
+                        FontId::proportional(13.0),
+                        name_color,
+                    );
                     job.wrap = egui::text::TextWrapping {
                         max_width: (count_x - x - 8.0).max(10.0),
                         max_rows: 1,
@@ -109,44 +172,58 @@ impl FolderTree {
                     painter.galley(pos2(count_x, y - count_galley.size().y / 2.0), count_galley, theme::TEXT_FAINT);
 
                     if response.clicked() && toggled.is_none() {
-                        clicked = Some(row.dir);
+                        action = Some(FolderAction::Select(row.dir));
                     }
                     if response.double_clicked() && row.has_children {
                         toggled = Some(row.dir);
                     }
-                    response.on_hover_text(if row.dir == 0 {
-                        library.root.display().to_string()
-                    } else {
-                        node.name.clone()
+                    if let Some(asked) = folder_menu(&response, library, row.dir) {
+                        action = Some(asked);
+                    }
+                    response.on_hover_text(match node.root {
+                        None => format!("Everything in the library's {} folders", library.roots.len()),
+                        Some(root) if is_root(node) => {
+                            let path = crate::platform::native(&library.roots[root as usize].path);
+                            if unreadable {
+                                format!(
+                                    "{path}
+Can't be read now (unplugged, moved or renamed?). Showing what was found there last time."
+                                )
+                            } else {
+                                path
+                            }
+                        }
+                        Some(_) => node.name.clone(),
                     });
                 }
             },
         );
         if let Some(dir) = toggled {
-            let lower = &library.dirs[dir as usize].lower;
-            if !self.expanded.remove(lower) {
-                self.expanded.insert(lower.clone());
-            }
+            let open = self.is_open(library, dir);
+            self.set_open(library, dir, !open);
         }
-        if let Some(dir) = clicked {
+        if let Some(FolderAction::Select(dir)) = action {
             // Picking a closed folder opens it too.
-            self.expanded.insert(library.dirs[dir as usize].lower.clone());
+            self.set_open(library, dir, true);
         }
-        clicked
+        action
     }
 
     /// The folders to show, in order, with nothing of the mode's kinds left out.
     fn rows(&self, library: &Library, kinds: [bool; 3]) -> Vec<Row> {
+        let home = library.home();
         let shown = |dir: u32| library.dirs[dir as usize].total(kinds) > 0;
         let mut rows = Vec::new();
-        let mut stack = vec![(0u32, 0usize)];
+        let mut stack = vec![(home, 0usize)];
         while let Some((dir, depth)) = stack.pop() {
             let node = &library.dirs[dir as usize];
-            let has_children = node.children.iter().any(|&child| shown(child));
+            // A folder of the library shows even when empty (just added, or still scanning).
+            let child_shown = |child: u32| shown(child) || is_root(&library.dirs[child as usize]);
+            let has_children = node.children.iter().any(|&child| child_shown(child));
             rows.push(Row { dir, depth, has_children });
-            if dir == 0 || self.expanded.contains(&node.lower) {
+            if self.is_open(library, dir) {
                 // Reversed onto the stack, so they come out in order.
-                for &child in node.children.iter().rev().filter(|&&child| shown(child)) {
+                for &child in node.children.iter().rev().filter(|&&child| child_shown(child)) {
                     stack.push((child, depth + 1));
                 }
             }
@@ -155,11 +232,90 @@ impl FolderTree {
     }
 }
 
-/// The root folder's own name ("Resources" for F:\Resources).
-pub fn root_name(library: &Library) -> String {
-    library
-        .root
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| library.root.display().to_string())
+/// A folder's right-click menu.
+fn folder_menu(response: &Response, library: &Library, dir: u32) -> Option<FolderAction> {
+    let node = &library.dirs[dir as usize];
+    let mut action = None;
+    response.context_menu(|ui| {
+        ui.set_min_width(190.0);
+        if node.root.is_some() {
+            if ui.button(format!("{}  Open folder", icon::ARROW_SQUARE_OUT)).clicked() {
+                action = Some(FolderAction::Open(dir));
+                ui.close();
+            }
+            if ui.button(format!("{}  Copy path", icon::COPY)).clicked() {
+                action = Some(FolderAction::CopyPath(dir));
+                ui.close();
+            }
+            ui.separator();
+        }
+        if ui.button(format!("{}  Add a folder…", icon::FOLDER_PLUS)).clicked() {
+            action = Some(FolderAction::AddRoot);
+            ui.close();
+        }
+        if let Some(root) = node.root.filter(|_| is_root(node)) {
+            let path = library.roots[root as usize].path.clone();
+            let remove = ui
+                .button(format!("{}  Remove from library", icon::FOLDER_MINUS))
+                .on_hover_text("The files stay where they are");
+            if remove.clicked() {
+                action = Some(FolderAction::RemoveRoot(path));
+                ui.close();
+            }
+        }
+    });
+    action
+}
+
+/// The header's list of the library's folders: each to go to or take out, and one to add.
+pub fn library_menu(ui: &mut Ui, library: &Library, kinds: [bool; 3]) -> Option<FolderAction> {
+    let mut action = None;
+    ui.set_width(300.0);
+    for (index, root) in library.roots.iter().enumerate() {
+        let dir = Library::root_dir(index as u16);
+        let (rect, response) = ui.allocate_exact_size(vec2(300.0, 30.0), Sense::click());
+        let remove_rect = Rect::from_center_size(pos2(rect.right() - 14.0, rect.center().y), vec2(22.0, 22.0));
+        let remove = ui.interact(remove_rect, response.id.with("remove"), Sense::click());
+        let painter = ui.painter();
+        if response.hovered() || remove.hovered() {
+            painter.rect_filled(rect, theme::RADIUS, theme::CARD_HOVER);
+        }
+        let y = rect.center().y;
+        painter.text(
+            pos2(rect.left() + 18.0, y),
+            Align2::CENTER_CENTER,
+            icon::HARD_DRIVES,
+            FontId::proportional(15.0),
+            theme::TEXT_WEAK,
+        );
+        let count = grouped(library.dirs[dir as usize].total(kinds) as usize);
+        let count = painter.layout_no_wrap(count, FontId::proportional(11.5), theme::TEXT_FAINT);
+        let count_x = remove_rect.left() - 6.0 - count.size().x;
+        let mut job =
+            egui::text::LayoutJob::simple_singleline(root.name.clone(), FontId::proportional(13.0), theme::TEXT);
+        job.wrap = egui::text::TextWrapping {
+            max_width: (count_x - rect.left() - 44.0).max(10.0),
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('…'),
+        };
+        let name = painter.layout_job(job);
+        painter.galley(pos2(rect.left() + 34.0, y - name.size().y / 2.0), name, theme::TEXT);
+        painter.galley(pos2(count_x, y - count.size().y / 2.0), count, theme::TEXT_FAINT);
+        let x_color = if remove.hovered() { theme::TEXT } else { theme::TEXT_FAINT };
+        painter.text(remove_rect.center(), Align2::CENTER_CENTER, icon::X, FontId::proportional(12.0), x_color);
+        if remove.on_hover_text("Remove from library (the files stay where they are)").clicked() {
+            action = Some(FolderAction::RemoveRoot(root.path.clone()));
+            ui.close();
+        } else if response.on_hover_text(crate::platform::native(&root.path)).clicked() {
+            action = Some(FolderAction::Select(dir));
+            ui.close();
+        }
+    }
+    ui.separator();
+    if ui.button(format!("{}  Add a folder…", icon::FOLDER_PLUS)).clicked() {
+        action = Some(FolderAction::AddRoot);
+        ui.close();
+    }
+    action
 }
