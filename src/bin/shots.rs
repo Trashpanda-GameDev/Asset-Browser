@@ -1,9 +1,11 @@
 //! Screenshots of the window, to check the look by eye: the main window, each settings page and
-//! "What's new", saved as PNGs. It's the app itself, opening the library as usual, and it closes
-//! once it's done (about 15 s).
+//! "What's new", then the main window again at the end, saved as PNGs. It's the app itself,
+//! opening the library as usual, and it closes once it's done (about 18 s). A folder given after
+//! the first is added to the library and shown, as on the app's command line; what changes there
+//! during the run shows in the last picture.
 //!
 //! ```text
-//! cargo run --release --bin shots -- <folder to save them in>
+//! cargo run --release --bin shots -- <folder to save them in> [<folder to show>]
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -21,7 +23,7 @@ enum Step {
 }
 
 /// When (seconds after the start) and what.
-const PLAN: [(f32, Step); 16] = [
+const PLAN: [(f32, Step); 17] = [
     (5.0, Step::Shot("main")),
     (5.5, Step::Settings(Some(Page::Updates))),
     (6.5, Step::Shot("settings-updates")),
@@ -37,7 +39,8 @@ const PLAN: [(f32, Step); 16] = [
     (15.0, Step::WhatsNew(Some(true))),
     (16.0, Step::Shot("every-version")),
     (16.5, Step::WhatsNew(None)),
-    (17.0, Step::Quit),
+    (17.5, Step::Shot("main-end")),
+    (18.0, Step::Quit),
 ];
 
 struct Shots {
@@ -103,6 +106,7 @@ fn save(path: &Path, image: &egui::ColorImage) {
 
 fn main() -> eframe::Result {
     let out = std::env::args_os().nth(1).map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let show = std::env::args_os().nth(2).map(PathBuf::from);
     let _ = std::fs::create_dir_all(&out);
     let options = eframe::NativeOptions {
         // Not focused when it opens, so keys meant for another window don't land in this one.
@@ -115,6 +119,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Asset Browser screenshots",
         options,
-        Box::new(move |cc| Ok(Box::new(Shots { app: BrowserApp::new(cc, None), out, start: Instant::now(), next: 0 }))),
+        Box::new(move |cc| Ok(Box::new(Shots { app: BrowserApp::new(cc, show), out, start: Instant::now(), next: 0 }))),
     )
 }

@@ -40,6 +40,7 @@ use crate::ui::updates::UpdateAction;
 use crate::ui::whats_new::WhatsNew;
 use crate::ui::{theme, widgets};
 use crate::updates::Updates;
+use crate::watch::Watch;
 use crate::{db, diag, platform, scan};
 
 pub use crate::ui::format::{format_size, format_time, grouped};
@@ -141,6 +142,8 @@ pub struct BrowserApp {
     scan_rx: Receiver<ScanDone>,
     /// Scans running.
     scans: usize,
+    /// Told by the OS when files change in the library's folders, to rescan them.
+    watch: Watch,
     scan_started: Instant,
     last_scan: Option<LastScan>,
 
@@ -213,6 +216,10 @@ impl BrowserApp {
             let ctx = cc.egui_ctx.clone();
             Updates::start(std::sync::Arc::new(move || ctx.request_repaint()))
         };
+        let watch = {
+            let ctx = cc.egui_ctx.clone();
+            Watch::start(move |after| ctx.request_repaint_after(after))
+        };
 
         let mut app = Self {
             ctx: cc.egui_ctx.clone(),
@@ -228,6 +235,7 @@ impl BrowserApp {
             scan_tx,
             scan_rx,
             scans: 0,
+            watch,
             scan_started: Instant::now(),
             last_scan: None,
             mode: Mode::All,
@@ -311,7 +319,8 @@ impl BrowserApp {
         {
             self.whats_new = Some(WhatsNew::since(seen, current.clone()));
         }
-        if let Err(err) = db::set_setting(conn, SETTING_WHATS_NEW, &current.to_string()) {
+        let remembered = changelog::remembered(seen.as_deref(), &current);
+        if let Err(err) = db::set_setting(conn, SETTING_WHATS_NEW, &remembered.to_string()) {
             diag::report("Saving settings", err);
         }
     }
@@ -595,6 +604,16 @@ impl BrowserApp {
                 self.scans += 1;
             }
             Err(err) => diag::report("Starting the scan", err),
+        }
+    }
+
+    /// Rescans the folders whose files changed while the app was open, once the changes settle.
+    fn poll_watch(&mut self, ctx: &egui::Context) {
+        self.watch.sync(&self.roots);
+        let changed = self.watch.poll();
+        self.scan(changed);
+        if let Some(due) = self.watch.next_due() {
+            ctx.request_repaint_after(due);
         }
     }
 
@@ -1810,8 +1829,8 @@ impl BrowserApp {
                     ui.ctx().request_repaint_after(Duration::from_millis(100));
                 } else if let Some(scan) = &self.last_scan {
                     ui.label(small(format!(
-                        "Scanned {} folders in {:.2} s",
-                        grouped(scan.dirs_visited),
+                        "Scanned {} in {:.2} s",
+                        plural(scan.dirs_visited, "folder"),
                         scan.elapsed.as_secs_f32()
                     )))
                     .on_hover_text(format!(
@@ -2353,6 +2372,7 @@ impl eframe::App for BrowserApp {
         self.poll_deleting();
         self.poll_clearing();
         self.updates.poll();
+        self.poll_watch(&ctx);
         self.take_dropped_folders(&ctx);
         self.previews.drain(&self.thumbs, &ctx);
         self.inspector.poll(&ctx);

@@ -153,6 +153,10 @@ It looks there instead of on GitHub, finds 0.1.1 and updates to it. The test id 
     read ahead, model textures and GIF frames; 1.5 GB keeps what it used before the setting existed.
 - The left panel filters by folder (including everything below it). The search box matches every word against the
   file's path in its folder and its categories, so folder names work too.
+- **The library keeps itself current.** Files added to, changed in, renamed in or removed from the library's folders
+  show up by themselves while the app is open: the OS says what changed, and that folder is scanned again once the
+  changes settle (after 0.75 s of quiet, or every 4 s during a long copy). Reads and files that aren't assets don't
+  count.
 
 ## How it stays fast
 
@@ -193,11 +197,13 @@ sample (the OS keeps recently read files in memory, so compare settings on fresh
 thumbnails to one image to check by eye.
 
 ```
-cargo run --release --bin shots -- <folder>
+cargo run --release --bin shots -- <folder> [<folder to show>]
 ```
 
-Opens the app on your library and saves screenshots of the window, each settings page and "What's new" into the
-folder, to check the look by eye; it closes itself after about 17 seconds, without taking the keyboard.
+Opens the app on your library and saves screenshots of the window, each settings page and "What's new", then the
+window again at the end, into the folder, to check the look by eye; it closes itself after about 18 seconds, without
+taking the keyboard. A second folder is added to the library and shown, as on the app's command line, so something
+changed there during the run (a file copied in) shows in the last picture; take it out of the library afterwards.
 
 Measured on F:\Resources (60,648 assets, spinning laptop disk, 20 threads), 12 Oct 2026:
 
@@ -222,6 +228,7 @@ Measured on F:\Resources (60,648 assets, spinning laptop disk, 20 threads), 12 O
 | File | What it does |
 |---|---|
 | `src/scan.rs` | Parallel folder walk; which files count as assets |
+| `src/watch.rs` | Told by the OS when the library's folders change, to rescan them once the changes settle |
 | `src/library.rs` | The library's folders: sorted entries, one folder tree over all of them, filtering |
 | `src/db.rs` | SQLite: folder index, thumbnail, waveform and model-facts caches, settings |
 | `src/thumbs.rs` | Preview worker pool and cache writer; image decoding and resizing |

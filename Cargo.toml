@@ -31,6 +31,8 @@ serde_json = { version = "1", features = ["preserve_order"] }
 egui-phosphor = { version = "0.14", features = ["regular", "fill"] }
 # Deleting moves files to the Recycle Bin (the Trash on macOS and Linux), so it can be undone.
 trash = "5"
+# Told by the OS when something changes in the library's folders, so it's rescanned (`watch`).
+notify = "8.2"
 # Installs and updates the app from GitHub Releases. Pinned to the `vpk` version that packs releases
 # (.github/workflows/release.yml), which must match.
 velopack = "=1.2.161"
