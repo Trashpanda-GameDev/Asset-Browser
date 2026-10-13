@@ -123,6 +123,27 @@ struct Deleting {
     after: AfterDelete,
 }
 
+/// What `BrowserApp::show_view` shows, for the screenshots tool (`src/bin/shots`).
+#[derive(Clone, Copy)]
+pub struct ScreenshotView {
+    pub mode: Mode,
+    pub layout: ViewLayout,
+    /// The order, or else the mode's own.
+    pub sort: Option<SortBy>,
+    /// The tiles' size, or else the mode's own.
+    pub tile: Option<f32>,
+    /// A collection or category by name, or else the whole library.
+    pub group: Option<&'static str>,
+    /// The asset whose path ends with this, selected.
+    pub file: Option<&'static str>,
+}
+
+impl ScreenshotView {
+    pub const fn new(mode: Mode, layout: ViewLayout) -> Self {
+        Self { mode, layout, sort: None, tile: None, group: None, file: None }
+    }
+}
+
 pub struct BrowserApp {
     ctx: egui::Context,
     db_path: PathBuf,
@@ -299,6 +320,36 @@ impl BrowserApp {
 
     pub fn hide_whats_new(&mut self) {
         self.whats_new = None;
+    }
+
+    /// Shows what `view` says, with its asset selected but not played. For `src/bin/shots`.
+    pub fn show_view(&mut self, view: ScreenshotView) {
+        self.set_mode(view.mode);
+        self.mode_view_mut().layout = view.layout;
+        if let Some(tile) = view.tile {
+            self.mode_view_mut().tile = tile.clamp(64.0, 256.0);
+        }
+        let group = view.group.and_then(|name| match name {
+            groups::UNCATEGORIZED_NAME => Some(UNCATEGORIZED),
+            name => self.groups.all().iter().find(|group| group.name == name).map(|group| group.id),
+        });
+        match group {
+            Some(id) => self.show_group(Some(id)),
+            None => self.select_dir(self.library.as_ref().map_or(0, Library::home)),
+        }
+        if let Some(sort) = view.sort {
+            let in_group = self.in_group_order();
+            self.mode_view_mut().set_order(in_group, sort, false);
+        }
+        let found = (self.library.as_ref().zip(view.file))
+            .and_then(|(library, file)| library.entries.iter().position(|entry| entry.rel.ends_with(file)));
+        let selection = &mut self.mode_view_mut().selection;
+        match found {
+            Some(index) => selection.only(index as u32),
+            None => selection.clear(),
+        }
+        self.view_dirty = true;
+        self.scroll_to_focus = true;
     }
 
     /// Shares the memory limit out among what the app keeps (`memory`).
