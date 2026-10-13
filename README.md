@@ -59,8 +59,18 @@ shows them). Then `scripts/deploy.mjs`:
 
 It stops before changing anything if it isn't on `main`, there are uncommitted changes, `main` and GitHub's have
 both moved on, the tag exists or there are no notes; a `main` that's only behind is brought up to date first, as
-`git pull` would. If GitHub turns the push down, `main` is put back as it was. The push goes straight to `main`, so
-the ruleset for `main` can't require a pull request or status checks (deletions and force pushes can stay blocked).
+`git pull` would. If GitHub turns the push down, `main` is put back as it was.
+
+The push goes straight to `main`, so the ruleset for `main` (**Settings**, **Rules**, **Rulesets**) has to let it
+through. Turn off **Require status checks to pass** either way, since those checks don't run any more, and then
+either:
+
+- turn off **Require a pull request before merging** too, keeping **Restrict deletions** and **Block force
+  pushes**; or
+- add **Repository admin** to the bypass list as **Always allow** (*For pull requests only* doesn't cover a push).
+  GitHub then answers the push with "Bypassed rule violations for refs/heads/main", which is expected. A bypass
+  covers every rule in its ruleset, deletions and force pushes too, so to keep those blocked for you as well, put
+  them in a second ruleset for `main` with nothing on its bypass list.
 
 Don't make the release on GitHub's website (**Draft a new release**): the workflow makes it, and fails if the tag has
 one already.

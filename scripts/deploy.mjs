@@ -240,8 +240,9 @@ async function deploy() {
     throw new Stop(
       `The push didn't go through (see above), so nothing was released, and ${BRANCH} is back as it was.\n` +
         `If GitHub said changes must be made through a pull request, or that status checks are required, the\n` +
-        `ruleset for ${BRANCH} has to let you push to it: on GitHub, Settings → Rules → Rulesets → ${BRANCH}, turn\n` +
-        `off "Require a pull request before merging" and "Require status checks to pass". Then run this again.`,
+        `ruleset for ${BRANCH} has to let you push to it. On GitHub, Settings → Rules → Rulesets → ${BRANCH}: turn\n` +
+        `off "Require status checks to pass", and either turn off "Require a pull request before merging" too, or\n` +
+        `add Repository admin to the bypass list as "Always allow". Then run this again.`,
     );
   }
 
