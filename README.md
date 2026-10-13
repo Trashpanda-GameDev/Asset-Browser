@@ -37,29 +37,50 @@ The icon is `assets/icon.png` (1024 px); `assets/icon.ico` holds every size Wind
 ### Making a release
 
 What's new goes in [`CHANGELOG.md`](CHANGELOG.md) as it's made, under **Unreleased**, written for the people using
-the app. Then:
+the app. To release it, merge `dev` into `main`, then on `main` (with [Node.js](https://nodejs.org) 18 or later):
 
-1. In `CHANGELOG.md`, rename `## Unreleased` to the version and date (`## 0.2.0 – 13 Oct 2026`). That section is
-   the release's notes and the app's "What's new"; the release stops if the version has none.
-2. Set `version` in `Cargo.toml` (say to `0.2.0`) and run `cargo build`, which writes it into `Cargo.lock` too.
-   Commit all three: the release builds with `--locked`, so it stops if `Cargo.lock` still has the old version.
-3. Merge it into `main`, then tag `main` and push the tag:
+```
+git switch main
+git pull
+npm run deploy
+```
 
-   ```
-   git switch main
-   git pull
-   git tag v0.2.0
-   git push origin v0.2.0
-   ```
+That makes the next patch version, 0.2.0 → 0.2.1 (`npm run deploy -- minor` for 0.3.0, `-- major` for 1.0.0, or
+`-- 0.4.0` for that one). It shows the version and the notes and asks first (`npm run deploy -- --dry-run` only
+shows them). Then `scripts/deploy.mjs`:
+
+1. renames `## Unreleased` in `CHANGELOG.md` to the version and today's date (`## 0.2.1 – 13 Oct 2026`): the
+   release's notes, and the app's "What's new";
+2. sets the version in `Cargo.toml` and `Cargo.lock` (the release builds with `--locked`, so both need it);
+3. commits that as "Release 0.2.1" on `main`, tags it `v0.2.1` and pushes both, which starts the release;
+4. moves `dev` up to `main` if it has nothing `main` doesn't, so the renamed notes are there too (push it when you
+   like). Otherwise merge `main` into `dev` before carrying on, or the next merge conflicts over the renamed
+   heading.
+
+It stops before changing anything if it isn't on `main`, there are uncommitted changes, `main` and GitHub's have
+both moved on, the tag exists or there are no notes; a `main` that's only behind is brought up to date first, as
+`git pull` would. If GitHub turns the push down, `main` is put back as it was. The push goes straight to `main`, so
+the ruleset for `main` can't require a pull request or status checks (deletions and force pushes can stay blocked).
 
 Don't make the release on GitHub's website (**Draft a new release**): the workflow makes it, and fails if the tag has
 one already.
 
-`.github/workflows/release.yml` builds the app on Windows, packs it with [Velopack](https://velopack.io) into the
-setup program, the portable zip and the update packages (with a smaller delta from the last release), and publishes
-them as a GitHub release with the version's notes from `CHANGELOG.md`. It stops if the tag doesn't match
-`Cargo.toml`. To try the build and packing without publishing, run the workflow by hand (**Actions**, **Release**,
-**Run workflow**): the files are kept with the run.
+`.github/workflows/release.yml` is the only workflow, and it runs only for a release: the "Release 0.2.1" commit that
+`npm run deploy` pushes to `main` with its tag. Other pushes and pull requests run nothing (a merge that changes
+`Cargo.toml` shows as a skipped run). It tests on Windows, macOS and Linux (`cargo fmt`, `clippy` and `test`), then
+builds the app on Windows, packs it with [Velopack](https://velopack.io) into the setup program, the portable zip and
+the update packages (with a smaller delta from the last release), and publishes them as a GitHub release, under the
+tag, with the version's notes from `CHANGELOG.md`. A failing test, or a commit without its tag, stops it before
+anything is published. To test, build and pack without publishing, run it by hand on any branch (**Actions**,
+**Release**, **Run workflow**): the files are kept with the run.
+
+The builds are cached on `main`, which is why a release starts from `main`'s commit rather than from the tag: a run can
+only use caches made on its own branch or tag, or on `main`. Only releases save caches, and only when the
+dependencies or Rust have changed, since the app's version isn't part of a cache's name. After each release, the
+workflow keeps the newest two caches of each job, that release's and the one before, and deletes the rest, so they
+take about 6 GB at most of the repository's 10 GB. With a cache, a release should take about 10 to 15 minutes;
+without one, 20 to 30. GitHub deletes caches that haven't been used for 7 days, so a release more than a week after
+the last one starts without.
 
 The app id the workflow packs with, `TrashpandaAssetBrowser`, must never change, because installed copies find their
 updates by it. Velopack's packer, `vpk`, is installed at the version of the `velopack` crate in `Cargo.lock`; the two
@@ -266,7 +287,8 @@ Measured on F:\Resources (60,648 assets, spinning laptop disk, 20 threads), 12 O
 | `src/bin/shots.rs` | Screenshots of the window and the settings, to check the look |
 | `build.rs`, `assets/` | The app icon, and putting it with the app's name into the Windows exe (`src/main.rs` sets the window's) |
 | `.cargo/config.toml` | Links the C runtime into Windows builds, so they need no Visual C++ redistributable |
-| `.github/workflows/` | `ci.yml` checks every push on Windows, macOS and Linux; `release.yml` publishes a release for a version tag |
+| `.github/workflows/release.yml` | For release commits only: tests on Windows, macOS and Linux, builds and publishes the release, keeps two caches per job |
+| `scripts/deploy.mjs`, `package.json` | `npm run deploy`: the next version's commit and tag on `main`, pushed to start the release |
 
 The cache and log live in the OS's per-user cache folder (`%LOCALAPPDATA%\AssetBrowser\cache` on Windows). Settings
 (mode, layouts, volume and so on) are saved in the same file. What you make yourself is kept apart, so clearing the

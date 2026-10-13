@@ -1,0 +1,11 @@
+{
+  "name": "asset-browser",
+  "private": true,
+  "description": "Only for `npm run deploy`, which releases the next version (scripts/deploy.mjs). The app is built with Cargo.",
+  "scripts": {
+    "deploy": "node scripts/deploy.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

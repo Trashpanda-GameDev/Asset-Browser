@@ -4,8 +4,8 @@ What's new in each version of Asset Browser, written for the people using it. Th
 version's notes the first time it starts after updating to it (and every version's under Settings →
 Updates → What's new), and the release workflow publishes the same notes with the release.
 
-As things change, add them under a `## Unreleased` heading at the top. To release, rename it to the
-version and date, as below.
+As things change, add them under a `## Unreleased` heading at the top. To release, run
+`npm run deploy` on main: it renames the heading to the version and date, as below.
 
 ## Unreleased
 
