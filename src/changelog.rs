@@ -115,6 +115,15 @@ pub fn at_start(releases: &[Release], seen: Option<&str>, used_before: bool, cur
     if since(releases, &seen, current).is_empty() { AtStart::Nothing } else { AtStart::Since(seen) }
 }
 
+/// The version to remember as seen after starting `current`: never an older one than before, so
+/// running an older copy now and then doesn't bring the newer one's notes back.
+pub fn remembered(seen: Option<&str>, current: &Version) -> Version {
+    match seen.and_then(|seen| Version::parse(seen).ok()) {
+        Some(seen) if seen > *current => seen,
+        _ => current.clone(),
+    }
+}
+
 /// `**bold**` parts of a line, as (text, bold) runs; backticks are dropped.
 pub fn runs(text: &str) -> Vec<(String, bool)> {
     let text = text.replace('`', "");
@@ -173,6 +182,14 @@ mod tests {
         assert_eq!(shown, [Some(version("0.2.0"))]);
         // A build whose version has no notes (still Unreleased) shows nothing.
         assert_eq!(at_start(&releases, Some("0.2.0"), true, &version("0.2.1")), AtStart::Nothing);
+    }
+
+    #[test]
+    fn an_older_copy_keeps_the_newer_notes_seen() {
+        assert_eq!(remembered(Some("0.2.0"), &version("0.1.0")), version("0.2.0"));
+        assert_eq!(remembered(Some("0.1.0"), &version("0.2.0")), version("0.2.0"));
+        assert_eq!(remembered(None, &version("0.2.0")), version("0.2.0"));
+        assert_eq!(remembered(Some("garbage"), &version("0.2.0")), version("0.2.0"));
     }
 
     #[test]

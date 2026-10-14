@@ -24,3 +24,4 @@ pub mod storage;
 pub mod thumbs;
 pub mod ui;
 pub mod updates;
+pub mod watch;

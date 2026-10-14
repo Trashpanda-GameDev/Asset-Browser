@@ -40,6 +40,7 @@ use crate::ui::updates::UpdateAction;
 use crate::ui::whats_new::WhatsNew;
 use crate::ui::{theme, widgets};
 use crate::updates::Updates;
+use crate::watch::Watch;
 use crate::{db, diag, platform, scan};
 
 pub use crate::ui::format::{format_size, format_time, grouped};
@@ -122,6 +123,31 @@ struct Deleting {
     after: AfterDelete,
 }
 
+/// What `BrowserApp::show_view` shows, for the screenshots tool (`src/bin/shots`).
+#[derive(Clone, Copy)]
+pub struct ScreenshotView {
+    pub mode: Mode,
+    pub layout: ViewLayout,
+    /// The order, or else the mode's own.
+    pub sort: Option<SortBy>,
+    /// The tiles' size, or else the mode's own.
+    pub tile: Option<f32>,
+    /// A collection or category by name, or else the whole library.
+    pub group: Option<&'static str>,
+    /// A folder of the library's first, by its path in it ("Items"), instead of a group.
+    pub folder: Option<&'static str>,
+    /// What's in the search box.
+    pub query: &'static str,
+    /// The asset whose path ends with this, selected.
+    pub file: Option<&'static str>,
+}
+
+impl ScreenshotView {
+    pub const fn new(mode: Mode, layout: ViewLayout) -> Self {
+        Self { mode, layout, sort: None, tile: None, group: None, folder: None, query: "", file: None }
+    }
+}
+
 pub struct BrowserApp {
     ctx: egui::Context,
     db_path: PathBuf,
@@ -141,6 +167,8 @@ pub struct BrowserApp {
     scan_rx: Receiver<ScanDone>,
     /// Scans running.
     scans: usize,
+    /// Told by the OS when files change in the library's folders, to rescan them.
+    watch: Watch,
     scan_started: Instant,
     last_scan: Option<LastScan>,
 
@@ -213,6 +241,10 @@ impl BrowserApp {
             let ctx = cc.egui_ctx.clone();
             Updates::start(std::sync::Arc::new(move || ctx.request_repaint()))
         };
+        let watch = {
+            let ctx = cc.egui_ctx.clone();
+            Watch::start(move |after| ctx.request_repaint_after(after))
+        };
 
         let mut app = Self {
             ctx: cc.egui_ctx.clone(),
@@ -228,6 +260,7 @@ impl BrowserApp {
             scan_tx,
             scan_rx,
             scans: 0,
+            watch,
             scan_started: Instant::now(),
             last_scan: None,
             mode: Mode::All,
@@ -293,6 +326,44 @@ impl BrowserApp {
         self.whats_new = None;
     }
 
+    /// Shows what `view` says, with its asset selected but not played. For `src/bin/shots`.
+    pub fn show_view(&mut self, view: ScreenshotView) {
+        self.set_mode(view.mode);
+        self.mode_view_mut().layout = view.layout;
+        if let Some(tile) = view.tile {
+            self.mode_view_mut().tile = tile.clamp(64.0, 256.0);
+        }
+        let group = view.group.and_then(|name| match name {
+            groups::UNCATEGORIZED_NAME => Some(UNCATEGORIZED),
+            name => self.groups.all().iter().find(|group| group.name == name).map(|group| group.id),
+        });
+        let folder = (self.library.as_ref().zip(view.folder)).and_then(|(library, folder)| {
+            let lower = folder.to_lowercase();
+            library.dirs.iter().position(|dir| dir.root == Some(0) && dir.lower == lower)
+        });
+        match (group, folder) {
+            (Some(id), _) => self.show_group(Some(id)),
+            (None, Some(dir)) => self.select_dir(dir as u32),
+            (None, None) => self.select_dir(self.library.as_ref().map_or(0, Library::home)),
+        }
+        if self.query != view.query {
+            view.query.clone_into(&mut self.query);
+        }
+        if let Some(sort) = view.sort {
+            let in_group = self.in_group_order();
+            self.mode_view_mut().set_order(in_group, sort, false);
+        }
+        let found = (self.library.as_ref().zip(view.file))
+            .and_then(|(library, file)| library.entries.iter().position(|entry| entry.rel.ends_with(file)));
+        let selection = &mut self.mode_view_mut().selection;
+        match found {
+            Some(index) => selection.only(index as u32),
+            None => selection.clear(),
+        }
+        self.view_dirty = true;
+        self.scroll_to_focus = true;
+    }
+
     /// Shares the memory limit out among what the app keeps (`memory`).
     fn apply_memory(&mut self) {
         let shares = memory::apply(self.memory_mb);
@@ -311,7 +382,8 @@ impl BrowserApp {
         {
             self.whats_new = Some(WhatsNew::since(seen, current.clone()));
         }
-        if let Err(err) = db::set_setting(conn, SETTING_WHATS_NEW, &current.to_string()) {
+        let remembered = changelog::remembered(seen.as_deref(), &current);
+        if let Err(err) = db::set_setting(conn, SETTING_WHATS_NEW, &remembered.to_string()) {
             diag::report("Saving settings", err);
         }
     }
@@ -595,6 +667,16 @@ impl BrowserApp {
                 self.scans += 1;
             }
             Err(err) => diag::report("Starting the scan", err),
+        }
+    }
+
+    /// Rescans the folders whose files changed while the app was open, once the changes settle.
+    fn poll_watch(&mut self, ctx: &egui::Context) {
+        self.watch.sync(&self.roots);
+        let changed = self.watch.poll();
+        self.scan(changed);
+        if let Some(due) = self.watch.next_due() {
+            ctx.request_repaint_after(due);
         }
     }
 
@@ -1810,8 +1892,8 @@ impl BrowserApp {
                     ui.ctx().request_repaint_after(Duration::from_millis(100));
                 } else if let Some(scan) = &self.last_scan {
                     ui.label(small(format!(
-                        "Scanned {} folders in {:.2} s",
-                        grouped(scan.dirs_visited),
+                        "Scanned {} in {:.2} s",
+                        plural(scan.dirs_visited, "folder"),
                         scan.elapsed.as_secs_f32()
                     )))
                     .on_hover_text(format!(
@@ -2353,6 +2435,7 @@ impl eframe::App for BrowserApp {
         self.poll_deleting();
         self.poll_clearing();
         self.updates.poll();
+        self.poll_watch(&ctx);
         self.take_dropped_folders(&ctx);
         self.previews.drain(&self.thumbs, &ctx);
         self.inspector.poll(&ctx);

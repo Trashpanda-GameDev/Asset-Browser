@@ -1,23 +1,34 @@
-# Publishes a release of the Windows app when a version tag is pushed:
+# Tests and publishes a release of the Windows app. It's the only workflow, and it runs for releases
+# only: the "Release 0.2.1" commit that `npm run deploy` on main (scripts/deploy.mjs) pushes together
+# with its tag, v0.2.1, after it has
+#   1. renamed "## Unreleased" in CHANGELOG.md to the version and date ("## 0.2.1 – 13 Oct 2026"):
+#      those are the release's notes, and what the app shows as "What's new";
+#   2. set `version` in Cargo.toml and Cargo.lock (the build below is --locked).
+# Other pushes and pull requests run nothing (a merge that changes Cargo.toml shows as a skipped run).
 #
-#   1. In CHANGELOG.md, rename "## Unreleased" to the version and date ("## 0.2.0 – 13 Oct 2026"):
-#      those are the release's notes, and what the app shows as "What's new".
-#   2. Set `version` in Cargo.toml (say to 0.2.0) and run `cargo build` so Cargo.lock has it too (the
-#      build below is --locked). Commit all three and merge them into main.
-#   3. On main: git tag v0.2.0 && git push origin v0.2.0
+# The tests run on Windows, macOS and Linux, so code that only builds on one is caught, and a failure
+# stops the release before anything is published. Then Velopack packs the build into a setup
+# program, a portable zip, and the update package that the copies already out there download
+# (src/updates.rs). Run by hand (Actions > Release > Run workflow, on any branch), it tests, builds
+# and packs without publishing, and keeps the files as the run's artifact.
 #
-# Velopack packs the build into a setup program, a portable zip, and the update package that the
-# copies already out there download (src/updates.rs). Run by hand (Actions > Release > Run
-# workflow), it builds and packs without publishing, and keeps the files as the run's artifact.
+# It starts from main's commit rather than the tag for the cache: a run can only use caches made on
+# its own branch or tag, or on main, so a cache made for one tag would never be used by the next
+# release; made on main, it is. Only releases save caches, and only when the dependencies or Rust
+# changed (the app's version isn't part of the key). After each release, the prune job keeps the
+# newest two caches of each job, the release's and the one before, and deletes the rest: about 6 GB
+# at most, of the 10 GB the repository has. GitHub drops caches unused for 7 days on its own.
 name: Release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    # A release changes the version; most merges don't, so they don't even start this.
+    paths: [Cargo.toml]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 # One at a time: each release is packed against the one before it.
 concurrency:
@@ -31,8 +42,34 @@ env:
   REPO_URL: ${{ github.server_url }}/${{ github.repository }}
 
 jobs:
+  test:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'Release ')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Linux libraries (sound, file dialog, windowing)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libgtk-3-dev libxkbcommon-dev libwayland-dev
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+
   windows:
+    needs: test
     runs-on: windows-latest
+    permissions:
+      # To publish the release.
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -42,13 +79,19 @@ jobs:
         run: |
           # Windows checkouts have CRLF line endings.
           version=$(tr -d '\r' < Cargo.toml | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
-          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
-            echo "::error::The tag $GITHUB_REF_NAME doesn't match the version in Cargo.toml, $version."
-            exit 1
+          tag="v$version"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            # npm run deploy pushes the release commit and its tag together, so the tag is here.
+            if ! git fetch --quiet --depth=1 origin "refs/tags/$tag:refs/tags/$tag" ||
+              [[ "$(git rev-parse "$tag^{commit}")" != "$GITHUB_SHA" ]]; then
+              echo "::error::This commit isn't tagged $tag. Release with npm run deploy, which pushes both."
+              exit 1
+            fi
           fi
           # The packer has to be the version of the velopack crate the app is built with.
           vpk=$(tr -d '\r' < Cargo.lock | sed -n '/^name = "velopack"$/{n;s/^version = "\(.*\)"$/\1/p}')
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "vpk=$vpk" >> "$GITHUB_OUTPUT"
           echo "Asset Browser $version, packed with vpk $vpk"
 
@@ -56,7 +99,7 @@ jobs:
         shell: bash
         run: |
           # The version's section of CHANGELOG.md, which the app shows as "What's new" too. Checked
-          # before the build, so a missing one stops the release in seconds.
+          # before the build, so a missing one doesn't wait for it.
           version="${{ steps.version.outputs.version }}"
           mkdir -p target
           tr -d '\r' < CHANGELOG.md | awk -v version="$version" '
@@ -70,6 +113,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name == 'push' }}
       - name: Build
         run: cargo build --release --locked
 
@@ -95,15 +140,52 @@ jobs:
             --releaseNotes target/release-notes.md -o target/velopack
 
       - name: Publish
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push'
         shell: bash
         run: |
           vpk upload github --repoUrl "$REPO_URL" --token "${{ secrets.GITHUB_TOKEN }}" -o target/velopack \
-            --publish --tag "$GITHUB_REF_NAME" --releaseName "Asset Browser ${{ steps.version.outputs.version }}"
+            --publish --tag "${{ steps.version.outputs.tag }}" \
+            --releaseName "Asset Browser ${{ steps.version.outputs.version }}"
 
       - name: Keep the files
-        if: github.ref_type != 'tag'
+        if: github.event_name != 'push'
         uses: actions/upload-artifact@v7
         with:
           name: asset-browser-${{ steps.version.outputs.version }}
           path: target/velopack
+
+  prune:
+    needs: [test, windows]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # The release is out by now: a failure here is shown, but doesn't fail the run.
+    continue-on-error: true
+    permissions:
+      # To delete caches.
+      actions: write
+    steps:
+      - name: Keep two caches of each job
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/caches?per_page=100" --jq '.actions_caches[]' |
+            jq -s . > caches.json
+          # A job's caches share their key but for its last two parts, the hashes of Rust and of the
+          # dependencies: v0-rust-test-Linux-x64-<rust>-<dependencies>. The newest two on main stay;
+          # older ones and any made elsewhere (tags, before releases ran on main) go.
+          jq -r '
+            def job: .key | split("-") | .[:-2] | join("-");
+            map(select(.ref == "refs/heads/main")) | group_by(job) | map(sort_by(.created_at) | reverse | .[:2])
+            | add // [] | .[] | "Keeping \(.key) (\(.size_in_bytes / 1048576 | floor) MB, \(.created_at))"
+          ' caches.json
+          jq -r '
+            def job: .key | split("-") | .[:-2] | join("-");
+            (map(select(.ref == "refs/heads/main")) | group_by(job) | map(sort_by(.created_at) | reverse | .[2:])
+              | add // []) + map(select(.ref != "refs/heads/main"))
+            | .[] | "\(.id) \(.key) \(.ref)"
+          ' caches.json |
+            while read -r id key ref; do
+              echo "Deleting $key ($ref)"
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/caches/$id" > /dev/null ||
+                echo "::warning::Couldn't delete the cache $key ($ref)."
+            done
