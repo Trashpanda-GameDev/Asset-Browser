@@ -43,10 +43,14 @@ updating, uninstalling or deleting the portable folder leaves them alone.
 - **Grid or list**, top right. The list's columns follow the mode: sizes for images; a waveform, length and format for
   sounds; triangle counts for models. Click a column header to sort, or use the order menu above the assets.
 
+![The Sounds mode as a list, with waveforms](images/sounds.png)
+
 ## The preview pane
 
 The pane on the right shows the selected asset large, with what's known about it and Open, Show in folder and Copy
 path. The button at the top right hides it.
+
+![A picture in the preview pane](images/images.png)
 
 - **Images:** scroll to zoom at the pointer, drag to pan, double-click for actual pixels. Checkerboard, dark or light
   behind transparency, for the tiles too.
@@ -66,9 +70,15 @@ path. The button at the top right hides it.
   base-colour textures; Blender files show the preview picture Blender saved in them. The pane lists triangles,
   vertices, meshes, materials, textures (and any that couldn't be found), size in metres and animations.
 
+| | |
+|:---:|:---:|
+| ![A sprite sheet playing, with its frames below the details](images/sprite-sheet.png) | ![A 3D model in the preview pane](images/models.png) |
+
 ## Favorites, collections and categories
 
 They're in the sidebar, and gather assets from any folder without moving a file.
+
+![Browsing a category](images/organize.png)
 
 - **Favorites:** the star on a tile or row, the pane's Favorite button, or **F** for the selection.
 - **Collections** are lists for a purpose ("Forest level props"), browsed like a folder.
@@ -113,6 +123,8 @@ The gear at the top right, or **Ctrl+,**:
   away.
 - **Memory:** how much memory the app may use, shared out among decoding, thumbnails on the graphics card, sounds read
   ahead, model textures and GIF frames; 1.5 GB keeps what it used before the setting existed.
+
+![Changing keyboard shortcuts in the settings](images/settings.png)
 
 ## Where your things are
 

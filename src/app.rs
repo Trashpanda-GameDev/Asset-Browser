@@ -134,13 +134,17 @@ pub struct ScreenshotView {
     pub tile: Option<f32>,
     /// A collection or category by name, or else the whole library.
     pub group: Option<&'static str>,
+    /// A folder of the library's first, by its path in it ("Items"), instead of a group.
+    pub folder: Option<&'static str>,
+    /// What's in the search box.
+    pub query: &'static str,
     /// The asset whose path ends with this, selected.
     pub file: Option<&'static str>,
 }
 
 impl ScreenshotView {
     pub const fn new(mode: Mode, layout: ViewLayout) -> Self {
-        Self { mode, layout, sort: None, tile: None, group: None, file: None }
+        Self { mode, layout, sort: None, tile: None, group: None, folder: None, query: "", file: None }
     }
 }
 
@@ -333,9 +337,17 @@ impl BrowserApp {
             groups::UNCATEGORIZED_NAME => Some(UNCATEGORIZED),
             name => self.groups.all().iter().find(|group| group.name == name).map(|group| group.id),
         });
-        match group {
-            Some(id) => self.show_group(Some(id)),
-            None => self.select_dir(self.library.as_ref().map_or(0, Library::home)),
+        let folder = (self.library.as_ref().zip(view.folder)).and_then(|(library, folder)| {
+            let lower = folder.to_lowercase();
+            library.dirs.iter().position(|dir| dir.root == Some(0) && dir.lower == lower)
+        });
+        match (group, folder) {
+            (Some(id), _) => self.show_group(Some(id)),
+            (None, Some(dir)) => self.select_dir(dir as u32),
+            (None, None) => self.select_dir(self.library.as_ref().map_or(0, Library::home)),
+        }
+        if self.query != view.query {
+            view.query.clone_into(&mut self.query);
         }
         if let Some(sort) = view.sort {
             let in_group = self.in_group_order();

@@ -16,7 +16,7 @@ use asset_browser::groups::{FAVORITES, GroupKind, Groups};
 const MARK: &str = ".made-up-assets";
 
 /// Writes the library into `root`: an empty folder, or one written before. Anything else in it
-/// would be in the pictures, and nothing is deleted here, only written over.
+/// would be in the pictures, and nothing is deleted here but what a run before added (`INCOMING`).
 pub fn write(root: &Path) -> io::Result<()> {
     let taken = fs::read_dir(root).is_ok_and(|mut entries| entries.next().is_some());
     if taken && !root.join(MARK).exists() {
@@ -29,6 +29,10 @@ pub fn write(root: &Path) -> io::Result<()> {
         root.join(MARK),
         "Made up for the README's pictures by src/bin/shots/demo.rs, which writes them again here.\n",
     )?;
+    // What arrived during the last run arrives again.
+    for file in INCOMING {
+        let _ = fs::remove_file(root.join(file));
+    }
     items(&root.join("Items"))?;
     tiles(&root.join("Environment/Tiles"))?;
     backgrounds(&root.join("Environment/Backgrounds"))?;
@@ -36,6 +40,22 @@ pub fn write(root: &Path) -> io::Result<()> {
     characters(&root.join("Characters"))?;
     sounds(&root.join("Audio"))?;
     models(&root.join("Models"))
+}
+
+/// Files that arrive while the app is open, one at a time, for the clip of the library keeping
+/// itself current.
+pub const INCOMING: [&str; 4] =
+    ["Items/gem_amber.png", "Items/gem_amethyst.png", "Items/potion_purple.png", "Items/potion_yellow.png"];
+
+/// Writes the `i`th of `INCOMING` into the library in `root`.
+pub fn arrive(root: &Path, i: usize) -> io::Result<()> {
+    let canvas = match i {
+        0 => gem(hex(0xf29a2e)),
+        1 => gem(hex(0x9b5cf0)),
+        2 => potion(hex(0xb16cff)),
+        _ => potion(hex(0xf5c542)),
+    };
+    canvas.save(&root.join(INCOMING[i.min(INCOMING.len() - 1)]))
 }
 
 /// Favorites, collections and categories over the library in `root`, in the app's user data.

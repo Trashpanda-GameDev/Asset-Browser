@@ -55,7 +55,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/ui/settings.rs` | The settings window: Updates, Keyboard, Storage and Memory pages |
 | `src/ui/whats_new.rs` | "What's new" after an update, and every version's notes |
 | `src/bin/bench.rs` | The benchmark |
-| `src/bin/shots/` | Screenshots of the window and the settings, to check the look; and the README's pictures, of made-up assets |
+| `src/bin/shots/` | Screenshots of the window and the settings, to check the look; and the README's pictures and clips, of made-up assets |
 | `build.rs`, `assets/` | The app icon, and putting it with the app's name into the Windows exe (`src/main.rs` sets the window's) |
 | `.cargo/config.toml` | Links the C runtime into Windows builds, so they need no Visual C++ redistributable |
 | `.github/workflows/release.yml` | For release commits only: tests on Windows, macOS and Linux, builds and publishes the release, keeps two caches per job |
@@ -136,11 +136,14 @@ changed there during the run (a file copied in) shows in the last picture; take 
 cargo run --release --bin shots -- --demo docs/images F:\Assets
 ```
 
-Takes the README's pictures again, after the look changes. It draws and synthesises a small library of made-up game
-assets (`src/bin/shots/demo.rs`: icons, tiles, backgrounds, sprite sheets, GIFs, sounds and 3D models, with some
-favorites, collections and categories) into the folder given last, which has to be empty or hold only what a run
-wrote before, since its path shows in the pictures (without one, it uses `target/demo`). The app keeps its cache and
-settings in `target/demo` for the run, so your own library is left alone.
+Takes the README's pictures and clips again, after the look changes; it takes about a minute. It draws and
+synthesises a small library of made-up game assets (`src/bin/shots/demo.rs`: icons, tiles, backgrounds, sprite
+sheets, GIFs, sounds and 3D models, with some favorites, collections and categories) into the folder given last, which
+has to be empty or hold only what a run wrote before, since its path shows in the pictures (without one, it uses
+`target/demo`). Then it shows each part of the app on it, pressing keys, typing searches and adding files as it goes,
+and records the clips as GIFs (`src/bin/shots/clip.rs`: each frame holds only what changed since the one before,
+which keeps them small). The app keeps its cache and settings in `target/demo` for the run, so your own library is
+left alone.
 
 ## Adding to a mode
 
