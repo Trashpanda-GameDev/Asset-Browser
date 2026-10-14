@@ -7,7 +7,7 @@ Updates → What's new), and the release workflow publishes the same notes with 
 As things change, add them under a `## Unreleased` heading at the top. To release, run
 `npm run deploy` on main: it renames the heading to the version and date, as below.
 
-## Unreleased
+## 0.2.1 – 14 Oct 2026
 
 - **Files added to your folders show up by themselves**, without reopening the app, and so do files
   changed, renamed or removed: a folder is scanned again as soon as the changes in it settle.
