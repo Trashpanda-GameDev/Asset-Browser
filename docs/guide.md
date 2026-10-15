@@ -47,8 +47,8 @@ updating, uninstalling or deleting the portable folder leaves them alone.
 
 ## The preview pane
 
-The pane on the right shows the selected asset large, with what's known about it and Open, Show in folder and Copy
-path. The button at the top right hides it.
+The pane on the right shows the selected asset large, with what's known about it and Open, Show in folder, Copy file
+and Copy path. The button at the top right hides it.
 
 ![A picture in the preview pane](images/images.png)
 
@@ -90,11 +90,14 @@ They're in the sidebar, and gather assets from any folder without moving a file.
   recolour or delete it (the files stay where they are). Files moved or deleted since are flagged, with a click to
   take them out.
 
-## Selecting and deleting
+## Selecting, copying and deleting
 
 - **Selecting:** click; **Ctrl+click** adds or removes; **Shift+click** selects a range; **Ctrl+A** selects everything
-  shown. With several selected, the pane shows how many, their size and their thumbnails, and Copy path copies them
-  all.
+  shown. With several selected, the pane shows how many, their size and their thumbnails, and Copy file and Copy path
+  take them all.
+- **Copying:** right-click, **Copy file** (or **Ctrl+Shift+C**) puts the files themselves on the clipboard: paste into
+  a folder to put copies there, or into an app that takes files, such as a game engine or a chat. **Copy path**
+  (**Ctrl+C**) copies where they are, as text.
 - **Deleting:** **Delete** (or right-click, **Delete…**) asks, then moves the selected files to the Recycle Bin (the
   Trash on macOS and Linux); right-click a folder in the tree for **Delete folder…**, which takes everything in it.
   The asset after them is selected next. They can be put back from the Recycle Bin, favorites, collections and
@@ -107,9 +110,10 @@ They're in the sidebar, and gather assets from any folder without moving a file.
 
 Arrows move the selection (Shift extends it), Page Up/Down and Home/End jump, **Enter** opens the file in its default
 app (so does double-click), **Space** plays or pauses, **Esc** stops the sound or else clears the selection,
-**Ctrl+F** searches, **Ctrl+C** copies the selected paths, **F** stars them, **Delete** deletes them (after asking).
-Right-click for Open, Show in folder, Copy path, Favorites, collections and categories, and Delete. Every shortcut can
-be changed, or added (the preview pane, grid, list, show in folder), in Settings.
+**Ctrl+F** searches, **Ctrl+C** copies the selected paths and **Ctrl+Shift+C** the files themselves, **F** stars them,
+**Delete** deletes them (after asking). Right-click for Open, Show in folder, Copy file, Copy path, Favorites,
+collections and categories, and Delete. Every shortcut can be changed, or added (the preview pane, grid, list, show in
+folder), in Settings.
 
 ## Settings
 

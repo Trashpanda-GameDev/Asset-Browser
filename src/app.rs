@@ -1369,6 +1369,18 @@ impl BrowserApp {
                     let _ = platform::reveal(&library.path_of(&library.entries[first as usize]));
                 }
             }
+            MenuAction::CopyFiles => {
+                let paths = self.paths_of(&items);
+                let copied = match paths.as_slice() {
+                    [] => return,
+                    [path] => format!("Copied \u{201c}{}\u{201d}", folder_name(path)),
+                    _ => format!("Copied {}", plural(paths.len(), "file")),
+                };
+                match platform::copy_files(&paths) {
+                    Ok(()) => self.notify(copied),
+                    Err(err) => diag::report("Copying the files", err),
+                }
+            }
             MenuAction::CopyPaths => {
                 let paths: Vec<String> = items
                     .iter()
@@ -1441,6 +1453,9 @@ impl BrowserApp {
             let view = std::mem::take(&mut self.view);
             self.mode_view_mut().selection.all(&view);
             self.view = view;
+        }
+        if pressed(Action::CopyFiles).is_some() {
+            self.run_action(MenuAction::CopyFiles);
         }
         if pressed(Action::CopyPaths).is_some() {
             self.run_action(MenuAction::CopyPaths);

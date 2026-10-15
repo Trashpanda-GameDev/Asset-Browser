@@ -278,6 +278,7 @@ dependencies = [
 name = "asset_browser"
 version = "0.2.1"
 dependencies = [
+ "arboard",
  "bytemuck",
  "cpal",
  "crossbeam-channel",

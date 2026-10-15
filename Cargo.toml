@@ -33,6 +33,9 @@ egui-phosphor = { version = "0.14", features = ["regular", "fill"] }
 trash = "5"
 # Told by the OS when something changes in the library's folders, so it's rescanned (`watch`).
 notify = "8.2"
+# Copied files on the clipboard, to paste into a folder or another app (`platform::copy_files`).
+# egui's own clipboard, so it's in the build already.
+arboard = { version = "3.6", default-features = false }
 # Installs and updates the app from GitHub Releases. Pinned to the `vpk` version that packs releases
 # (.github/workflows/release.yml), which must match.
 velopack = "=1.2.161"

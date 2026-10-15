@@ -191,6 +191,14 @@ impl Inspector {
                 if widgets::button(ui, icon::FOLDER_OPEN, "Show in folder").clicked() {
                     output.action = Some(MenuAction::Reveal);
                 }
+                let files = if several { format!("Copy {} files", selection.len()) } else { "Copy file".to_owned() };
+                let hint = crate::keymap::hint(ui.ctx(), crate::keymap::Action::CopyFiles);
+                if widgets::button(ui, icon::FILES, &files)
+                    .on_hover_text(format!("To paste into a folder or another app{hint}"))
+                    .clicked()
+                {
+                    output.action = Some(MenuAction::CopyFiles);
+                }
                 let copy = if several { format!("Copy {} paths", selection.len()) } else { "Copy path".to_owned() };
                 if widgets::button(ui, icon::COPY, &copy).clicked() {
                     output.action = Some(MenuAction::CopyPaths);

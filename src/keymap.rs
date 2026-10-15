@@ -29,6 +29,7 @@ pub enum Action {
     SelectAll,
     Open,
     ShowInFolder,
+    CopyFiles,
     CopyPaths,
     Favorite,
     Delete,
@@ -38,7 +39,7 @@ pub enum Action {
 
 impl Action {
     /// In the order the settings list them.
-    pub const ALL: [Action; 25] = [
+    pub const ALL: [Action; 26] = [
         Action::Search,
         Action::ModeAll,
         Action::ModeImages,
@@ -59,6 +60,7 @@ impl Action {
         Action::SelectAll,
         Action::Open,
         Action::ShowInFolder,
+        Action::CopyFiles,
         Action::CopyPaths,
         Action::Favorite,
         Action::Delete,
@@ -89,6 +91,7 @@ impl Action {
             Action::SelectAll => "select_all",
             Action::Open => "open",
             Action::ShowInFolder => "show_in_folder",
+            Action::CopyFiles => "copy_files",
             Action::CopyPaths => "copy_paths",
             Action::Favorite => "favorite",
             Action::Delete => "delete",
@@ -119,6 +122,7 @@ impl Action {
             Action::SelectAll => "Select all",
             Action::Open => "Open in its app",
             Action::ShowInFolder => "Show in folder",
+            Action::CopyFiles => "Copy files",
             Action::CopyPaths => "Copy paths",
             Action::Favorite => "Favorite",
             Action::Delete => "Delete…",
@@ -150,6 +154,7 @@ impl Action {
             Action::SelectAll
             | Action::Open
             | Action::ShowInFolder
+            | Action::CopyFiles
             | Action::CopyPaths
             | Action::Favorite
             | Action::Delete
@@ -179,6 +184,7 @@ impl Action {
             Action::Last => plain(Key::End),
             Action::SelectAll => command(Key::A),
             Action::Open => plain(Key::Enter),
+            Action::CopyFiles => Some(Shortcut { key: Key::C, command: true, alt: false, shift: true }),
             Action::CopyPaths => command(Key::C),
             Action::Favorite => plain(Key::F),
             Action::Delete => plain(Key::Delete),

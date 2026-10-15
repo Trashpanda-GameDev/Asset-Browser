@@ -1,7 +1,8 @@
-//! The few things that work differently on each OS: opening and revealing files, deleting them to
-//! the Recycle Bin or Trash, the window's title bar and the process's memory. Nothing else in the
-//! app should call into a specific platform.
+//! The few things that work differently on each OS: opening and revealing files, copying them to
+//! the clipboard, deleting them to the Recycle Bin or Trash, the window's title bar and the
+//! process's memory. Nothing else in the app should call into a specific platform.
 
+use std::cell::RefCell;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -55,6 +56,31 @@ pub fn reveal(path: &Path) -> io::Result<()> {
         // There's no portable "select this file" on Linux; open its folder instead.
         Command::new("xdg-open").arg(path.parent().unwrap_or(path)).spawn().map(drop)
     }
+}
+
+thread_local! {
+    /// Kept for good: on Linux, copied files are offered to other apps for as long as it lives.
+    static CLIPBOARD: RefCell<Option<arboard::Clipboard>> = const { RefCell::new(None) };
+}
+
+/// Puts the files themselves on the clipboard, as a file manager's Copy does: pasted into a folder
+/// (Explorer, Finder or the like) they're copied there, and apps that take pasted files get them.
+/// Files that aren't there any more are left out.
+pub fn copy_files(paths: &[PathBuf]) -> Result<(), String> {
+    // Checked first, so what was on the clipboard stays when there's nothing to copy.
+    if !paths.iter().any(|path| path.exists()) {
+        return Err("the files aren't there any more".to_owned());
+    }
+    CLIPBOARD.with_borrow_mut(|kept| {
+        if kept.is_none() {
+            *kept = Some(arboard::Clipboard::new().map_err(|err| err.to_string())?);
+        }
+        let clipboard = kept.as_mut().ok_or("the clipboard can't be opened")?;
+        // On Windows, arboard adds the files to whatever is on the clipboard: an app pasting text
+        // would get what was copied before.
+        clipboard.clear().map_err(|err| err.to_string())?;
+        clipboard.set().file_list(paths).map_err(|err| err.to_string())
+    })
 }
 
 /// The path with the OS's own separators, for showing to people and handing to other programs.
@@ -154,5 +180,37 @@ pub fn memory_in_use() -> Option<u64> {
     #[cfg(not(target_os = "windows"))]
     {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// It puts files on the real clipboard, so it only runs when asked for:
+    /// `cargo test copied_files_can_be_pasted -- --ignored`.
+    #[test]
+    #[ignore]
+    fn copied_files_can_be_pasted() {
+        let dir = std::env::temp_dir().join("asset-browser-copy-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Nothing to copy leaves the clipboard as it was.
+        let mut clipboard = arboard::Clipboard::new().unwrap();
+        clipboard.set_text("copied before").unwrap();
+        assert!(copy_files(&[dir.join("gone.png")]).is_err());
+        assert_eq!(clipboard.get_text().unwrap(), "copied before");
+        let files = [dir.join("hero.png"), dir.join("jump sound.wav")];
+        for file in &files {
+            std::fs::write(file, b"made up").unwrap();
+        }
+        copy_files(&files).unwrap();
+        let pasted = clipboard.get().file_list().unwrap();
+        let names =
+            |paths: &[PathBuf]| paths.iter().map(|path| path.file_name().map(ToOwned::to_owned)).collect::<Vec<_>>();
+        assert_eq!(names(&pasted), names(&files));
+        assert!(pasted.iter().all(|path| path.is_file()), "{pasted:?}");
+        // And only them: the text from before is gone.
+        assert!(clipboard.get_text().is_err());
+        // The files stay, to paste somewhere by hand; the next run writes them again.
     }
 }

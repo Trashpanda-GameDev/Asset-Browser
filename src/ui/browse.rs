@@ -110,6 +110,8 @@ pub struct BrowseOutput {
 pub enum MenuAction {
     Open,
     Reveal,
+    /// The files themselves on the clipboard, to paste into a folder or another app.
+    CopyFiles,
     CopyPaths,
     /// Ask "Delete?" for the selection (to the Recycle Bin).
     Delete,
@@ -269,6 +271,16 @@ fn item_response(browse: &Browse<'_>, index: u32, response: &egui::Response, out
         }
         if ui.button(format!("{}  Show in folder", icon::FOLDER_OPEN)).clicked() {
             output.menu = Some(MenuAction::Reveal);
+            ui.close();
+        }
+        let files = if count > 1 {
+            format!("{}  Copy {count} files", icon::FILES)
+        } else {
+            format!("{}  Copy file", icon::FILES)
+        };
+        let hint = crate::keymap::hint(ui.ctx(), crate::keymap::Action::CopyFiles);
+        if ui.button(files).on_hover_text(format!("To paste into a folder or another app{hint}")).clicked() {
+            output.menu = Some(MenuAction::CopyFiles);
             ui.close();
         }
         let copy = if count > 1 {
