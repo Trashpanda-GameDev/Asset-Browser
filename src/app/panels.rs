@@ -89,10 +89,10 @@ impl BrowserApp {
                     }
                     // The playing sound, when it isn't the one shown.
                     let focus = self.browsing.modes[self.browsing.mode.index()].selection.focus;
-                    let playing_elsewhere = self.sound.playing.is_some_and(|(index, _)| Some(index) != focus);
+                    let playing_elsewhere = self.playback.playing.is_some_and(|(index, _)| Some(index) != focus);
                     if playing_elsewhere && let Some(library) = &self.library {
                         widgets::divider(ui);
-                        show = sound::now_playing_chip(ui, &mut self.sound, library);
+                        show = sound::now_playing_chip(ui, &mut self.playback, library);
                     }
                 });
             });
@@ -129,7 +129,7 @@ impl BrowserApp {
                     library,
                     selection,
                     previews: &mut self.previews,
-                    sound: &mut self.sound,
+                    playback: &mut self.playback,
                     render_state: self.render_state.as_ref(),
                     totals,
                     kinds: self.browsing.mode.kinds(),
@@ -140,6 +140,12 @@ impl BrowserApp {
                 output = Some(self.inspector.show(ui, args));
             });
         let Some(output) = output else { return };
+        if let Some(index) = output.load_detail
+            && let Some(library) = &self.library
+        {
+            let entry = library.entry(index);
+            self.detail.request(entry.key, library.path_of(entry), entry.kind);
+        }
         if let Some((key, choices)) = output.sheet_choices {
             self.organizing.sheets.save(key, choices);
         }
@@ -158,12 +164,19 @@ impl BrowserApp {
         }
     }
 
+    /// Hands the pane the large previews that finished loading.
+    pub(super) fn poll_detail(&mut self, ctx: &egui::Context) {
+        while let Some(loaded) = self.detail.try_recv() {
+            self.inspector.take_detail(loaded, ctx);
+        }
+    }
+
     /// The sound controls at the bottom, for when the preview pane is hidden.
     pub(super) fn player_bar(&mut self, ui: &mut egui::Ui) {
         let Some(library) = &self.library else { return };
         let focus =
             self.browsing.mode_view().selection.focus.filter(|&index| library.entry(index).kind == AssetKind::Audio);
-        let Some(index) = focus.or(self.sound.playing.map(|(index, _)| index)) else { return };
+        let Some(index) = focus.or(self.playback.playing.map(|(index, _)| index)) else { return };
         if index as usize >= library.entries().len() {
             return;
         }
@@ -175,14 +188,14 @@ impl BrowserApp {
             sound::scrubber(
                 ui,
                 56.0,
-                &mut self.sound,
+                &mut self.playback,
                 library,
                 index,
                 waveform,
                 self.previews.failed.contains_key(&entry.key),
             );
             let duration = waveform.map(|waveform| waveform.duration as f64);
-            sound::transport(ui, &mut self.sound, library, index, duration);
+            sound::transport(ui, &mut self.playback, library, index, duration);
         });
     }
 
@@ -252,7 +265,7 @@ impl BrowserApp {
                 .then_some(mode_view.selection.focus)
                 .flatten()
                 .and_then(|focus| self.browsing.view.iter().position(|&index| index == focus));
-            let now = self.sound.now();
+            let now = self.playback.now();
             let (sort, descending) = mode_view.order(self.browsing.in_group_order());
             let browse = Browse {
                 library,

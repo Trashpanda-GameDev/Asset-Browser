@@ -208,12 +208,12 @@ impl BrowserApp {
 
     fn start_deleting(&mut self, request: DeleteRequest) {
         // A sound that's being deleted stops first.
-        if let (Some(library), Some((index, _))) = (&self.library, self.sound.playing)
+        if let (Some(library), Some((index, _))) = (&self.library, self.playback.playing)
             && let Some(entry) = library.entries().get(index as usize)
         {
             let playing = library.path_of(entry);
             if request.paths.iter().any(|path| library::is_within(&playing, path)) {
-                self.sound.reset();
+                self.playback.reset();
             }
         }
         let ctx = self.ctx.clone();

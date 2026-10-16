@@ -32,14 +32,15 @@ use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use rusqlite::Connection;
 
+use crate::detail::DetailLoader;
 use crate::library::Library;
+use crate::playback::Playback;
 use crate::thumbs::ThumbService;
 use crate::ui::folders::FolderTree;
 use crate::ui::inspector::Inspector;
 use crate::ui::keymap::{self};
 use crate::ui::organize::{self};
 use crate::ui::previews::Previews;
-use crate::ui::sound::Sound;
 use crate::ui::theme;
 use crate::updates::Updates;
 use crate::watch::Watch;
@@ -72,7 +73,9 @@ pub struct BrowserApp {
     thumbs: ThumbService,
     previews: Previews,
     inspector: Inspector,
-    sound: Sound,
+    /// The large preview of the asset in the pane.
+    detail: DetailLoader,
+    playback: Playback,
     updates: Updates,
 }
 
@@ -101,10 +104,7 @@ impl BrowserApp {
                 diag::report(&format!("The library's folders can't be saved ({})", user_path.display()), err)
             })
             .ok();
-        let updates = {
-            let ctx = cc.egui_ctx.clone();
-            Updates::start(std::sync::Arc::new(move || ctx.request_repaint()))
-        };
+        let updates = Updates::start(repaint.clone());
         let watch = {
             let ctx = cc.egui_ctx.clone();
             Watch::start(move |after| ctx.request_repaint_after(after))
@@ -130,8 +130,9 @@ impl BrowserApp {
             },
             thumbs,
             previews: Previews::new(&cc.egui_ctx),
-            inspector: Inspector::new(&cc.egui_ctx),
-            sound: Sound::start(&cc.egui_ctx),
+            inspector: Inspector::default(),
+            detail: DetailLoader::start(repaint.clone()),
+            playback: Playback::start(repaint),
             updates,
         };
         app.load_settings();
@@ -155,7 +156,7 @@ impl eframe::App for BrowserApp {
         self.poll_watch(&ctx);
         self.take_dropped_folders(&ctx);
         self.previews.drain(&self.thumbs, &ctx);
-        self.inspector.poll(&ctx);
+        self.poll_detail(&ctx);
         self.refresh_membership();
         if self.browsing.view_dirty {
             self.rebuild_view();
@@ -189,7 +190,7 @@ impl eframe::App for BrowserApp {
         organize::drag_indicator(&ctx);
         sidebar::draw_drop_hint(&ctx);
         // Keep the playhead moving while something is audible.
-        if self.sound.is_audible() {
+        if self.playback.is_audible() {
             ctx.request_repaint_after(Duration::from_millis(33));
         }
     }

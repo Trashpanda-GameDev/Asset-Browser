@@ -20,6 +20,7 @@ pub(crate) mod memory;
 pub mod model;
 pub mod paths;
 pub(crate) mod platform;
+pub(crate) mod playback;
 pub(crate) mod preview_key;
 pub(crate) mod rescan;
 pub mod scan;

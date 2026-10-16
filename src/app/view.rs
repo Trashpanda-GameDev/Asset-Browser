@@ -227,10 +227,10 @@ impl BrowserApp {
     /// sounds after it are read into memory so moving on to them starts without a disk wait.
     pub(super) fn focused(&mut self, index: u32) {
         let Some(library) = &self.library else { return };
-        if library.entry(index).kind == AssetKind::Audio && self.sound.autoplay {
-            self.sound.play(library, index);
+        if library.entry(index).kind == AssetKind::Audio && self.playback.autoplay {
+            self.playback.play(library, index);
         }
-        self.sound.read_ahead_around(library, &self.browsing.view, index);
+        self.playback.read_ahead_around(library, &self.browsing.view, index);
     }
 
     pub(super) fn apply_browse(&mut self, output: BrowseOutput) {

@@ -34,6 +34,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/imaging/psd.rs` | Reads a PSD/PSB's flattened picture at reduced size |
 | `src/model/` | 3D models: the loaders, the CPU thumbnail renderer, and the lighting shared with the 3D view |
 | `src/detail.rs` | Loads the preview pane's large picture (or a GIF's frames) or whole model |
+| `src/playback.rs` | What's playing: the player, the sounds read ahead of the selection, auto-play, loop and volume |
 | `src/groups/` | Favorites, collections and categories (`mod.rs`), how they're saved (`store.rs`), and where their members are in the library (`membership.rs`) |
 | `src/sheets/` | Sprite sheets: what one is (`mod.rs`), guessing grids (`guess.rs`), reading Aseprite / TexturePacker data (`data.rs`), per-file choices (`store.rs`) |
 | `src/animated.rs` | Animated GIFs as sheets of their own frames, within a memory budget |
@@ -42,7 +43,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/ui/browse.rs` | The grid and the list (with each mode's columns) |
 | `src/ui/inspector.rs` | The preview pane, with a section per kind |
 | `src/ui/image_view.rs` | The pane's zoomable picture, which animations are drawn through too |
-| `src/ui/sound.rs` | The player: transport, waveforms, now playing |
+| `src/ui/sound.rs` | The player's controls: transport, waveforms, now playing |
 | `src/ui/viewport.rs` | The pane's 3D view (wgpu) |
 | `src/ui/folders.rs` | The folder tree and the list of the library's folders |
 | `src/ui/organize.rs` | Favorites, collections and categories in the sidebar, menus, chips, dragging |

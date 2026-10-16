@@ -150,7 +150,7 @@ impl BrowserApp {
                             ui,
                             icon::PLAY_CIRCLE,
                             "Auto-play",
-                            &mut self.sound.autoplay,
+                            &mut self.playback.autoplay,
                             "Play sounds as soon as they're selected, by click or arrow key",
                         );
                     }

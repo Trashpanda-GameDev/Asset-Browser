@@ -12,11 +12,12 @@ use eframe::egui_wgpu::RenderState;
 use egui_phosphor::regular as icon;
 
 use crate::asset::{AssetKind, KindSet};
-use crate::detail::{Detail, DetailLoader};
+use crate::detail::{Detail, Loaded};
 use crate::groups::{FAVORITES, GroupKind, Groups, Membership};
 use crate::imaging::Pixels;
 use crate::library::{Entry, Library};
 use crate::model::Model;
+use crate::playback::Playback;
 use crate::sheets::{Saved, Sheet, Source};
 
 use super::browse::{Look, MenuAction, channels, draw_preview};
@@ -26,18 +27,18 @@ use super::mode::Selection;
 use super::organize::{self, GroupCommand, Targets};
 use super::previews::Previews;
 use super::sheet_view::SheetView;
-use super::sound::{self, Sound};
+use super::sound;
 use super::viewport::Viewport;
 use super::{theme, widgets};
 
 /// Thumbnails shown for a multiple selection; the rest are counted.
 const STRIP_MAX: usize = 48;
 
+#[derive(Default)]
 pub struct Inspector {
     pub image: ImageView,
     pub viewport: Viewport,
     pub sheet: SheetView,
-    loader: DetailLoader,
     /// The large preview of the focused asset, by key.
     detail: Option<(i64, DetailState)>,
 }
@@ -59,7 +60,7 @@ pub struct InspectorArgs<'a> {
     pub library: &'a Library,
     pub selection: &'a Selection,
     pub previews: &'a mut Previews,
-    pub sound: &'a mut Sound,
+    pub playback: &'a mut Playback,
     pub render_state: Option<&'a RenderState>,
     /// What's being browsed, for the empty state: its count of each kind.
     pub totals: [u32; 3],
@@ -76,53 +77,41 @@ pub struct InspectorOutput {
     pub focus: Option<u32>,
     pub action: Option<MenuAction>,
     pub command: Option<GroupCommand>,
+    /// The focused asset's large preview is wanted: the entry to load it for.
+    pub load_detail: Option<u32>,
     /// The user changed a picture's sprite sheet: its key and the choices to save.
     pub sheet_choices: Option<(String, Saved)>,
 }
 
 impl Inspector {
-    pub fn new(ctx: &egui::Context) -> Self {
-        let ctx = ctx.clone();
-        Self {
-            image: ImageView::default(),
-            viewport: Viewport::default(),
-            sheet: SheetView::default(),
-            loader: DetailLoader::start(Arc::new(move || ctx.request_repaint())),
-            detail: None,
-        }
-    }
-
     /// Takes in a finished large preview.
-    pub fn poll(&mut self, ctx: &egui::Context) {
-        while let Some(loaded) = self.loader.try_recv() {
-            let Some((key, state)) = &mut self.detail else { continue };
-            if *key != loaded.key {
-                continue; // the selection moved on
-            }
-            *state = match loaded.result {
-                Ok(Detail::Image(pixels, sheet)) => {
-                    let image =
-                        ColorImage::from_rgba_unmultiplied([pixels.w as usize, pixels.h as usize], &pixels.rgba);
-                    let options = TextureOptions {
-                        magnification: TextureFilter::Nearest,
-                        minification: TextureFilter::Linear,
-                        mipmap_mode: Some(TextureFilter::Linear),
-                        ..TextureOptions::LINEAR
-                    };
-                    let texture = ctx.load_texture(format!("detail-{key}"), image, options);
-                    let size = [pixels.src_w, pixels.src_h];
-                    DetailState::Image { texture, size, pixels: Arc::new(pixels), sheet }
-                }
-                Ok(Detail::Model(model)) => DetailState::Model(model),
-                Err(message) => DetailState::Failed(message),
-            };
+    pub fn take_detail(&mut self, loaded: Loaded, ctx: &egui::Context) {
+        let Some((key, state)) = &mut self.detail else { return };
+        if *key != loaded.key {
+            return; // the selection moved on
         }
+        *state = match loaded.result {
+            Ok(Detail::Image(pixels, sheet)) => {
+                let image = ColorImage::from_rgba_unmultiplied([pixels.w as usize, pixels.h as usize], &pixels.rgba);
+                let options = TextureOptions {
+                    magnification: TextureFilter::Nearest,
+                    minification: TextureFilter::Linear,
+                    mipmap_mode: Some(TextureFilter::Linear),
+                    ..TextureOptions::LINEAR
+                };
+                let texture = ctx.load_texture(format!("detail-{key}"), image, options);
+                let size = [pixels.src_w, pixels.src_h];
+                DetailState::Image { texture, size, pixels: Arc::new(pixels), sheet }
+            }
+            Ok(Detail::Model(model)) => DetailState::Model(model),
+            Err(message) => DetailState::Failed(message),
+        };
     }
 
-    /// Asks for the large preview of `entry` if it needs one and hasn't got it.
-    fn want_detail(&mut self, library: &Library, entry: &Entry, previews: &Previews) {
+    /// Whether the large preview of `entry` is to be loaded: it needs one and hasn't got it.
+    fn want_detail(&mut self, entry: &Entry, previews: &Previews) -> bool {
         if self.detail.as_ref().is_some_and(|(key, _)| *key == entry.key) {
-            return;
+            return false;
         }
         let wanted = match entry.kind {
             // Every picture, small ones too: the loader also looks for sprite sheet frames in it.
@@ -132,13 +121,9 @@ impl Inspector {
             AssetKind::Model => !entry.extension().eq_ignore_ascii_case("blend"),
             AssetKind::Audio => false,
         };
-        if wanted {
-            self.detail = Some((entry.key, DetailState::Loading));
-            self.loader.request(entry.key, library.path_of(entry), entry.kind);
-        } else {
-            // Lets go of the last one's picture or model.
-            self.detail = None;
-        }
+        // Without one, lets go of the last one's picture or model.
+        self.detail = wanted.then_some((entry.key, DetailState::Loading));
+        wanted
     }
 
     #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
@@ -148,7 +133,7 @@ impl Inspector {
             library,
             selection,
             previews,
-            sound,
+            playback,
             render_state,
             totals,
             kinds,
@@ -171,7 +156,9 @@ impl Inspector {
         };
         let entry = library.entry(focus);
         previews.want(focus);
-        self.want_detail(library, entry, previews);
+        if self.want_detail(entry, previews) {
+            output.load_detail = Some(focus);
+        }
         if entry.kind != AssetKind::Model {
             self.viewport.release();
         }
@@ -186,7 +173,7 @@ impl Inspector {
             let width = ui.available_width();
             match entry.kind {
                 AssetKind::Image => self.image_section(ui, entry, previews, width),
-                AssetKind::Audio => sound_section(ui, library, focus, previews, sound),
+                AssetKind::Audio => sound_section(ui, library, focus, previews, playback),
                 AssetKind::Model => self.model_section(ui, entry, previews, render_state, width),
             }
             ui.add_space(4.0);
@@ -250,7 +237,7 @@ impl Inspector {
             widgets::property(ui, "Folder", RichText::new(folder).color(theme::TEXT_WEAK));
             // Last, since it only appears once the sound plays.
             if entry.kind == AssetKind::Audio
-                && let Some(ready) = sound.now_for(entry.key).and_then(|now| now.ready_ms)
+                && let Some(ready) = playback.now_for(entry.key).and_then(|now| now.ready_ms)
             {
                 widgets::property(ui, "Started in", format!("{ready:.0} ms"))
                     .on_hover_text("From the request to the first audio handed to the sound card");
@@ -475,13 +462,13 @@ fn metres(value: f32) -> String {
     }
 }
 
-fn sound_section(ui: &mut Ui, library: &Library, focus: u32, previews: &Previews, sound: &mut Sound) {
+fn sound_section(ui: &mut Ui, library: &Library, focus: u32, previews: &Previews, playback: &mut Playback) {
     let entry = library.entry(focus);
     let waveform = previews.waveforms.get(&entry.key).map(|waveform| waveform.as_ref());
-    sound::scrubber(ui, 120.0, sound, library, focus, waveform, previews.failed.contains_key(&entry.key));
+    sound::scrubber(ui, 120.0, playback, library, focus, waveform, previews.failed.contains_key(&entry.key));
     let duration =
-        sound.now_for(entry.key).and_then(|now| now.duration).or(waveform.map(|waveform| waveform.duration as f64));
-    sound::transport(ui, sound, library, focus, duration);
+        playback.now_for(entry.key).and_then(|now| now.duration).or(waveform.map(|waveform| waveform.duration as f64));
+    sound::transport(ui, playback, library, focus, duration);
 }
 
 fn sound_properties(ui: &mut Ui, entry: &Entry, previews: &Previews) {

@@ -247,13 +247,13 @@ impl BrowserApp {
             }
             view.group_descending = get(&key("group_descending")).is_none_or(|value| value == "1");
         }
-        self.sound.autoplay = get("sound.autoplay").is_none_or(|value| value == "1");
-        self.sound.looping = get("sound.loop").is_some_and(|value| value == "1");
+        self.playback.autoplay = get("sound.autoplay").is_none_or(|value| value == "1");
+        self.playback.looping = get("sound.loop").is_some_and(|value| value == "1");
         if let Some(volume) = get("sound.volume").and_then(|value| value.parse::<f32>().ok()) {
-            self.sound.volume = volume.clamp(0.0, 1.0);
+            self.playback.volume = volume.clamp(0.0, 1.0);
         }
-        self.sound.set_volume(self.sound.volume);
-        self.sound.set_looping(self.sound.looping);
+        self.playback.set_volume(self.playback.volume);
+        self.playback.set_looping(self.playback.looping);
         if let Some(backdrop) = get("image.backdrop").as_deref().and_then(Backdrop::from_key) {
             self.inspector.image.backdrop = backdrop;
         }
@@ -270,7 +270,7 @@ impl BrowserApp {
         self.browsing.mode = Mode::All;
         self.browsing.modes = Mode::ALL.map(ModeView::new);
         self.chrome.show_inspector = true;
-        self.sound.volume = 0.8;
+        self.playback.volume = 0.8;
         self.inspector.image.backdrop = ImageView::default().backdrop;
         // The rest have their defaults where nothing is saved.
         self.load_settings();
@@ -290,9 +290,9 @@ impl BrowserApp {
         let mut settings = vec![
             ("ui.mode".to_owned(), self.browsing.mode.key().to_owned()),
             ("ui.inspector".to_owned(), flag(self.chrome.show_inspector).to_owned()),
-            ("sound.autoplay".to_owned(), flag(self.sound.autoplay).to_owned()),
-            ("sound.loop".to_owned(), flag(self.sound.looping).to_owned()),
-            ("sound.volume".to_owned(), format!("{:.3}", self.sound.volume)),
+            ("sound.autoplay".to_owned(), flag(self.playback.autoplay).to_owned()),
+            ("sound.loop".to_owned(), flag(self.playback.looping).to_owned()),
+            ("sound.volume".to_owned(), format!("{:.3}", self.playback.volume)),
             ("image.backdrop".to_owned(), self.inspector.image.backdrop.key().to_owned()),
             ("model.turntable".to_owned(), flag(self.inspector.viewport.auto_rotate).to_owned()),
             ("model.wireframe".to_owned(), flag(self.inspector.viewport.wireframe).to_owned()),

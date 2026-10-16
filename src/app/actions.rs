@@ -188,14 +188,14 @@ impl BrowserApp {
         if space && let Some(library) = &self.library {
             // The selected sound, or else whatever is playing.
             let selected_sound = focus.filter(|&focus| library.entry(focus).kind == AssetKind::Audio);
-            let playing = self.sound.playing.filter(|(_, key)| self.sound.now_for(*key).is_some());
+            let playing = self.playback.playing.filter(|(_, key)| self.playback.now_for(*key).is_some());
             if let Some(index) = selected_sound.or(playing.map(|(index, _)| index)) {
-                self.sound.toggle(library, index);
+                self.playback.toggle(library, index);
             }
         }
         if escape {
-            if self.sound.now().is_some_and(|now| !now.finished) {
-                self.sound.stop();
+            if self.playback.now().is_some_and(|now| !now.finished) {
+                self.playback.stop();
             } else {
                 self.browsing.mode_view_mut().selection.clear();
             }

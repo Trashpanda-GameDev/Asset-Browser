@@ -252,7 +252,7 @@ impl BrowserApp {
                 let dir = old.dirs().get(self.browsing.selected_dir as usize).and_then(|dir| new.find_dir(&dir.key));
                 // The top only shows with several folders.
                 self.browsing.selected_dir = dir.unwrap_or(new.home()).max(new.home());
-                self.sound.remap(&new_index);
+                self.playback.remap(&new_index);
             }
             (None, Some(new)) => self.browsing.selected_dir = new.home(),
             (_, None) => {
@@ -260,7 +260,7 @@ impl BrowserApp {
                     view.selection.clear();
                 }
                 self.browsing.selected_dir = 0;
-                self.sound.reset();
+                self.playback.reset();
             }
         }
         self.library = library;
