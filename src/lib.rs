@@ -21,6 +21,7 @@ pub mod model;
 pub mod paths;
 pub(crate) mod platform;
 pub(crate) mod preview_key;
+pub(crate) mod rescan;
 pub mod scan;
 pub(crate) mod sheets;
 pub(crate) mod storage;

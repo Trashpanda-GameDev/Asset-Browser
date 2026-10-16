@@ -28,7 +28,7 @@ const LAYERS: [(&str, &[&str]); 5] = [
             "changelog",
         ],
     ),
-    ("services", &["thumbs", "audio", "detail", "deletion", "updates", "watch", "storage", "memory"]),
+    ("services", &["rescan", "thumbs", "audio", "detail", "deletion", "updates", "watch", "storage", "memory"]),
     ("ui", &["ui"]),
     ("app", &["app"]),
 ];

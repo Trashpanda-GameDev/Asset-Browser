@@ -36,6 +36,7 @@ use rusqlite::Connection;
 use crate::groups::{Groups, Membership};
 use crate::library::Library;
 use crate::memory;
+use crate::rescan::ScanTotals;
 use crate::thumbs::ThumbService;
 use crate::ui::folders::FolderTree;
 use crate::ui::inspector::Inspector;
@@ -51,7 +52,7 @@ use crate::updates::Updates;
 use crate::watch::Watch;
 use crate::{db, diag, paths, work};
 use deleting::{DeleteRequest, Deleting};
-use library::{LastScan, ScanDone};
+use library::ScanDone;
 use settings::Clearing;
 
 pub use crate::ui::format::{format_size, format_time, grouped};
@@ -80,7 +81,7 @@ pub struct BrowserApp {
     /// Told by the OS when files change in the library's folders, to rescan them.
     watch: Watch,
     scan_started: Instant,
-    last_scan: Option<LastScan>,
+    last_scan: Option<ScanTotals>,
 
     mode: Mode,
     modes: [ModeView; 4],

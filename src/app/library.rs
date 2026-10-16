@@ -2,13 +2,14 @@
 //! scanning them in the background (when they're opened, and when the OS says they changed).
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use eframe::egui;
 
 use crate::library::{self, Library, folder_name, path_key, root_string};
+use crate::rescan::{self, Rescanned};
 use crate::scan::ScannedFile;
-use crate::{db, diag, folder_index, platform, scan, work};
+use crate::{db, diag, folder_index, platform, work};
 
 use super::BrowserApp;
 
@@ -16,31 +17,12 @@ use super::BrowserApp;
 /// library's first folder.
 const SETTING_LAST_ROOT: &str = "last_root";
 
-/// A scan of some of the library's folders, and the library built with what it found.
+/// A scan of some of the library's folders, with the library built with what it found.
 pub(super) struct ScanDone {
-    /// The folders the library was built for.
-    roots: Vec<PathBuf>,
-    /// The library built with what was found and the files the other folders had when the scan
-    /// started. When a folder couldn't be read, its files stay as they were, which only the app
-    /// knows: then it's just what was found, for the app to build the library with.
-    built: Result<Library, Vec<(PathBuf, Vec<ScannedFile>)>>,
-    /// The folders scanned, and those that couldn't be read (unplugged, moved or renamed).
-    scanned: Vec<PathBuf>,
-    unreadable: Vec<PathBuf>,
+    rescanned: Rescanned,
     /// `BrowserApp::library_version` when the scan started. If the library has changed since,
-    /// `built` is out of date for the folders that weren't scanned.
+    /// what was built is out of date for the folders that weren't scanned.
     version: u64,
-    elapsed: Duration,
-    assets: usize,
-    dirs_visited: usize,
-    skipped: usize,
-}
-
-pub(super) struct LastScan {
-    pub(super) elapsed: Duration,
-    pub(super) assets: usize,
-    pub(super) dirs_visited: usize,
-    pub(super) skipped: usize,
 }
 
 impl BrowserApp {
@@ -249,7 +231,6 @@ impl BrowserApp {
 
     /// Scans `targets` (some of the library's folders) in the background, then builds the
     /// library with what was found and the files the other folders have now.
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub(super) fn scan(&mut self, targets: Vec<PathBuf>) {
         if targets.is_empty() {
             return;
@@ -266,54 +247,9 @@ impl BrowserApp {
         let db_path = self.db_path.clone();
         let ctx = self.ctx.clone();
         let spawned = work::spawn("scan", move || {
-            let conn = db::open_cache(&db_path).map_err(|err| diag::report("Saving the index", err)).ok();
-            let (mut elapsed, mut assets, mut dirs_visited, mut skipped) = (Duration::ZERO, 0, 0, 0);
-            let mut fresh = Vec::new();
-            let mut unreadable = Vec::new();
-            for root in &targets {
-                // A folder that can't be read keeps what was found there last time, in the index
-                // too: an unplugged drive mustn't empty its favorites and collections.
-                if let Err(err) = std::fs::read_dir(root) {
-                    let context =
-                        format!("Can't read {} (showing what was found there last time)", platform::native(root));
-                    diag::report(&context, err);
-                    unreadable.push(root.clone());
-                    continue;
-                }
-                let result = scan::scan(root);
-                if result.dirs_visited == 0 {
-                    unreadable.push(root.clone());
-                    continue;
-                }
-                if let Some(conn) = &conn
-                    && let Err(err) = folder_index::save(conn, &root_string(root), &result.files)
-                {
-                    diag::report("Saving the index", err);
-                }
-                elapsed += result.elapsed;
-                assets += result.files.len();
-                dirs_visited += result.dirs_visited;
-                skipped += result.skipped_files;
-                fresh.push((root.clone(), result.files));
-            }
-            let scanned: Vec<PathBuf> = fresh.iter().map(|(root, _)| root.clone()).collect();
-            let built = if unreadable.is_empty() {
-                let mut others = others;
-                let files = roots
-                    .iter()
-                    .map(|root| {
-                        let from = if targets.contains(root) { &mut fresh } else { &mut others };
-                        let files = from.iter().position(|(path, _)| path == root).map(|at| from.swap_remove(at).1);
-                        (root.clone(), files.unwrap_or_default())
-                    })
-                    .collect();
-                Ok(Library::build(files))
-            } else {
-                Err(fresh)
-            };
-            let done = ScanDone { roots, built, scanned, unreadable, version, elapsed, assets, dirs_visited, skipped };
+            let rescanned = rescan::rescan(&db_path, roots, &targets, others);
             // Fails only when the window has closed.
-            let _ = tx.send(done);
+            let _ = tx.send(ScanDone { rescanned, version });
             ctx.request_repaint();
         });
         if spawned.is_some() {
@@ -335,21 +271,16 @@ impl BrowserApp {
     }
 
     pub(super) fn poll_scans(&mut self) {
-        while let Ok(done) = self.scan_rx.try_recv() {
+        while let Ok(ScanDone { rescanned: done, version }) = self.scan_rx.try_recv() {
             self.scans = self.scans.saturating_sub(1);
-            self.last_scan = Some(LastScan {
-                elapsed: done.elapsed,
-                assets: done.assets,
-                dirs_visited: done.dirs_visited,
-                skipped: done.skipped,
-            });
+            self.last_scan = Some(done.totals);
             for root in &done.scanned {
                 self.folders.unreadable.remove(&path_key(root));
             }
             for root in &done.unreadable {
                 self.folders.unreadable.insert(path_key(root));
             }
-            let current = done.version == self.library_version && done.roots == self.roots;
+            let current = version == self.library_version && done.roots == self.roots;
             let library = match done.built {
                 Ok(library) if current => Some(library),
                 built => {

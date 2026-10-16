@@ -21,6 +21,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | File | What it does |
 |---|---|
 | `src/scan.rs` | Parallel folder walk; which files count as assets |
+| `src/rescan.rs` | Scanning some of the library's folders again, saving their index, and building the library anew |
 | `src/watch.rs` | Told by the OS when the library's folders change, to rescan them once the changes settle |
 | `src/library/` | The library's folders: its files and one folder tree over all of them, filtering (`mod.rs`), building it from a scan (`build.rs`), ordering (`sort.rs`), how paths are compared (`paths.rs`) |
 | `src/paths.rs` | Where the cache, the user's own data and the log are kept (`ASSET_BROWSER_HOME` moves all three) |
