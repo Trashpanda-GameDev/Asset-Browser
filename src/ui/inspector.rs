@@ -313,10 +313,11 @@ impl Inspector {
         if *key != entry.key || !self.sheet.animate || self.sheet.sheet.is_none() {
             return;
         }
-        let (texture, size, pixels) = (texture.id(), *size, pixels.clone());
+        let sheet_picture = Picture { texture: texture.id(), size: *size, pixel_art: false };
+        let pixels = pixels.clone();
         ui.add_space(10.0);
         widgets::section_label(ui, "Animation");
-        self.sheet.controls(ui, texture, size, &pixels);
+        self.sheet.controls(ui, &sheet_picture, &pixels);
     }
 
     fn image_section(&mut self, ui: &mut Ui, entry: &Entry, previews: &Previews, width: f32) {
