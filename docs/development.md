@@ -47,7 +47,9 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/ui/browse.rs` | The grid and the list (with each mode's columns) |
 | `src/ui/inspector.rs` | The preview pane, with a section per kind |
 | `src/ui/image_view.rs` | The pane's zoomable picture, which animations are drawn through too |
-| `src/ui/sound.rs` | The player's controls: transport, waveforms, now playing |
+| `src/ui/display.rs` | How assets are shown everywhere: the backdrop behind pictures, the 3D view's turntable and triangles |
+| `src/ui/asset_actions.rs` | Open, show in folder, copy and delete: the context menu's items and the pane's buttons |
+| `src/ui/sound.rs` | The player's controls: transport and waveforms, asking for what they want (`SoundCommand`) |
 | `src/ui/viewport.rs` | The pane's 3D view (wgpu) |
 | `src/ui/folders.rs` | The folder tree and the list of the library's folders |
 | `src/ui/organize.rs` | Favorites, collections and categories in the sidebar, menus, chips, dragging |

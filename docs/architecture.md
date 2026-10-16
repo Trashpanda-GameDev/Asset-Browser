@@ -32,10 +32,12 @@ exception the code no longer needs fails the test, so the list only shrinks.
 - **The app** (`src/app/`) owns the state and the services. Each frame it takes in what the services finished,
   rebuilds what's shown if something changed, handles the keys, draws the panels, and then does what they asked for.
 - **Views** (`src/ui/`) draw and return intents: `show(ui, &Args) -> Output`, where the output is what the user asked
-  for (`organize::GroupCommand`, `folders::FolderAction`, `settings::Command`, `browse::BrowseOutput`). A view changes
-  nothing but its own view state, such as the text being typed. It reads no files, starts no threads and opens no
-  databases: the app gives it what it shows. The app applies the output after the panel's closure returns, so
-  nothing changes halfway through drawing a frame.
+  for (`header::HeaderCommand`, `organize::GroupCommand`, `sound::SoundCommand`, `settings::Command`,
+  `browse::BrowseOutput`). A view changes nothing but its own view state, such as a picture's zoom or the text being
+  typed (which comes in its args by value, like `HeaderArgs::query`). It reads no files, starts no threads and opens
+  no databases: the app gives it what it shows, the settings it draws with included (`display::Display`), and applies
+  the output after the panel's closure returns, so nothing changes halfway through drawing a frame. The app never
+  writes a view's fields: it tells a view something through a method (`Settings::open`, `FolderTree::reveal`).
 - **Services** keep slow work off the window's thread: `start(wake)` returns a handle, requests go in through its
   methods, results come back through `poll` or `try_recv`, `wake` asks the window to draw again when something is
   ready, and dropping the handle stops its threads. Nothing slow runs on the window's thread. The pieces they're
