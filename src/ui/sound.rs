@@ -43,12 +43,12 @@ pub fn transport(
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let (glyph, tip) = if audible { (icon::PAUSE, "Pause") } else { (icon::PLAY, "Play") };
-            let hint = |action| keymap::hint(ui.ctx(), action);
-            let (play_hint, stop_hint) = (hint(Action::PlayPause), hint(Action::StopOrClear));
-            if play_button(ui, glyph).on_hover_text(format!("{tip}{play_hint}")).clicked() {
+            let play_tip = keymap::tooltip(ui.ctx(), tip, Action::PlayPause);
+            if play_button(ui, glyph).on_hover_text(play_tip).clicked() {
                 command = Some(SoundCommand::Toggle(index));
             }
-            if widgets::icon_button(ui, icon::STOP, &format!("Stop{stop_hint}"), false).clicked() {
+            let stop_tip = keymap::tooltip(ui.ctx(), "Stop", Action::StopOrClear);
+            if widgets::icon_button(ui, icon::STOP, &stop_tip, false).clicked() {
                 command = Some(SoundCommand::Stop);
             }
             if widgets::icon_button(ui, icon::REPEAT, "Loop", playback.looping()).clicked() {

@@ -67,6 +67,11 @@ impl GroupEdit {
     }
 }
 
+/// What starring does to assets that are all `favorite` already, or not: for menus and tooltips.
+pub fn favorite_action(favorite: bool) -> &'static str {
+    if favorite { "Remove from Favorites" } else { "Add to Favorites" }
+}
+
 /// Whether every one of `targets` (entry indices) is in the group.
 pub fn all_in(membership: &Membership, id: i64, targets: &[u32]) -> bool {
     !targets.is_empty() && targets.iter().all(|&index| membership.groups_of(index).contains(&id))
@@ -370,7 +375,7 @@ pub fn menu_items(
 ) -> Option<GroupCommand> {
     let mut command = None;
     let favorite = all_in(membership, FAVORITES, targets);
-    let label = if favorite { "Remove from Favorites" } else { "Add to Favorites" };
+    let label = favorite_action(favorite);
     let star =
         RichText::new(icon::STAR).family(if favorite { theme::filled_icons() } else { egui::FontFamily::Proportional });
     let clicked = ui

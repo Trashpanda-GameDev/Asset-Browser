@@ -93,10 +93,8 @@ fn library_button(ui: &mut Ui, roots: &[PathBuf], library: Option<&Library>, kin
 fn mode_buttons(ui: &mut Ui, totals: Option<[u32; 3]>, current: Mode) -> Option<Mode> {
     let room = ui.available_width();
     let (show_counts, show_labels) = (room > 960.0, room > 780.0);
-    let tips: Vec<String> = Mode::ALL
-        .iter()
-        .map(|mode| format!("{}{}", mode.description(), keymap::hint(ui.ctx(), mode.shortcut())))
-        .collect();
+    let tips: Vec<String> =
+        Mode::ALL.iter().map(|mode| keymap::tooltip(ui.ctx(), mode.description(), mode.shortcut())).collect();
     let segments: Vec<widgets::Segment<'_>> = Mode::ALL
         .iter()
         .zip(&tips)
@@ -112,16 +110,13 @@ fn mode_buttons(ui: &mut Ui, totals: Option<[u32; 3]>, current: Mode) -> Option<
 
 /// Right to left: the settings, the preview pane, list or grid, and the search.
 fn view_buttons(ui: &mut Ui, args: &mut HeaderArgs<'_>, commands: &mut Vec<HeaderCommand>) {
-    let settings_tip = format!("Settings{}", keymap::hint(ui.ctx(), Action::Settings));
+    let settings_tip = keymap::tooltip(ui.ctx(), "Settings", Action::Settings);
     if widgets::icon_button(ui, icon::GEAR_SIX, &settings_tip, args.settings_open).clicked() {
         commands.push(HeaderCommand::OpenSettings);
     }
     widgets::divider(ui);
-    let pane_tip = format!(
-        "{} the preview pane{}",
-        if args.pane_shown { "Hide" } else { "Show" },
-        keymap::hint(ui.ctx(), Action::TogglePane)
-    );
+    let pane = if args.pane_shown { "Hide the preview pane" } else { "Show the preview pane" };
+    let pane_tip = keymap::tooltip(ui.ctx(), pane, Action::TogglePane);
     if widgets::icon_button(ui, icon::SIDEBAR_SIMPLE, &pane_tip, args.pane_shown).clicked() {
         commands.push(HeaderCommand::TogglePane);
     }
@@ -130,7 +125,7 @@ fn view_buttons(ui: &mut Ui, args: &mut HeaderArgs<'_>, commands: &mut Vec<Heade
         (ViewLayout::List, icon::LIST, "List", Action::List),
         (ViewLayout::Grid, icon::SQUARES_FOUR, "Grid", Action::Grid),
     ] {
-        let tip = format!("{name}{}", keymap::hint(ui.ctx(), action));
+        let tip = keymap::tooltip(ui.ctx(), name, action);
         if widgets::icon_button(ui, glyph, &tip, args.layout == layout).clicked() {
             commands.push(HeaderCommand::Layout(layout));
         }

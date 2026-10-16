@@ -388,14 +388,23 @@ pub fn publish(ctx: &egui::Context, keymap: &Keymap) {
     ctx.data_mut(|data| data.insert_temp(egui::Id::new(PUBLISHED), keymap));
 }
 
-/// " (Ctrl+F)" for a tooltip, or nothing when the action has no shortcut.
-pub fn hint(ctx: &egui::Context, action: Action) -> String {
+/// The action's shortcut as the user has it ("Ctrl+F"), if it has one.
+pub fn shortcut_label(ctx: &egui::Context, action: Action) -> Option<String> {
     let keymap: Option<std::sync::Arc<Keymap>> = ctx.data(|data| data.get_temp(egui::Id::new(PUBLISHED)));
     let shortcut = match keymap {
         Some(keymap) => keymap.get(action),
         None => action.default_shortcut(),
     };
-    shortcut.map_or_else(String::new, |shortcut| format!(" ({})", shortcut.label(ctx)))
+    shortcut.map(|shortcut| shortcut.label(ctx))
+}
+
+/// `text` with the action's shortcut after it, for a tooltip: "Settings (Ctrl+,)", or just
+/// "Settings" when it has none.
+pub fn tooltip(ctx: &egui::Context, text: &str, action: Action) -> String {
+    match shortcut_label(ctx, action) {
+        Some(label) => format!("{text} ({label})"),
+        None => text.to_owned(),
+    }
 }
 
 /// The next key pressed this frame, with its modifiers, taken out of the input: what a shortcut

@@ -25,6 +25,7 @@ use super::browse::{Look, channels, draw_preview};
 use super::display::{self, Display};
 use super::format::{format_age, format_size, format_time, grouped};
 use super::image_view::{ImageView, Picture};
+use super::keymap::{self, Action};
 use super::mode::Selection;
 use super::organize::{self, GroupCommand, Targets};
 use super::previews::Previews;
@@ -690,9 +691,8 @@ fn favorite_button(ui: &mut Ui, favorite: bool) -> egui::Response {
         star,
     );
     painter.galley(pos2(rect.left() + 32.0, rect.center().y - galley.size().y / 2.0), galley, theme::TEXT);
-    let tip = if favorite { "Remove from Favorites" } else { "Add to Favorites" };
-    let hint = crate::ui::keymap::hint(&response.ctx, crate::ui::keymap::Action::Favorite);
-    response.on_hover_text(format!("{tip}{hint}"))
+    let tip = keymap::tooltip(&response.ctx, organize::favorite_action(favorite), Action::Favorite);
+    response.on_hover_text(tip)
 }
 
 /// A stand-in while the preview is made.

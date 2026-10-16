@@ -7,6 +7,7 @@ use egui_phosphor::regular as icon;
 use crate::asset::AssetKind;
 use crate::groups::{GroupKind, Groups, UNCATEGORIZED};
 
+use super::keymap::{self, Action};
 use super::{theme, widgets};
 
 /// No folders yet: how to add one. Whether "Add a folder…" was clicked.
@@ -51,7 +52,7 @@ pub fn nothing_here(ui: &mut Ui, args: &EmptyArgs<'_>) {
     let text = if args.scanning {
         "Scanning…".to_owned()
     } else if query.is_empty() {
-        format!("No {what} {}.", place(args.group, args.groups))
+        format!("No {what} {}.", place(ui.ctx(), args.group, args.groups))
     } else {
         format!("No {what} here match \u{201c}{query}\u{201d}.")
     };
@@ -61,13 +62,14 @@ pub fn nothing_here(ui: &mut Ui, args: &EmptyArgs<'_>) {
 }
 
 /// Where there's nothing, and for a group how to put something in it.
-fn place(group: Option<i64>, groups: &Groups) -> String {
+fn place(ctx: &egui::Context, group: Option<i64>, groups: &Groups) -> String {
     match group {
         Some(UNCATEGORIZED) => "without a category".to_owned(),
         Some(id) => match groups.get(id) {
-            Some(group) if group.kind == GroupKind::Favorites => {
-                "in Favorites yet. Star assets with F or the star on their tile".to_owned()
-            }
+            Some(group) if group.kind == GroupKind::Favorites => match keymap::shortcut_label(ctx, Action::Favorite) {
+                Some(key) => format!("in Favorites yet. Star assets with {key} or the star on their tile"),
+                None => "in Favorites yet. Star assets with the star on their tile".to_owned(),
+            },
             Some(group) => format!("in \u{201c}{}\u{201d} yet. Drag assets onto it in the sidebar", group.name),
             None => "here".to_owned(),
         },

@@ -43,7 +43,7 @@ pub fn menu_items(ui: &mut Ui, count: usize) -> Option<AssetAction> {
 pub fn delete_menu_item(ui: &mut Ui, count: usize) -> Option<AssetAction> {
     let label =
         if count > 1 { format!("{}  Delete {count}…", icon::TRASH) } else { format!("{}  Delete…", icon::TRASH) };
-    let tip = format!("To the {} (Del)", crate::platform::trash_name());
+    let tip = keymap::tooltip(ui.ctx(), &format!("To the {}", crate::platform::trash_name()), Action::Delete);
     let clicked = ui.button(label).on_hover_text(tip).clicked();
     if clicked {
         ui.close();
@@ -54,7 +54,7 @@ pub fn delete_menu_item(ui: &mut Ui, count: usize) -> Option<AssetAction> {
 /// The preview pane's buttons, for `count` assets: open, show, copy. What was clicked.
 pub fn buttons(ui: &mut Ui, count: usize) -> Option<AssetAction> {
     let mut clicked = None;
-    let open_tip = format!("Open in its default app{}", keymap::hint(ui.ctx(), Action::Open));
+    let open_tip = keymap::tooltip(ui.ctx(), "Open in its default app", Action::Open);
     if widgets::button(ui, icon::ARROW_SQUARE_OUT, "Open").on_hover_text(open_tip).clicked() {
         clicked = Some(AssetAction::Open);
     }
@@ -80,5 +80,5 @@ fn paths_label(count: usize) -> String {
 }
 
 fn copy_files_tip(ui: &Ui) -> String {
-    format!("To paste into a folder or another app{}", keymap::hint(ui.ctx(), Action::CopyFiles))
+    keymap::tooltip(ui.ctx(), "To paste into a folder or another app", Action::CopyFiles)
 }

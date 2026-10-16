@@ -17,6 +17,7 @@ use crate::library::{Entry, Library, SortBy};
 use super::asset_actions::{self, AssetAction};
 use super::display::Backdrop;
 use super::format::{format_age, format_size, format_time, grouped};
+use super::keymap::{self, Action};
 use super::mode::{Mode, Selection};
 use super::organize::{self, DraggedAssets, GroupCommand, Targets};
 use super::previews::{CachedTexture, Previews};
@@ -283,9 +284,8 @@ fn star_button(ui: &Ui, browse: &Browse<'_>, index: u32, center: Pos2, show_outl
     // A dark halo keeps the star readable over light pictures.
     painter.circle_filled(rect.center(), 10.0, Color32::from_black_alpha(if favorite { 110 } else { 80 }));
     painter.text(rect.center(), Align2::CENTER_CENTER, icon::STAR, FontId::new(14.0, family), color);
-    let tip = if favorite { "Remove from Favorites" } else { "Add to Favorites" };
-    let hint = crate::ui::keymap::hint(&response.ctx, crate::ui::keymap::Action::Favorite);
-    let clicked = response.on_hover_text(format!("{tip}{hint}")).clicked();
+    let tip = keymap::tooltip(&response.ctx, organize::favorite_action(favorite), Action::Favorite);
+    let clicked = response.on_hover_text(tip).clicked();
     let path = browse.library.path_of(browse.library.entry(index));
     clicked.then(|| GroupCommand::ToggleFavorite(Targets::Paths(vec![path])))
 }
