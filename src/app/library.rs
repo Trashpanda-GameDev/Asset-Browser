@@ -1,6 +1,7 @@
 //! The library's folders: opening them from the cached index, adding and taking them out, and
 //! scanning them in the background (when they're opened, and when the OS says they changed).
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -43,6 +44,8 @@ pub(super) struct Folders {
     pub(super) watch: Watch,
     pub(super) scan_started: Instant,
     pub(super) last_scan: Option<ScanTotals>,
+    /// The library's folders that couldn't be read at their last scan, by key.
+    pub(super) unreadable: HashSet<String>,
 }
 
 impl Folders {
@@ -58,6 +61,7 @@ impl Folders {
             watch,
             scan_started: Instant::now(),
             last_scan: None,
+            unreadable: HashSet::new(),
         }
     }
 }
@@ -316,10 +320,10 @@ impl BrowserApp {
             self.folders.scans = self.folders.scans.saturating_sub(1);
             self.folders.last_scan = Some(done.totals);
             for root in &done.scanned {
-                self.chrome.folder_tree.unreadable.remove(&path_key(root));
+                self.folders.unreadable.remove(&path_key(root));
             }
             for root in &done.unreadable {
-                self.chrome.folder_tree.unreadable.insert(path_key(root));
+                self.folders.unreadable.insert(path_key(root));
             }
             let current = version == self.folders.library_version && done.roots == self.folders.roots;
             let library = match done.built {

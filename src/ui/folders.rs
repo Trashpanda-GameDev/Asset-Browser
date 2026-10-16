@@ -42,9 +42,19 @@ pub struct FolderTree {
     expanded: HashSet<String>,
     /// The library's folders that were closed.
     collapsed: HashSet<String>,
+}
+
+/// What the folder tree shows.
+#[derive(Clone, Copy)]
+pub struct FolderArgs<'a> {
+    pub library: &'a Library,
+    /// What the mode browses, for the counts.
+    pub kinds: KindSet,
+    /// The folder browsed; none (`u32::MAX`) while a group is.
+    pub selected: u32,
     /// The library's folders that couldn't be read at their last scan, by key: they show what
     /// was found there before.
-    pub unreadable: HashSet<String>,
+    pub unreadable: &'a HashSet<String>,
 }
 
 struct Row {
@@ -90,7 +100,8 @@ impl FolderTree {
 
     /// Draws the tree; returns what was asked of a folder.
     #[expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "refactor: split into named steps")]
-    pub fn show(&mut self, ui: &mut Ui, library: &Library, kinds: KindSet, selected: u32) -> Option<FolderAction> {
+    pub fn show(&mut self, ui: &mut Ui, args: &FolderArgs<'_>) -> Option<FolderAction> {
+        let FolderArgs { library, kinds, selected, unreadable } = *args;
         let rows = self.rows(library, kinds);
         let mut action = None;
         let mut toggled = None;
@@ -128,7 +139,7 @@ impl FolderTree {
                         }
                     }
                     x += 16.0;
-                    let unreadable = is_root(node) && self.unreadable.contains(&node.key);
+                    let unreadable = is_root(node) && unreadable.contains(&node.key);
                     let folder_glyph = if node.root.is_none() {
                         icon::FOLDERS
                     } else if unreadable {

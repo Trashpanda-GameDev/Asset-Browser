@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use eframe::egui::{self, Align, Frame, Layout, Margin, RichText};
 use egui_phosphor::regular as icon;
 
-use crate::ui::folders::FolderAction;
+use crate::ui::folders::{FolderAction, FolderArgs};
 use crate::ui::organize::Sidebar;
 use crate::ui::{theme, widgets};
 use crate::{diag, platform};
@@ -59,7 +59,13 @@ impl BrowserApp {
             };
             // No folder is highlighted while a group is browsed.
             let selected = if self.browsing.group.is_some() { u32::MAX } else { self.browsing.selected_dir };
-            if let Some(asked) = self.chrome.folder_tree.show(ui, library, self.browsing.mode.kinds(), selected) {
+            let args = FolderArgs {
+                library,
+                kinds: self.browsing.mode.kinds(),
+                selected,
+                unreadable: &self.folders.unreadable,
+            };
+            if let Some(asked) = self.chrome.folder_tree.show(ui, &args) {
                 action = Some(asked);
             }
         });
