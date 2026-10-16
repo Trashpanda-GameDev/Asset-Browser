@@ -14,6 +14,7 @@ use crate::audio::Waveform;
 use crate::imaging::Pixels;
 use crate::library::{Entry, Library};
 use crate::model::ModelInfo;
+use crate::storage::Part;
 use crate::thumbs::{Preview, Thumb, ThumbJob, ThumbService};
 
 use super::theme;
@@ -82,15 +83,14 @@ impl Previews {
 
     /// Forgets what's held of the cache's parts that were cleared, so they're made again as
     /// they're shown: thumbnails (and model pictures), waveforms, model facts.
-    #[expect(clippy::fn_params_excessive_bools, reason = "refactor: an enum instead of bool flags")]
-    pub fn forget(&mut self, thumbnails: bool, waveforms: bool, models: bool) {
-        if thumbnails {
+    pub fn forget(&mut self, cleared: &[Part]) {
+        if cleared.contains(&Part::Thumbnails) {
             self.textures.clear();
         }
-        if waveforms {
+        if cleared.contains(&Part::Waveforms) {
             self.waveforms.clear();
         }
-        if models {
+        if cleared.contains(&Part::ModelFacts) {
             // A model without its facts counts as not previewed, so its picture is made again too.
             self.models.clear();
         }

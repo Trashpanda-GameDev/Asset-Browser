@@ -2,7 +2,7 @@
 //! for each picture.
 
 use crate::groups::{self, UNCATEGORIZED};
-use crate::library::{Library, SortBy};
+use crate::library::{Library, Order, SortBy};
 use crate::ui::mode::{Layout as ViewLayout, Mode};
 use crate::ui::whats_new::WhatsNew;
 
@@ -82,7 +82,7 @@ impl BrowserApp {
         }
         if let Some(sort) = view.sort {
             let in_group = self.browsing.in_group_order();
-            self.browsing.mode_view_mut().set_order(in_group, sort, false);
+            self.browsing.mode_view_mut().set_order(in_group, Order { by: sort, descending: false });
         }
         let found = (self.library.as_ref().zip(view.file))
             .and_then(|(library, file)| library.entries().iter().position(|entry| entry.rel.ends_with(file)));

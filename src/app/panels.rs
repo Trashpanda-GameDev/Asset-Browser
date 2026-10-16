@@ -183,15 +183,14 @@ impl BrowserApp {
             .flatten()
             .and_then(|focus| self.browsing.view.iter().position(|&index| index == focus));
         let now = self.playback.now();
-        let (sort, descending) = mode_view.order(self.browsing.in_group_order());
+        let order = mode_view.order(self.browsing.in_group_order());
         let browse = Browse {
             library,
             view: &self.browsing.view,
             selection: &mode_view.selection,
             now: now.as_ref(),
             mode: self.browsing.mode,
-            sort,
-            descending,
+            order,
             backdrop: self.browsing.display.backdrop,
             scroll_to,
             scroll: self.browsing.scroll,

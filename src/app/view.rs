@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use crate::asset::AssetKind;
 use crate::groups::{Membership, UNCATEGORIZED};
-use crate::library::SortBy;
+use crate::library::{Order, SortBy};
 use crate::ui::browse::BrowseOutput;
 use crate::ui::display::Display;
 use crate::ui::mode::{Layout as ViewLayout, Mode, ModeView};
@@ -76,17 +76,21 @@ impl Browsing {
     }
 
     /// Orders the mode's assets: a group's own order when it has one, or the folders'.
-    pub(super) fn set_order(&mut self, sort: SortBy, descending: bool) {
+    pub(super) fn set_order(&mut self, order: Order) {
         let in_group = self.in_group_order();
-        self.mode_view_mut().set_order(in_group, sort, descending);
+        self.mode_view_mut().set_order(in_group, order);
         self.view_dirty = true;
     }
 
     /// A column's heading was clicked: orders by it, or the other way round when it already does.
     pub(super) fn sort_by(&mut self, sort: SortBy) {
-        let (current, descending) = self.mode_view().order(self.in_group_order());
-        let descending = if current == sort { !descending } else { sort.starts_descending() };
-        self.set_order(sort, descending);
+        let current = self.mode_view().order(self.in_group_order());
+        let order = if current.by == sort {
+            Order { by: sort, descending: !current.descending }
+        } else {
+            Order::starting(sort)
+        };
+        self.set_order(order);
     }
 
     pub(super) fn in_group_order(&self) -> bool {
@@ -166,7 +170,7 @@ impl BrowserApp {
         let by_category = |index: u32, word: &str| membership.category_matches(groups, index, word);
         let kinds = self.browsing.mode.kinds();
         let mode_view = &mut self.browsing.modes[self.browsing.mode.index()];
-        let (sort, descending) = mode_view.order(in_group_order);
+        let Order { by: sort, descending } = mode_view.order(in_group_order);
         let mut view = match self.browsing.group {
             Some(id) => {
                 let members = membership.entries.get(&id).map_or(&[][..], Vec::as_slice);

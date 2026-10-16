@@ -12,7 +12,7 @@ use egui_phosphor::regular as icon;
 use crate::asset::AssetKind;
 use crate::audio::NowPlaying;
 use crate::groups::{GroupKind, Groups, Membership};
-use crate::library::{Entry, Library, SortBy};
+use crate::library::{Entry, Library, Order, SortBy};
 
 use super::asset_actions::{self, AssetAction};
 use super::display::Backdrop;
@@ -38,8 +38,7 @@ pub struct Browse<'a> {
     pub selection: &'a Selection,
     pub now: Option<&'a NowPlaying>,
     pub mode: Mode,
-    pub sort: SortBy,
-    pub descending: bool,
+    pub order: Order,
     /// Behind transparent pictures.
     pub backdrop: Backdrop,
     /// Bring this position in `view` into sight (after moving with the keyboard).
@@ -170,12 +169,12 @@ pub fn list(ui: &mut Ui, browse: &Browse<'_>, previews: &mut Previews) -> Browse
             ui.id().with(("header", column.label())),
             if sort.is_some() { Sense::click() } else { Sense::hover() },
         );
-        let sorted = sort.is_some_and(|sort| sort == browse.sort);
+        let sorted = sort.is_some_and(|sort| sort == browse.order.by);
         let color = if sorted || (sort.is_some() && response.hovered()) { theme::TEXT_WEAK } else { theme::TEXT_FAINT };
         let mut label = column.label().to_uppercase();
         if sorted {
             label.push(' ');
-            label.push_str(if browse.descending { icon::CARET_DOWN } else { icon::CARET_UP });
+            label.push_str(if browse.order.descending { icon::CARET_DOWN } else { icon::CARET_UP });
         }
         let (anchor, align) = text_anchor(*column, &rect);
         ui.painter().text(anchor, align, label, FontId::new(theme::size::TINY, theme::semibold()), color);

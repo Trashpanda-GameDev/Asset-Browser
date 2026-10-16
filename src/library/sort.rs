@@ -2,6 +2,20 @@
 
 use super::Library;
 
+/// An order for the assets: what they're sorted by, and which way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Order {
+    pub by: SortBy,
+    pub descending: bool,
+}
+
+impl Order {
+    /// Sorted by `by`, the way that starts out (`SortBy::starts_descending`).
+    pub fn starting(by: SortBy) -> Self {
+        Self { by, descending: by.starts_descending() }
+    }
+}
+
 /// The order of the browsed assets. `Folder` is the library's own order: by path, so each
 /// folder's files stay together. `Added` is the order assets went into a collection or category
 /// (see `groups`); in a folder it's the same as `Folder`.

@@ -8,7 +8,7 @@ use eframe::egui::Color32;
 use egui_phosphor::regular as icon;
 
 use crate::asset::{AssetKind, KindSet};
-use crate::library::SortBy;
+use crate::library::{Order, SortBy};
 
 use super::keymap::Action;
 use super::theme;
@@ -111,11 +111,9 @@ pub struct ModeView {
     pub layout: Layout,
     pub tile: f32,
     /// The order in folders.
-    pub sort: SortBy,
-    pub descending: bool,
+    pub folder_order: Order,
     /// The order in Favorites, collections and categories: newest first unless changed.
-    pub group_sort: SortBy,
-    pub group_descending: bool,
+    pub group_order: Order,
     pub selection: Selection,
 }
 
@@ -125,26 +123,19 @@ impl ModeView {
             // Sounds are easiest to scan as a list with waveforms; pictures and models as tiles.
             layout: if mode == Mode::Sounds { Layout::List } else { Layout::Grid },
             tile: 128.0,
-            sort: SortBy::Folder,
-            descending: false,
-            group_sort: SortBy::Added,
-            group_descending: true,
+            folder_order: Order { by: SortBy::Folder, descending: false },
+            group_order: Order { by: SortBy::Added, descending: true },
             selection: Selection::default(),
         }
     }
 
-    /// The order in use: the folder's or the groups'.
-    pub fn order(&self, in_group: bool) -> (SortBy, bool) {
-        if in_group { (self.group_sort, self.group_descending) } else { (self.sort, self.descending) }
+    /// The order in use: the groups' or the folders'.
+    pub fn order(&self, in_group: bool) -> Order {
+        if in_group { self.group_order } else { self.folder_order }
     }
 
-    #[expect(clippy::fn_params_excessive_bools, reason = "refactor: an enum instead of bool flags")]
-    pub fn set_order(&mut self, in_group: bool, sort: SortBy, descending: bool) {
-        if in_group {
-            (self.group_sort, self.group_descending) = (sort, descending);
-        } else {
-            (self.sort, self.descending) = (sort, descending);
-        }
+    pub fn set_order(&mut self, in_group: bool, order: Order) {
+        *if in_group { &mut self.group_order } else { &mut self.folder_order } = order;
     }
 }
 

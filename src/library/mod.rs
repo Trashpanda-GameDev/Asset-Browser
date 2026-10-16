@@ -15,7 +15,7 @@ use crate::asset::{AssetKind, KindSet};
 use crate::scan::ScannedFile;
 
 pub use paths::{add_root, folder_name, is_within, path_key, root_string};
-pub use sort::SortBy;
+pub use sort::{Order, SortBy};
 
 /// One of the folders the library is made of.
 pub struct Root {

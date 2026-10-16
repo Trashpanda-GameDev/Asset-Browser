@@ -4,7 +4,7 @@ use eframe::egui::{self, Align, Layout, RichText, Sense, Ui, vec2};
 use egui_phosphor::regular as icon;
 
 use crate::groups::{self, GroupKind, Groups, Membership, UNCATEGORIZED};
-use crate::library::{Library, SortBy};
+use crate::library::{Library, Order, SortBy};
 
 use super::display::{self, Display};
 use super::format::{grouped, plural};
@@ -35,7 +35,7 @@ pub enum ToolbarCommand {
     /// A folder in the path was clicked.
     GoTo(u32),
     Group(GroupCommand),
-    Order(SortBy, bool),
+    Order(Order),
     Tile(f32),
     Autoplay(bool),
     Display(Display),
@@ -151,15 +151,15 @@ fn view_options(ui: &mut Ui, args: &ToolbarArgs<'_>, commands: &mut Vec<ToolbarC
         }
         ui.label(RichText::new(icon::SQUARES_FOUR).size(theme::size::MEDIUM).color(theme::TEXT_FAINT));
     }
-    if let Some((sort, descending)) = order_menu(ui, view, args.in_group_order) {
-        commands.push(ToolbarCommand::Order(sort, descending));
+    if let Some(order) = order_menu(ui, view, args.in_group_order) {
+        commands.push(ToolbarCommand::Order(order));
     }
     commands.extend(mode_options(ui, args));
 }
 
 /// What the assets are ordered by, and which way; what was picked.
-fn order_menu(ui: &mut Ui, view: &ModeView, in_group: bool) -> Option<(SortBy, bool)> {
-    let (sort, descending) = view.order(in_group);
+fn order_menu(ui: &mut Ui, view: &ModeView, in_group: bool) -> Option<Order> {
+    let Order { by: sort, descending } = view.order(in_group);
     let arrow = if descending { icon::SORT_DESCENDING } else { icon::SORT_ASCENDING };
     let options: &[SortBy] = if in_group { &SortBy::IN_GROUPS } else { &SortBy::ALL };
     let mut picked = None;
@@ -167,7 +167,7 @@ fn order_menu(ui: &mut Ui, view: &ModeView, in_group: bool) -> Option<(SortBy, b
         ui.set_min_width(150.0);
         for &option in options {
             if ui.selectable_label(option == sort, option.label()).clicked() {
-                picked = Some((option, option.starts_descending()));
+                picked = Some(Order::starting(option));
                 ui.close();
             }
         }
@@ -176,7 +176,7 @@ fn order_menu(ui: &mut Ui, view: &ModeView, in_group: bool) -> Option<(SortBy, b
             [(false, icon::SORT_ASCENDING, "Ascending"), (true, icon::SORT_DESCENDING, "Descending")]
         {
             if ui.selectable_label(descending == down, format!("{glyph}  {label}")).clicked() {
-                picked = Some((sort, down));
+                picked = Some(Order { by: sort, descending: down });
                 ui.close();
             }
         }

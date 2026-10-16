@@ -214,12 +214,11 @@ impl BrowserApp {
             diag::report("Clearing the cache", err);
             return;
         }
-        let has = |part| parts.contains(&part);
-        self.previews.forget(has(Part::Thumbnails), has(Part::Waveforms), has(Part::ModelFacts));
-        if has(Part::Settings) {
+        self.previews.forget(&parts);
+        if parts.contains(&Part::Settings) {
             self.reset_settings();
         }
-        if has(Part::Index) {
+        if parts.contains(&Part::Index) {
             self.scan(self.folders.roots.clone());
         }
         self.notify("Cleared".to_owned());
@@ -244,13 +243,13 @@ impl BrowserApp {
                 view.tile = tile.clamp(64.0, 256.0);
             }
             if let Some(sort) = get(&key("sort")).as_deref().and_then(SortBy::from_key) {
-                view.sort = sort;
+                view.folder_order.by = sort;
             }
-            view.descending = get(&key("descending")).is_some_and(|value| value == "1");
+            view.folder_order.descending = get(&key("descending")).is_some_and(|value| value == "1");
             if let Some(sort) = get(&key("group_sort")).as_deref().and_then(SortBy::from_key) {
-                view.group_sort = sort;
+                view.group_order.by = sort;
             }
-            view.group_descending = get(&key("group_descending")).is_none_or(|value| value == "1");
+            view.group_order.descending = get(&key("group_descending")).is_none_or(|value| value == "1");
         }
         self.playback.autoplay = get("sound.autoplay").is_none_or(|value| value == "1");
         self.playback.set_looping(get("sound.loop").is_some_and(|value| value == "1"));
@@ -310,10 +309,10 @@ impl BrowserApp {
             };
             settings.push((key("layout"), layout.to_owned()));
             settings.push((key("tile"), format!("{:.0}", view.tile)));
-            settings.push((key("sort"), view.sort.key().to_owned()));
-            settings.push((key("descending"), flag(view.descending).to_owned()));
-            settings.push((key("group_sort"), view.group_sort.key().to_owned()));
-            settings.push((key("group_descending"), flag(view.group_descending).to_owned()));
+            settings.push((key("sort"), view.folder_order.by.key().to_owned()));
+            settings.push((key("descending"), flag(view.folder_order.descending).to_owned()));
+            settings.push((key("group_sort"), view.group_order.by.key().to_owned()));
+            settings.push((key("group_descending"), flag(view.group_order.descending).to_owned()));
         }
         settings.push((SETTING_MEMORY.to_owned(), self.preferences.memory_mb.to_string()));
         // Shortcuts are saved only where they differ from the defaults.

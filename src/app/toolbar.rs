@@ -27,7 +27,7 @@ impl BrowserApp {
             match command {
                 ToolbarCommand::GoTo(dir) => self.select_dir(dir),
                 ToolbarCommand::Group(command) => self.run_group_command(command),
-                ToolbarCommand::Order(sort, descending) => self.browsing.set_order(sort, descending),
+                ToolbarCommand::Order(order) => self.browsing.set_order(order),
                 ToolbarCommand::Tile(size) => self.browsing.mode_view_mut().tile = size,
                 ToolbarCommand::Autoplay(on) => self.playback.autoplay = on,
                 ToolbarCommand::Display(display) => self.browsing.display = display,
