@@ -33,11 +33,6 @@ const SMOOTHING: u16 = 0x4150;
 const UVS: u16 = 0x4140;
 const MATRIX: u16 = 0x4160;
 
-pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
-    parse(&bytes, path.parent().unwrap_or(Path::new(".")), options)
-}
-
 struct Chunk<'a> {
     id: u16,
     data: &'a [u8],
@@ -114,7 +109,8 @@ fn material_def(data: &[u8]) -> MaterialDef {
     def
 }
 
-fn parse(bytes: &[u8], dir: &Path, options: &LoadOptions) -> Result<Model, String> {
+pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, String> {
+    let dir = super::folder(file);
     let main = chunks(bytes).next().filter(|chunk| chunk.id == MAIN).ok_or("not a 3DS file")?;
     let editors: Vec<Chunk> = chunks(main.data).filter(|chunk| chunk.id == EDITOR).collect();
     let defs: Vec<MaterialDef> = editors
@@ -359,7 +355,7 @@ mod tests {
 
     #[test]
     fn square_with_material_and_smoothing() {
-        let model = parse(&file(true), Path::new("."), &LoadOptions { max_texture: 0 }).unwrap();
+        let model = parse(&file(true), Path::new("test.3ds"), &LoadOptions::default()).unwrap();
         assert_eq!(model.info.format, "3DS");
         assert_eq!((model.info.triangles, model.info.vertices, model.info.materials), (2, 4, 1));
         let brick = &model.materials[model.parts[0].material as usize];
@@ -377,20 +373,20 @@ mod tests {
     #[test]
     fn damaged_files_never_panic() {
         for bytes in crate::test_support::damaged(&file(true), 500) {
-            let _ = parse(&bytes, Path::new("."), &LoadOptions { max_texture: 0 });
+            let _ = parse(&bytes, Path::new("test.3ds"), &LoadOptions::default());
         }
     }
 
     #[test]
     fn faces_without_material_and_broken_files() {
-        let model = parse(&file(false), Path::new("."), &LoadOptions { max_texture: 0 }).unwrap();
+        let model = parse(&file(false), Path::new("test.3ds"), &LoadOptions::default()).unwrap();
         assert_eq!(model.info.materials, 0);
         assert_eq!(model.info.triangles, 2);
         let data = file(true);
         for cut in [10, 40, data.len() / 2] {
             // Cut short: an error or fewer triangles, never a panic.
-            let _ = parse(&data[..cut], Path::new("."), &LoadOptions { max_texture: 0 });
+            let _ = parse(&data[..cut], Path::new("test.3ds"), &LoadOptions::default());
         }
-        assert!(parse(b"MM not 3ds", Path::new("."), &LoadOptions { max_texture: 0 }).is_err());
+        assert!(parse(b"MM not 3ds", Path::new("test.3ds"), &LoadOptions::default()).is_err());
     }
 }

@@ -9,14 +9,10 @@
 use std::path::Path;
 
 use super::vector::{cross, normalize, sub};
-use super::{Builder, Model, Vertex, z_up_to_y_up};
+use super::{Builder, LoadOptions, Model, Vertex, z_up_to_y_up};
 
-pub(super) fn load(path: &Path) -> Result<Model, String> {
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
-    parse(&bytes)
-}
-
-fn parse(bytes: &[u8]) -> Result<Model, String> {
+/// STL has nothing beside it to read, and no textures.
+pub(super) fn parse(bytes: &[u8], _file: &Path, _options: &LoadOptions) -> Result<Model, String> {
     let count = bytes.get(80..84).map(|count| u32::from_le_bytes([count[0], count[1], count[2], count[3]]) as u64);
     // Some exporters add a few bytes after the last triangle.
     let binary_size = count.map(|count| 84 + 50 * count).filter(|&size| size <= bytes.len() as u64);
@@ -96,6 +92,10 @@ fn text(bytes: &[u8]) -> Result<Vec<[f32; 3]>, String> {
 mod tests {
     use super::*;
 
+    fn read(bytes: &[u8]) -> Result<Model, String> {
+        parse(bytes, Path::new("test.stl"), &LoadOptions::default())
+    }
+
     fn binary_file(triangles: &[[[f32; 3]; 3]], header: &[u8]) -> Vec<u8> {
         let mut out = header.to_vec();
         out.resize(80, 0);
@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn binary_even_when_the_header_says_solid() {
         for header in [&b"exported by a CAD tool"[..], b"solid but binary"] {
-            let model = parse(&binary_file(&[TRIANGLE, TRIANGLE], header)).unwrap();
+            let model = read(&binary_file(&[TRIANGLE, TRIANGLE], header)).unwrap();
             assert_eq!(model.info.format, "STL binary");
             assert_eq!(model.info.triangles, 2);
             // Z up becomes Y up: (0, 3, 1) → (0, 1, -3).
@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn ascii_with_flat_normals() {
         let text = b"solid part\n facet normal 0 0 0\n  outer loop\n   vertex 0 0 0\n   vertex 1 0 0\n   vertex 0 1 0\n  endloop\n endfacet\nendsolid part\n";
-        let model = parse(text).unwrap();
+        let model = read(text).unwrap();
         assert_eq!(model.info.format, "STL ASCII");
         assert_eq!(model.info.triangles, 1);
         // Facing up in the file (+Z) is facing up here (+Y).
@@ -139,18 +139,18 @@ mod tests {
         let ascii = b"solid part\n facet normal 0 0 1\n  outer loop\n   vertex 0 0 0\n   vertex 1 0 0\n   vertex 0 1 0\n  endloop\n endfacet\nendsolid part\n";
         for original in [binary_file(&[TRIANGLE, TRIANGLE], b""), ascii.to_vec()] {
             for bytes in crate::test_support::damaged(&original, 300) {
-                let _ = parse(&bytes);
+                let _ = read(&bytes);
             }
         }
     }
 
     #[test]
     fn broken_files() {
-        assert!(parse(b"").is_err());
-        assert!(parse(b"solid x\n facet normal 0 0 0 outer loop vertex 1 nope").is_err());
+        assert!(read(b"").is_err());
+        assert!(read(b"solid x\n facet normal 0 0 0 outer loop vertex 1 nope").is_err());
         let mut cut = binary_file(&[TRIANGLE], b"");
         cut.truncate(100);
-        assert!(parse(&cut).is_err());
-        assert!(parse(&binary_file(&[], b"")).is_err());
+        assert!(read(&cut).is_err());
+        assert!(read(&binary_file(&[], b"")).is_err());
     }
 }

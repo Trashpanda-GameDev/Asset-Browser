@@ -17,8 +17,8 @@ const MEMORY_LIMIT: usize = 1 << 30;
 const CHUNK_CORNERS: usize = 1 << 16;
 
 #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
-pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+/// An FBX or OBJ file: ufbx reads it from memory, with its name to find an OBJ's .mtl beside it.
+pub(super) fn parse(bytes: &[u8], path: &Path, options: &LoadOptions) -> Result<Model, String> {
     let filename = path.to_string_lossy();
     let limit = || ufbx::AllocatorOpts { memory_limit: MEMORY_LIMIT, ..Default::default() };
     let opts = ufbx::LoadOpts {
@@ -43,7 +43,7 @@ pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> 
         filename: filename.as_ref().into(),
         ..Default::default()
     };
-    let scene = ufbx::load_memory(&bytes, opts).map_err(|err| describe(&err))?;
+    let scene = ufbx::load_memory(bytes, opts).map_err(|err| describe(&err))?;
 
     let mesh_nodes: Vec<&ufbx::Node> =
         scene.nodes.iter().map(|node| &**node).filter(|node| node.mesh.is_some()).collect();
@@ -369,7 +369,7 @@ mod tests {
         );
         dir.write("quad.mtl", b"newmtl Red\nKd 1 0.5 0\nnewmtl Wood\nKd 1 1 1\nmap_Kd C:\\art\\wood.png\n");
         dir.write("Textures/wood.png", &png_2x2());
-        let model = load(&dir.path().join("quad.obj"), &LoadOptions { max_texture: 64 }).unwrap();
+        let model = crate::model::load(&dir.path().join("quad.obj"), &LoadOptions { max_texture: 64 }).unwrap();
         assert_eq!(model.info.format, "OBJ");
         assert_eq!(model.info.triangles, 4, "quads are split in two");
         assert_eq!(model.info.vertices, 6);
@@ -402,7 +402,7 @@ mod tests {
         let dir = TempDir::new("obj_missing");
         dir.write("tri.obj", b"mtllib tri.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl A\nf 1 2 3\nusemtl B\nf 1 3 2\n");
         dir.write("tri.mtl", b"newmtl A\nKd 1 1 1\nmap_Kd gone.png\nnewmtl B\nKd 0 0 1\nmap_Kd gone.png\n");
-        let model = load(&dir.path().join("tri.obj"), &LoadOptions { max_texture: 64 }).unwrap();
+        let model = crate::model::load(&dir.path().join("tri.obj"), &LoadOptions { max_texture: 64 }).unwrap();
         assert_eq!(model.info.missing_textures, 1);
         assert_eq!(model.info.textures, 0);
         let a = model.materials.iter().find(|m| m.name == "A").unwrap();
@@ -510,7 +510,7 @@ Connections:  {
     fn skeleton_only_file_gives_bones() {
         let dir = TempDir::new("fbx_skeleton");
         let path = dir.write("Wave.fbx", SKELETON.as_bytes());
-        let model = load(&path, &LoadOptions { max_texture: 0 }).unwrap();
+        let model = crate::model::load(&path, &LoadOptions::default()).unwrap();
         assert_eq!(model.info.format, "FBX 7.4 ASCII");
         assert!(!model.info.geometry);
         assert_eq!(model.info.triangles, 0);
@@ -540,7 +540,7 @@ Connections:  {
         );
         for (name, bytes) in cases {
             let path = dir.write(name, &bytes);
-            let _ = load(&path, &LoadOptions { max_texture: 16 });
+            let _ = crate::model::load(&path, &LoadOptions { max_texture: 16 });
         }
     }
 
@@ -548,7 +548,7 @@ Connections:  {
     fn broken_file_is_a_clear_error() {
         let dir = TempDir::new("fbx_broken");
         let path = dir.write("broken.fbx", b"Kaydara FBX Binary  \x00\x1a\x00\xe8\x1c\x00\x00");
-        let err = load(&path, &LoadOptions { max_texture: 0 }).err().unwrap();
+        let err = crate::model::load(&path, &LoadOptions::default()).err().unwrap();
         assert!(!err.is_empty());
     }
 }

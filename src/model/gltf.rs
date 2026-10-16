@@ -19,12 +19,8 @@ use super::textures::{self, Alpha};
 use super::vector::normalize;
 use super::{Builder, LoadOptions, Model, Slot, Vertex, percent_decode};
 
-pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
-    load_bytes(&bytes, path.parent().unwrap_or(Path::new(".")), options)
-}
-
-fn load_bytes(bytes: &[u8], dir: &Path, options: &LoadOptions) -> Result<Model, String> {
+pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, String> {
+    let dir = super::folder(file);
     let ::gltf::Gltf { document, mut blob } =
         ::gltf::Gltf::from_slice_without_validation(bytes).map_err(|err| format!("glTF: {err}"))?;
     check(&document)?;
@@ -74,7 +70,14 @@ fn load_bytes(bytes: &[u8], dir: &Path, options: &LoadOptions) -> Result<Model, 
             return Err(skipped.unwrap_or("there are no meshes in this file").into());
         }
     }
-    builder.animations = document
+    builder.animations = animations(&document);
+    let format = if bytes.starts_with(b"glTF") { "glTF 2.0 (GLB)" } else { "glTF 2.0" };
+    builder.finish(format)
+}
+
+/// Each animation's name (or its number) and length in seconds.
+fn animations(document: &Document) -> Vec<(String, f32)> {
+    document
         .animations()
         .map(|animation| {
             let name = animation.name().map_or_else(|| format!("Animation {}", animation.index() + 1), str::to_owned);
@@ -85,9 +88,7 @@ fn load_bytes(bytes: &[u8], dir: &Path, options: &LoadOptions) -> Result<Model, 
                 .fold(0.0, f64::max);
             (name, seconds as f32)
         })
-        .collect();
-    let format = if bytes.starts_with(b"glTF") { "glTF 2.0 (GLB)" } else { "glTF 2.0" };
-    builder.finish(format)
+        .collect()
 }
 
 /// The crate's validation, minus what doesn't stop us drawing: positions missing their min/max
@@ -585,7 +586,7 @@ mod tests {
             r#","material":0"#,
             r#","materials":[{"name":"Paint","pbrMetallicRoughness":{"baseColorFactor":[0.5,0.25,1,1]}}]"#,
         );
-        let model = load_bytes(&glb(&json, &quad_buffer()), Path::new("."), &options()).unwrap();
+        let model = parse(&glb(&json, &quad_buffer()), Path::new("test.glb"), &options()).unwrap();
         assert_eq!(model.info.format, "glTF 2.0 (GLB)");
         assert_eq!((model.info.triangles, model.info.vertices, model.info.meshes), (2, 4, 1));
         assert_eq!(model.bounds.min, [10.0, 0.0, 0.0], "node translation applied");
@@ -609,7 +610,7 @@ mod tests {
             "textures":[{{"source":0}}],"images":[{image}]"#
         );
         let json = quad_json(&buffer, "", r#","material":0"#, &extra);
-        let model = load_bytes(json.as_bytes(), Path::new("."), &options()).unwrap();
+        let model = parse(json.as_bytes(), Path::new("test.glb"), &options()).unwrap();
         assert_eq!(model.info.format, "glTF 2.0");
         assert_eq!((model.info.textures, model.info.missing_textures), (1, 0));
         assert_eq!(model.materials[0].texture, Some(0));
@@ -626,7 +627,7 @@ mod tests {
             "textures":[{"source":0}],"images":[{"uri":"wood.png"},{"uri":"gone.png"}]"#;
         let json = quad_json(r#"{"byteLength":140,"uri":"quad%20data.bin"}"#, "", r#","material":0"#, extra);
         let path = dir.write("quad.gltf", json.as_bytes());
-        let model = load(&path, &options()).unwrap();
+        let model = crate::model::load(&path, &options()).unwrap();
         assert_eq!(model.info.triangles, 2);
         assert_eq!(model.info.textures, 1);
     }
@@ -647,7 +648,7 @@ mod tests {
                     r#"{"buffer":0,"byteOffset":128,"byteLength":12}]"#,
                     &format!(r#"{{"buffer":0,"byteOffset":128,"byteLength":12}},{{"buffer":0,"byteOffset":140,"byteLength":{}}}]"#, png.len()),
                 );
-            let model = load_bytes(&glb(&json, &bin), Path::new("."), &options()).unwrap();
+            let model = parse(&glb(&json, &bin), Path::new("test.glb"), &options()).unwrap();
             assert_eq!((model.info.textures, model.info.missing_textures), (textures, missing), "material {material}");
         }
     }
@@ -655,7 +656,7 @@ mod tests {
     #[test]
     fn mirrored_node_keeps_front_faces_counter_clockwise() {
         let json = quad_json(r#"{"byteLength":140}"#, r#","scale":[-1,1,1]"#, "", "");
-        let model = load_bytes(&glb(&json, &quad_buffer()), Path::new("."), &options()).unwrap();
+        let model = parse(&glb(&json, &quad_buffer()), Path::new("test.glb"), &options()).unwrap();
         for triangle in model.indices.as_chunks::<3>().0 {
             let [a, b, c] = triangle.map(|i| model.vertices[i as usize]);
             let winding = vector::cross(vector::sub(b.position, a.position), vector::sub(c.position, a.position));
@@ -667,7 +668,7 @@ mod tests {
     #[test]
     fn missing_normals_give_flat_shading() {
         let json = quad_json(r#"{"byteLength":140}"#, "", "", "").replace(r#""NORMAL":1,"#, "");
-        let model = load_bytes(&glb(&json, &quad_buffer()), Path::new("."), &options()).unwrap();
+        let model = parse(&glb(&json, &quad_buffer()), Path::new("test.glb"), &options()).unwrap();
         assert_eq!(model.vertices.len(), 6);
         assert!(model.vertices.iter().all(|v| v.normal == [0.0, 0.0, 1.0]));
     }
@@ -676,19 +677,19 @@ mod tests {
     fn broken_files_are_errors_not_panics() {
         // Buffer shorter than the accessors claim.
         let json = quad_json(r#"{"byteLength":140}"#, "", "", "");
-        let err = load_bytes(&glb(&json, &quad_buffer()[..100]), Path::new("."), &options()).err().unwrap();
+        let err = parse(&glb(&json, &quad_buffer()[..100]), Path::new("test.glb"), &options()).err().unwrap();
         assert!(err.contains("can't read") || err.contains("no meshes"), "{err}");
         // Out-of-range index.
         let json = quad_json(r#"{"byteLength":140}"#, "", r#","material":7"#, "");
-        assert!(load_bytes(&glb(&json, &quad_buffer()), Path::new("."), &options()).is_err());
-        assert!(load_bytes(b"{ not json", Path::new("."), &options()).is_err());
+        assert!(parse(&glb(&json, &quad_buffer()), Path::new("test.glb"), &options()).is_err());
+        assert!(parse(b"{ not json", Path::new("test.glb"), &options()).is_err());
         let draco =
             quad_json(r#"{"byteLength":140}"#, "", "", r#","extensionsRequired":["KHR_draco_mesh_compression"]"#);
-        let err = load_bytes(&glb(&draco, &quad_buffer()), Path::new("."), &options()).err().unwrap();
+        let err = parse(&glb(&draco, &quad_buffer()), Path::new("test.glb"), &options()).err().unwrap();
         assert!(err.contains("KHR_draco_mesh_compression"), "{err}");
         // Extensions the crate doesn't know don't stop a file that draws without them.
         let unknown = quad_json(r#"{"byteLength":140}"#, "", "", r#","extensionsRequired":["KHR_texture_transform"]"#);
-        assert!(load_bytes(&glb(&unknown, &quad_buffer()), Path::new("."), &options()).is_ok());
+        assert!(parse(&glb(&unknown, &quad_buffer()), Path::new("test.glb"), &options()).is_ok());
     }
 
     #[test]
@@ -700,14 +701,14 @@ mod tests {
             r#","materials":[{"pbrMetallicRoughness":{"baseColorFactor":[1,0,0,1]}}]"#,
         );
         for bytes in crate::test_support::damaged(&glb(&json, &quad_buffer()), 400) {
-            let _ = load_bytes(&bytes, Path::new("."), &options());
+            let _ = parse(&bytes, Path::new("test.glb"), &options());
         }
         // Valid JSON with different numbers: every digit in turn made 9, and 0.
         for (at, _) in json.char_indices().filter(|(_, c)| c.is_ascii_digit()) {
             for digit in ["9", "0"] {
                 let mut changed = json.clone();
                 changed.replace_range(at..at + 1, digit);
-                let _ = load_bytes(&glb(&changed, &quad_buffer()), Path::new("."), &options());
+                let _ = parse(&glb(&changed, &quad_buffer()), Path::new("test.glb"), &options());
             }
         }
         // Counts and offsets at their limits.
@@ -717,7 +718,7 @@ mod tests {
             (r#""byteOffset":48"#, r#""byteOffset":18446744073709551615"#),
             (r#""byteLength":12"#, r#""byteLength":18446744073709551615"#),
         ] {
-            let _ = load_bytes(&glb(&json.replace(from, to), &quad_buffer()), Path::new("."), &options());
+            let _ = parse(&glb(&json.replace(from, to), &quad_buffer()), Path::new("test.glb"), &options());
         }
     }
 
@@ -748,7 +749,7 @@ mod tests {
                 {"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[2.5]},
                 {"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[1]}]"#,
         );
-        let model = load_bytes(&glb(&json, &quad_buffer()), Path::new("."), &options()).unwrap();
+        let model = parse(&glb(&json, &quad_buffer()), Path::new("test.glb"), &options()).unwrap();
         assert_eq!(model.info.animations, vec![("Wave".to_owned(), 2.5), ("Animation 2".to_owned(), 1.0)]);
     }
 }

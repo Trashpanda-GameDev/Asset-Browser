@@ -18,15 +18,10 @@ use super::textures::{self, Alpha};
 use super::vector::normalize;
 use super::{Builder, LoadOptions, Model, Slot, Vertex, srgb_to_linear};
 
-pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
-    let text = String::from_utf8_lossy(&bytes);
-    parse(&text, path.parent().unwrap_or(Path::new(".")), options)
-}
-
-fn parse(text: &str, dir: &Path, options: &LoadOptions) -> Result<Model, String> {
+pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, String> {
+    let (text, dir) = (String::from_utf8_lossy(bytes), super::folder(file));
     let parsing = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
-    let doc = roxmltree::Document::parse_with_options(text, parsing).map_err(|err| format!("Collada: {err}"))?;
+    let doc = roxmltree::Document::parse_with_options(&text, parsing).map_err(|err| format!("Collada: {err}"))?;
     let root = doc.root_element();
     if root.tag_name().name() != "COLLADA" {
         return Err("not a Collada file".into());
@@ -526,7 +521,7 @@ mod tests {
         let dir = TempDir::new("collada");
         dir.write("wood grain.png", &png_2x2());
         let path = dir.write("quad.dae", QUAD.as_bytes());
-        let model = load(&path, &LoadOptions { max_texture: 64 }).unwrap();
+        let model = crate::model::load(&path, &LoadOptions { max_texture: 64 }).unwrap();
         assert_eq!(model.info.format, "Collada 1.4.1");
         assert_eq!(model.info.triangles, 3);
         assert_eq!((model.info.materials, model.info.textures, model.info.missing_textures), (2, 1, 0));
@@ -547,23 +542,23 @@ mod tests {
     #[test]
     fn damaged_files_never_panic() {
         for bytes in crate::test_support::damaged(QUAD.as_bytes(), 300) {
-            let _ = parse(&String::from_utf8_lossy(&bytes), Path::new("."), &LoadOptions { max_texture: 0 });
+            let _ = parse(&bytes, Path::new("test.dae"), &LoadOptions::default());
         }
         // Numbers that overflow arithmetic.
         let huge = QUAD.replace("<vcount>4</vcount>", "<vcount>18446744073709551615</vcount>").replace(
             r##"<input semantic="TEXCOORD" source="#quad-uvs" offset="1" set="0"/>"##,
             r##"<input semantic="TEXCOORD" source="#quad-uvs" offset="18446744073709551615" set="0"/>"##,
         );
-        let _ = parse(&huge, Path::new("."), &LoadOptions { max_texture: 0 });
+        let _ = parse(huge.as_bytes(), Path::new("test.dae"), &LoadOptions::default());
     }
 
     #[test]
     fn broken_collada() {
-        assert!(parse("<COLLADA><unclosed>", Path::new("."), &LoadOptions { max_texture: 0 }).is_err());
-        assert!(parse("<svg/>", Path::new("."), &LoadOptions { max_texture: 0 }).is_err());
+        assert!(parse(b"<COLLADA><unclosed>", Path::new("test.dae"), &LoadOptions::default()).is_err());
+        assert!(parse(b"<svg/>", Path::new("test.dae"), &LoadOptions::default()).is_err());
         let no_geometry =
             QUAD.replace("<p>0 0 1 1 2 2 3 3</p>", "<p>0 0 1</p>").replace("<p>0 2 1</p>", "<p>9 9 9</p>");
-        assert!(parse(&no_geometry, Path::new("."), &LoadOptions { max_texture: 0 }).is_err());
+        assert!(parse(no_geometry.as_bytes(), Path::new("test.dae"), &LoadOptions::default()).is_err());
     }
 
     #[test]

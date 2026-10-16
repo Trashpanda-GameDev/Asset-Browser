@@ -14,12 +14,6 @@ use super::textures::{self, Alpha};
 use super::vector;
 use super::{Builder, LoadOptions, Model, Vertex, z_up_to_y_up};
 
-pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
-    let dir = path.parent().unwrap_or(Path::new("."));
-    parse(&bytes, dir, options)
-}
-
 #[derive(Clone, Copy, PartialEq)]
 enum Encoding {
     Ascii,
@@ -181,7 +175,8 @@ impl Values<'_> {
 const MAX_LIST: f64 = 4096.0;
 
 #[expect(clippy::cognitive_complexity, clippy::too_many_lines, reason = "refactor: split into named steps")]
-fn parse(bytes: &[u8], dir: &Path, options: &LoadOptions) -> Result<Model, String> {
+pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, String> {
+    let dir = super::folder(file);
     let header = parse_header(bytes)?;
     let mut values = Values { encoding: header.encoding, bytes, at: header.data };
     let mut vertices: Vec<Vertex> = Vec::new();
@@ -358,7 +353,7 @@ mod tests {
 
     #[test]
     fn ascii_quad_with_colours() {
-        let model = parse(ASCII.as_bytes(), Path::new("."), &options()).unwrap();
+        let model = parse(ASCII.as_bytes(), Path::new("test.ply"), &options()).unwrap();
         assert_eq!(model.info.format, "PLY ASCII");
         assert_eq!(model.info.triangles, 2);
         assert_eq!(model.info.vertices, 4);
@@ -403,7 +398,7 @@ mod tests {
     #[test]
     fn binary_both_byte_orders_with_extra_elements() {
         for big in [false, true] {
-            let model = parse(&binary(big), Path::new("."), &options()).unwrap();
+            let model = parse(&binary(big), Path::new("test.ply"), &options()).unwrap();
             assert_eq!(model.info.format, "PLY binary");
             assert_eq!(model.info.triangles, 1);
             assert_eq!(model.bounds.max, [2.0, 0.0, 0.0]);
@@ -416,7 +411,7 @@ mod tests {
     fn damaged_files_never_panic() {
         for original in [ASCII.as_bytes().to_vec(), binary(false), binary(true)] {
             for bytes in crate::test_support::damaged(&original, 300) {
-                let _ = parse(&bytes, Path::new("."), &options());
+                let _ = parse(&bytes, Path::new("test.ply"), &options());
             }
         }
     }
@@ -425,11 +420,11 @@ mod tests {
     fn point_clouds_and_broken_files() {
         let points = "ply\nformat ascii 1.0\nelement vertex 2\nproperty float x\nproperty float y\nproperty float z\nend_header\n0 0 0\n1 1 1\n";
         assert_eq!(
-            parse(points.as_bytes(), Path::new("."), &options()).err().unwrap(),
+            parse(points.as_bytes(), Path::new("test.ply"), &options()).err().unwrap(),
             "there are only points, no faces to draw"
         );
-        assert!(parse(b"ply\nformat ascii 1.0\nelement vertex 2\n", Path::new("."), &options()).is_err());
-        assert!(parse(&ASCII.as_bytes()[..ASCII.len() - 6], Path::new("."), &options()).is_err());
-        assert!(parse(b"not ply", Path::new("."), &options()).is_err());
+        assert!(parse(b"ply\nformat ascii 1.0\nelement vertex 2\n", Path::new("test.ply"), &options()).is_err());
+        assert!(parse(&ASCII.as_bytes()[..ASCII.len() - 6], Path::new("test.ply"), &options()).is_err());
+        assert!(parse(b"not ply", Path::new("test.ply"), &options()).is_err());
     }
 }

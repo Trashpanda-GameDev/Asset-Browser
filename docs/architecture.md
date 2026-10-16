@@ -97,8 +97,8 @@ Not checked by a tool, but expected:
 
 - **A kind of file:** its extension in `AssetKind::from_extension` (`src/asset.rs`), and what makes its thumbnail in
   `src/thumbs.rs`.
-- **A model format:** a loader in `src/model/` with `load(path, options)`, and a `parse` of the file's bytes for the
-  tests, called from `model::load`.
+- **A model format:** a reader in `src/model/`, `parse(bytes, file, options)`, and a line in `model::FORMATS` with its
+  extensions (which also go in `AssetKind::from_extension`).
 - **A keyboard shortcut:** an `Action` in `src/ui/keymap.rs` with its id (it's saved, so it never changes), label, group
   and default; what it does goes in `handle_keys` (`src/app/actions.rs`).
 - **A setting:** `load_settings` and `save_settings` in `src/app/settings.rs`, under a key of its own.

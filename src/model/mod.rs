@@ -148,10 +148,27 @@ pub struct ModelInfo {
     pub geometry: bool,
 }
 
+/// How a model is read. The default skips textures.
+#[derive(Default)]
 pub struct LoadOptions {
     /// Textures are scaled down to fit this many pixels on their longest side; 0 skips textures.
     pub max_texture: u32,
 }
+
+/// A format's reader: the file's bytes, the file itself (for what it refers to beside it, such as
+/// textures), and how to read it.
+type Parse = fn(&[u8], &Path, &LoadOptions) -> Result<Model, String>;
+
+/// The formats read, by extension. A new format is a reader and a line here (and its extension
+/// in `asset`).
+const FORMATS: [(&[&str], Parse); 6] = [
+    (&["fbx", "obj"], fbx::parse),
+    (&["gltf", "glb"], gltf::parse),
+    (&["stl"], stl::parse),
+    (&["ply"], ply::parse),
+    (&["3ds"], three_ds::parse),
+    (&["dae"], collada::parse),
+];
 
 /// Models with more triangles than this aren't loaded. A vertex is 48 bytes and a faceted STL has
 /// three per triangle, so this keeps one model under about 600 MB with a thumbnail made on every
@@ -169,16 +186,20 @@ fn check_triangle_count(triangles: u64) -> Result<(), String> {
 /// Reads a model file. Returns an error for .blend files, whose geometry can't be read without
 /// Blender (see `blend::read_preview` for their saved picture).
 pub fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
-    match extension(path).as_str() {
-        "fbx" | "obj" => fbx::load(path, options),
-        "gltf" | "glb" => gltf::load(path, options),
-        "stl" => stl::load(path),
-        "ply" => ply::load(path, options),
-        "3ds" => three_ds::load(path, options),
-        "dae" => collada::load(path, options),
-        "blend" => Err("Blender files can't be read without Blender, only their saved preview".into()),
-        other => Err(format!("unsupported model format .{other}")),
+    let extension = extension(path);
+    if extension == "blend" {
+        return Err("Blender files can't be read without Blender, only their saved preview".into());
     }
+    let Some(&(_, parse)) = FORMATS.iter().find(|(extensions, _)| extensions.contains(&extension.as_str())) else {
+        return Err(format!("unsupported model format .{extension}"));
+    };
+    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+    parse(&bytes, path, options)
+}
+
+/// The folder a model file is in, where what it refers to (textures, an OBJ's .mtl) is looked for.
+fn folder(file: &Path) -> &Path {
+    file.parent().unwrap_or(Path::new("."))
 }
 
 fn extension(path: &Path) -> String {
@@ -438,9 +459,17 @@ mod test_files {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asset::AssetKind;
 
     fn vertex(position: [f32; 3]) -> Vertex {
         Vertex { position, normal: [0.0, 0.0, 1.0], uv: [0.0; 2], color: [1.0; 4] }
+    }
+
+    #[test]
+    fn every_format_read_is_a_model_in_the_library() {
+        for extension in FORMATS.iter().flat_map(|(extensions, _)| *extensions) {
+            assert_eq!(AssetKind::from_extension(extension), Some(AssetKind::Model), ".{extension}");
+        }
     }
 
     #[test]
