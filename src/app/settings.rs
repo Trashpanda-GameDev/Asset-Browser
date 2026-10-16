@@ -98,7 +98,7 @@ impl BrowserApp {
 
     /// The settings window, and doing what's asked in it.
     pub(super) fn settings_window(&mut self, ctx: &egui::Context) {
-        if !self.preferences.settings.open {
+        if !self.preferences.settings.is_open() {
             return;
         }
         self.preferences.storage.poll();
@@ -129,15 +129,12 @@ impl BrowserApp {
                 }
             }
             Command::SetShortcut(action, shortcut) => {
-                self.preferences.settings.keys_note = self.preferences.keymap.set(action, shortcut).and_then(|other| {
-                    let shortcut = shortcut?.label(ctx);
-                    Some(format!("{shortcut} was for “{}”, which has no shortcut now.", other.label()))
-                });
+                // The settings window says which action lost the shortcut, if one did.
+                self.preferences.keymap.set(action, shortcut);
                 self.save_settings();
             }
             Command::ResetShortcuts => {
                 self.preferences.keymap = Keymap::default();
-                self.preferences.settings.keys_note = None;
                 self.save_settings();
             }
             Command::Clear(parts) => self.clear(parts),

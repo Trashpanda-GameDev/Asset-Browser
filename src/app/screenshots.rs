@@ -38,7 +38,7 @@ impl BrowserApp {
     pub fn show_settings(&mut self, page: Option<crate::ui::settings::Page>) {
         match page {
             Some(page) => self.preferences.settings.open_at(page),
-            None => self.preferences.settings.open = false,
+            None => self.preferences.settings.close(),
         }
     }
 

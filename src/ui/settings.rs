@@ -88,12 +88,12 @@ pub struct SettingsArgs<'a> {
 }
 
 pub struct Settings {
-    pub open: bool,
+    open: bool,
     page: Page,
     /// The shortcut being changed: the next key pressed becomes it.
     capturing: Option<Action>,
     /// Said under the shortcuts after a change took a shortcut from another action.
-    pub keys_note: Option<String>,
+    keys_note: Option<String>,
     /// Parts ticked to clear, and whether "Clear?" is being asked.
     chosen: HashSet<Part>,
     confirming: bool,
@@ -113,6 +113,15 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// Opens at the page it was on.
+    pub fn open(&mut self) {
+        self.open = true;
+    }
+
     pub fn open_at(&mut self, page: Page) {
         self.open = true;
         self.page = page;
@@ -133,7 +142,7 @@ impl Settings {
         if let Some(action) = self.capturing
             && let Some(shortcut) = keymap::capture(ctx)
         {
-            commands.push(Command::SetShortcut(action, Some(shortcut)));
+            commands.push(self.change_shortcut(ctx, args.keymap, action, Some(shortcut)));
             self.capturing = None;
         }
         let frame = Frame::new()
@@ -179,7 +188,7 @@ impl Settings {
         commands
     }
 
-    fn close(&mut self) {
+    pub fn close(&mut self) {
         self.open = false;
         self.capturing = None;
         self.confirming = false;
@@ -244,14 +253,15 @@ impl Settings {
                         }
                     };
                     if icon_slot(ui, bound.is_some(), icon::X, "No shortcut") {
-                        commands.push(Command::SetShortcut(action, None));
+                        commands.push(self.change_shortcut(ui.ctx(), args.keymap, action, None));
                     }
                     let tip = match action.default_shortcut() {
                         Some(default) => format!("Back to {}", default.label(ui.ctx())),
                         None => "Back to none".to_owned(),
                     };
                     if icon_slot(ui, !args.keymap.is_default(action), icon::ARROW_COUNTER_CLOCKWISE, &tip) {
-                        commands.push(Command::SetShortcut(action, action.default_shortcut()));
+                        let default = action.default_shortcut();
+                        commands.push(self.change_shortcut(ui.ctx(), args.keymap, action, default));
                     }
                     let capturing = self.capturing == Some(action);
                     let text = match (capturing, bound) {
@@ -282,7 +292,23 @@ impl Settings {
         if widgets::button(ui, icon::ARROW_COUNTER_CLOCKWISE, "Reset all").clicked() {
             commands.push(Command::ResetShortcuts);
             self.capturing = None;
+            self.keys_note = None;
         }
+    }
+
+    /// Asks for `action` to have `shortcut` (or none), with a note when that takes it from another
+    /// action.
+    fn change_shortcut(
+        &mut self,
+        ctx: &egui::Context,
+        keymap: &Keymap,
+        action: Action,
+        shortcut: Option<Shortcut>,
+    ) -> Command {
+        self.keys_note = shortcut.zip(keymap.taken_from(action, shortcut)).map(|(shortcut, other)| {
+            format!("{} was for \u{201c}{}\u{201d}, which has no shortcut now.", shortcut.label(ctx), other.label())
+        });
+        Command::SetShortcut(action, shortcut)
     }
 
     #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]

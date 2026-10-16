@@ -120,7 +120,7 @@ impl BrowserApp {
             }
         }
         if pressed(Action::Settings) {
-            self.preferences.settings.open = true;
+            self.preferences.settings.open();
         }
         if pressed(Action::TogglePane) {
             self.chrome.show_inspector = !self.chrome.show_inspector;

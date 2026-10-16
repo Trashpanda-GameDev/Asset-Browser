@@ -328,12 +328,17 @@ impl Keymap {
         self.bindings.get(&action).copied().flatten()
     }
 
+    /// The action that has `shortcut` now, other than `action`: the one that loses it when
+    /// `action` gets it.
+    pub fn taken_from(&self, action: Action, shortcut: Option<Shortcut>) -> Option<Action> {
+        let shortcut = shortcut?;
+        Action::ALL.into_iter().find(|&other| other != action && self.get(other) == Some(shortcut))
+    }
+
     /// Gives `action` the shortcut (or none). A shortcut belongs to one action: if another had
     /// it, that one loses it, and is returned.
     pub fn set(&mut self, action: Action, shortcut: Option<Shortcut>) -> Option<Action> {
-        let taken_from = shortcut.and_then(|shortcut| {
-            Action::ALL.into_iter().find(|&other| other != action && self.get(other) == Some(shortcut))
-        });
+        let taken_from = self.taken_from(action, shortcut);
         if let Some(other) = taken_from {
             self.bindings.insert(other, None);
         }

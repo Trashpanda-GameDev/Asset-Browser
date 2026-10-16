@@ -14,7 +14,7 @@ impl BrowserApp {
             totals: self.library.as_ref().map(|_| self.source_totals()),
             mode: self.browsing.mode,
             layout: self.browsing.mode_view().layout,
-            settings_open: self.preferences.settings.open,
+            settings_open: self.preferences.settings.is_open(),
             pane_shown: self.chrome.show_inspector,
             query: &mut self.browsing.query,
             focus_search: std::mem::take(&mut self.chrome.focus_search),
@@ -23,7 +23,7 @@ impl BrowserApp {
             match command {
                 HeaderCommand::Folder(action) => self.run_folder_action(action),
                 HeaderCommand::Mode(mode) => self.set_mode(mode),
-                HeaderCommand::OpenSettings => self.preferences.settings.open = true,
+                HeaderCommand::OpenSettings => self.preferences.settings.open(),
                 HeaderCommand::TogglePane => self.chrome.show_inspector = !self.chrome.show_inspector,
                 HeaderCommand::Layout(layout) => self.browsing.set_layout(layout),
                 HeaderCommand::Searched => self.browsing.view_dirty = true,
