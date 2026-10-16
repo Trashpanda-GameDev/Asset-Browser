@@ -222,7 +222,6 @@ impl Settings {
         }
     }
 
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn keyboard_page(&mut self, ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command>) {
         note(ui, "Click a shortcut, then press the keys for it. Moves select as they go with Shift held too.");
         let mut group = "";
@@ -236,47 +235,7 @@ impl Settings {
                 ui.label(RichText::new(action.label()).color(theme::TEXT));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
-                    let bound = args.keymap.get(action);
-                    // Each only where it would do something; their room is kept either way, so the
-                    // shortcuts line up.
-                    let icon_slot = |ui: &mut Ui, shown: bool, glyph: &str, tip: &str| {
-                        if shown {
-                            widgets::icon_button_sized(ui, glyph, tip, false, 24.0).clicked()
-                        } else {
-                            ui.allocate_exact_size(Vec2::splat(24.0), Sense::hover());
-                            false
-                        }
-                    };
-                    if icon_slot(ui, bound.is_some(), icon::X, "No shortcut") {
-                        commands.push(self.change_shortcut(ui.ctx(), args.keymap, action, None));
-                    }
-                    let tip = match action.default_shortcut() {
-                        Some(default) => format!("Back to {}", default.label(ui.ctx())),
-                        None => "Back to none".to_owned(),
-                    };
-                    if icon_slot(ui, !args.keymap.is_default(action), icon::ARROW_COUNTER_CLOCKWISE, &tip) {
-                        let default = action.default_shortcut();
-                        commands.push(self.change_shortcut(ui.ctx(), args.keymap, action, default));
-                    }
-                    let capturing = self.capturing == Some(action);
-                    let text = match (capturing, bound) {
-                        (true, _) => RichText::new("Press keys…").color(theme::ACCENT),
-                        (false, Some(shortcut)) => {
-                            RichText::new(shortcut.label(ui.ctx())).monospace().color(theme::TEXT)
-                        }
-                        (false, None) => RichText::new("None").color(theme::TEXT_FAINT),
-                    };
-                    let button = egui::Button::new(text).min_size(vec2(150.0, 26.0)).fill(if capturing {
-                        theme::ACCENT_SOFT
-                    } else {
-                        theme::CARD
-                    });
-                    let tip =
-                        if capturing { "Press the keys, or click to keep it as it is" } else { "Click to change" };
-                    if ui.add(button).on_hover_text(tip).clicked() {
-                        self.capturing = if capturing { None } else { Some(action) };
-                        self.keys_note = None;
-                    }
+                    self.shortcut_controls(ui, args, action, commands);
                 });
             });
         }
@@ -287,6 +246,40 @@ impl Settings {
         if widgets::button(ui, icon::ARROW_COUNTER_CLOCKWISE, "Reset all").clicked() {
             commands.push(Command::ResetShortcuts);
             self.capturing = None;
+            self.keys_note = None;
+        }
+    }
+
+    /// Right to left: no shortcut, back to the default, and the shortcut to click and change.
+    fn shortcut_controls(&mut self, ui: &mut Ui, args: &SettingsArgs<'_>, action: Action, commands: &mut Vec<Command>) {
+        let bound = args.keymap.get(action);
+        if icon_slot(ui, bound.is_some(), icon::X, "No shortcut") {
+            commands.push(self.change_shortcut(ui.ctx(), args.keymap, action, None));
+        }
+        let tip = match action.default_shortcut() {
+            Some(default) => format!("Back to {}", default.label(ui.ctx())),
+            None => "Back to none".to_owned(),
+        };
+        if icon_slot(ui, !args.keymap.is_default(action), icon::ARROW_COUNTER_CLOCKWISE, &tip) {
+            let default = action.default_shortcut();
+            commands.push(self.change_shortcut(ui.ctx(), args.keymap, action, default));
+        }
+        self.shortcut_button(ui, action, bound);
+    }
+
+    /// The shortcut, or "Press keys…" while it's being changed: click to change it, or to keep it.
+    fn shortcut_button(&mut self, ui: &mut Ui, action: Action, bound: Option<Shortcut>) {
+        let capturing = self.capturing == Some(action);
+        let text = match (capturing, bound) {
+            (true, _) => RichText::new("Press keys…").color(theme::ACCENT),
+            (false, Some(shortcut)) => RichText::new(shortcut.label(ui.ctx())).monospace().color(theme::TEXT),
+            (false, None) => RichText::new("None").color(theme::TEXT_FAINT),
+        };
+        let fill = if capturing { theme::ACCENT_SOFT } else { theme::CARD };
+        let button = egui::Button::new(text).min_size(vec2(150.0, 26.0)).fill(fill);
+        let tip = if capturing { "Press the keys, or click to keep it as it is" } else { "Click to change" };
+        if ui.add(button).on_hover_text(tip).clicked() {
+            self.capturing = if capturing { None } else { Some(action) };
             self.keys_note = None;
         }
     }
@@ -306,7 +299,6 @@ impl Settings {
         Command::SetShortcut(action, shortcut)
     }
 
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn storage_page(&mut self, ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command>) {
         // Measured when first shown, and again after clearing.
         if args.usage.is_none() && !args.measuring && !args.clearing {
@@ -321,25 +313,7 @@ impl Settings {
             None => None,
         };
         let measuring = args.measuring || args.clearing;
-
         note(ui, "The cache is made again as it's needed; your data can't be. Tick what to clear.");
-        let file_row = |ui: &mut Ui, label: &str, path: &Path, size: Option<u64>, commands: &mut Vec<Command>| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(label).font(FontId::new(theme::size::MEDIUM, theme::semibold())).color(theme::TEXT),
-                );
-                if let Some(size) = size {
-                    ui.label(RichText::new(format_size(size)).color(theme::TEXT_WEAK));
-                }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if widgets::button(ui, icon::FOLDER_OPEN, "Show in folder").clicked() {
-                        commands.push(Command::Reveal(path.to_path_buf()));
-                    }
-                });
-            });
-            ui.label(RichText::new(crate::platform::native(path)).size(theme::size::SMALL).color(theme::TEXT_FAINT));
-        };
-
         ui.add_space(6.0);
         file_row(ui, "Cache", args.cache_path, usage.as_ref().map(|usage| usage.cache_file), commands);
         for part in Part::CACHE {
@@ -350,41 +324,29 @@ impl Settings {
         for part in Part::USER {
             self.part_row(ui, part, usage.as_ref(), measuring);
         }
-
         ui.add_space(10.0);
-        if args.clearing {
+        self.clear_controls(ui, args.clearing, usage.as_ref(), commands);
+        ui.add_space(14.0);
+        log_rows(ui, usage.as_ref(), args.log_path, commands);
+        if measuring {
+            ui.ctx().request_repaint_after(Duration::from_millis(200));
+        }
+    }
+
+    /// "Clear selected…", the question that follows it, or how clearing is going.
+    fn clear_controls(&mut self, ui: &mut Ui, clearing: bool, usage: Option<&Usage>, commands: &mut Vec<Command>) {
+        if clearing {
             ui.horizontal(|ui| {
                 ui.add(egui::Spinner::new().size(theme::size::MEDIUM));
                 ui.label(RichText::new("Clearing…").color(theme::TEXT_WEAK));
             });
         } else if self.confirming {
-            self.confirm_clear(ui, usage.as_ref(), commands);
+            self.confirm_clear(ui, usage, commands);
         } else {
-            let enabled = !self.chosen.is_empty();
-            let button = ui.add_enabled(
-                enabled,
-                egui::Button::new(format!("{}  Clear selected…", icon::BROOM)).min_size(vec2(0.0, 28.0)),
-            );
-            if button.clicked() {
+            let button = egui::Button::new(format!("{}  Clear selected…", icon::BROOM)).min_size(vec2(0.0, 28.0));
+            if ui.add_enabled(!self.chosen.is_empty(), button).clicked() {
                 self.confirming = true;
             }
-        }
-
-        ui.add_space(14.0);
-        widgets::section_label(ui, "Logs");
-        match &usage {
-            Some(usage) => {
-                for log in &usage.logs {
-                    file_row(ui, log.name, &log.path, log.bytes, commands);
-                    if log.name == "App log" {
-                        note(ui, "Errors the app carried on after, and crashes. Attach it when reporting a problem.");
-                    }
-                }
-            }
-            None => file_row(ui, "App log", args.log_path, None, commands),
-        }
-        if measuring {
-            ui.ctx().request_repaint_after(Duration::from_millis(200));
         }
     }
 
@@ -473,22 +435,37 @@ impl Settings {
     }
 }
 
-#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 fn updates_page(ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command>) {
     let updates = args.updates;
-    let version = updates.version();
+    version_heading(ui, updates);
+    ui.add_space(6.0);
+    update_status(ui, updates);
+    ui.add_space(6.0);
+    update_buttons(ui, updates, commands);
+    ui.add_space(10.0);
+    note(
+        ui,
+        "Installed and portable copies check when they start and every 6 hours, and download an update in the background.",
+    );
+}
+
+/// This copy's version, and whether it's installed, portable or run from a build.
+fn version_heading(ui: &mut Ui, updates: &Updates) {
     let kind = match updates.status() {
         Status::NotInstalled => "run from a build",
         _ if updates.is_portable() => "portable",
         _ => "installed",
     };
     ui.label(
-        RichText::new(format!("Asset Browser {version}"))
+        RichText::new(format!("Asset Browser {}", updates.version()))
             .font(FontId::new(theme::size::LARGE, theme::semibold()))
             .color(theme::TEXT),
     );
     ui.label(RichText::new(kind).color(theme::TEXT_FAINT));
-    ui.add_space(6.0);
+}
+
+/// What the updater is doing, or last found.
+fn update_status(ui: &mut Ui, updates: &Updates) {
     let checked = updates::checked_ago(updates).map(|ago| format!(", checked {ago}"));
     let (text, color) = match updates.status() {
         Status::NotInstalled => (
@@ -508,7 +485,11 @@ fn updates_page(ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command
         }
         ui.add(egui::Label::new(RichText::new(text).color(color)).wrap());
     });
-    ui.add_space(6.0);
+}
+
+/// "Restart to update" once an update has downloaded, or else "Check for updates"; What's new,
+/// and the releases.
+fn update_buttons(ui: &mut Ui, updates: &Updates, commands: &mut Vec<Command>) {
     ui.horizontal(|ui| {
         match updates.status() {
             Status::Ready { .. } => {
@@ -537,11 +518,49 @@ fn updates_page(ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command
             commands.push(Command::OpenLink(format!("{RELEASES}/releases")));
         }
     });
-    ui.add_space(10.0);
-    note(
-        ui,
-        "Installed and portable copies check when they start and every 6 hours, and download an update in the background.",
-    );
+}
+
+/// A small icon button, only where it would do something; its room is kept either way, so the
+/// rows line up. Whether it was clicked.
+fn icon_slot(ui: &mut Ui, shown: bool, glyph: &str, tip: &str) -> bool {
+    if shown {
+        widgets::icon_button_sized(ui, glyph, tip, false, 24.0).clicked()
+    } else {
+        ui.allocate_exact_size(Vec2::splat(24.0), Sense::hover());
+        false
+    }
+}
+
+/// A file's name and size, a button to show it in its folder, and its path.
+fn file_row(ui: &mut Ui, label: &str, path: &Path, size: Option<u64>, commands: &mut Vec<Command>) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).font(FontId::new(theme::size::MEDIUM, theme::semibold())).color(theme::TEXT));
+        if let Some(size) = size {
+            ui.label(RichText::new(format_size(size)).color(theme::TEXT_WEAK));
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if widgets::button(ui, icon::FOLDER_OPEN, "Show in folder").clicked() {
+                commands.push(Command::Reveal(path.to_path_buf()));
+            }
+        });
+    });
+    ui.label(RichText::new(crate::platform::native(path)).size(theme::size::SMALL).color(theme::TEXT_FAINT));
+}
+
+/// The logs, each with its size and folder; the app's own before it's been measured.
+fn log_rows(ui: &mut Ui, usage: Option<&Usage>, log_path: &Path, commands: &mut Vec<Command>) {
+    widgets::section_label(ui, "Logs");
+    match usage {
+        Some(usage) => {
+            for log in &usage.logs {
+                file_row(ui, log.name, &log.path, log.bytes, commands);
+                if log.name == "App log" {
+                    note(ui, "Errors the app carried on after, and crashes. Attach it when reporting a problem.");
+                }
+            }
+        }
+        None => file_row(ui, "App log", log_path, None, commands),
+    }
 }
 
 fn memory_page(ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command>) {
