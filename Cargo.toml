@@ -43,6 +43,8 @@ velopack = "=1.2.161"
 raw-window-handle = "0.6"
 # Velopack's version too: comparing versions for "What's new".
 semver = "1"
+# Error types with their messages (docs/architecture.md); in the build already through other crates.
+thiserror = "2"
 
 [target.'cfg(windows)'.dependencies]
 # The drive type: Windows keeps a Recycle Bin only on fixed drives (`platform::has_trash`). The

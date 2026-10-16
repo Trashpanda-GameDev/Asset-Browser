@@ -60,7 +60,8 @@ Not checked by a tool, but expected:
 
 ## Errors
 
-- A module that can fail returns its own error type: an enum with `thiserror`, whose message is what the user reads.
+- A module that can fail returns its own error type: an enum with `thiserror`, whose message is what the user reads
+  (`platform::CopyError` is a small one). Errors from a library pass through as they are (`trash::Error`).
 - The app shows errors with `diag::report` (the log, and the status bar); `diag::note` only logs, for errors not worth
   showing, such as an update check while offline.
 - No error is dropped without saying why: a `let _ =` on a `Result` has a comment.

@@ -63,23 +63,33 @@ thread_local! {
     static CLIPBOARD: RefCell<Option<arboard::Clipboard>> = const { RefCell::new(None) };
 }
 
+/// Why files couldn't be put on the clipboard.
+#[derive(Debug, thiserror::Error)]
+pub enum CopyError {
+    #[error("the files aren't there any more")]
+    Missing,
+    #[error(transparent)]
+    Clipboard(#[from] arboard::Error),
+}
+
 /// Puts the files themselves on the clipboard, as a file manager's Copy does: pasted into a folder
 /// (Explorer, Finder or the like) they're copied there, and apps that take pasted files get them.
 /// Files that aren't there any more are left out.
-pub fn copy_files(paths: &[PathBuf]) -> Result<(), String> {
+pub fn copy_files(paths: &[PathBuf]) -> Result<(), CopyError> {
     // Checked first, so what was on the clipboard stays when there's nothing to copy.
     if !paths.iter().any(|path| path.exists()) {
-        return Err("the files aren't there any more".to_owned());
+        return Err(CopyError::Missing);
     }
     CLIPBOARD.with_borrow_mut(|kept| {
-        if kept.is_none() {
-            *kept = Some(arboard::Clipboard::new().map_err(|err| err.to_string())?);
-        }
-        let clipboard = kept.as_mut().ok_or("the clipboard can't be opened")?;
+        let clipboard = match kept.take() {
+            Some(clipboard) => clipboard,
+            None => arboard::Clipboard::new()?,
+        };
+        let clipboard = kept.insert(clipboard);
         // On Windows, arboard adds the files to whatever is on the clipboard: an app pasting text
         // would get what was copied before.
-        clipboard.clear().map_err(|err| err.to_string())?;
-        clipboard.set().file_list(paths).map_err(|err| err.to_string())
+        clipboard.clear()?;
+        Ok(clipboard.set().file_list(paths)?)
     })
 }
 
@@ -96,8 +106,8 @@ pub fn trash_name() -> &'static str {
 
 /// Moves files and folders to the Recycle Bin (the Trash on macOS and Linux) in one go. It can
 /// take a while for many files or a big folder: not for the UI thread.
-pub fn move_to_trash(paths: &[PathBuf]) -> Result<(), String> {
-    trash::delete_all(paths).map_err(|err| err.to_string())
+pub fn move_to_trash(paths: &[PathBuf]) -> Result<(), trash::Error> {
+    trash::delete_all(paths)
 }
 
 /// Whether what's deleted at `path` can be put back. Windows keeps a Recycle Bin only on fixed
