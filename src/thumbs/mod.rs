@@ -12,7 +12,7 @@ mod writer;
 
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -58,11 +58,27 @@ pub struct Thumb {
 }
 
 #[derive(Default)]
-pub struct ThumbStats {
-    pub made: AtomicU64,
-    pub from_cache: AtomicU64,
-    pub failed: AtomicU64,
-    pub make_micros: AtomicU64,
+struct ThumbStats {
+    made: AtomicU64,
+    from_cache: AtomicU64,
+    failed: AtomicU64,
+    make_micros: AtomicU64,
+}
+
+/// How the previews are coming along.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ThumbProgress {
+    /// Made from their files since the start, and the time that took in all.
+    pub made: u64,
+    pub make_micros: u64,
+    pub from_cache: u64,
+    /// Files that couldn't be read.
+    pub failed: u64,
+    /// Waiting to be made, and being made now.
+    pub queued: usize,
+    pub busy: usize,
+    /// The threads making them.
+    pub threads: usize,
 }
 
 struct Shared {
@@ -84,7 +100,7 @@ pub struct ThumbService {
     writer: Option<JoinHandle<()>>,
     /// To the writer, for clearing the cache in turn with what it saves.
     store: Option<Sender<Store>>,
-    pub stats: Arc<ThumbStats>,
+    stats: Arc<ThumbStats>,
 }
 
 /// One worker per core, leaving one for the UI and the OS.
@@ -148,6 +164,21 @@ impl ThumbService {
         self.workers.len()
     }
 
+    /// How the previews are coming along, for the status bar.
+    pub fn progress(&self) -> ThumbProgress {
+        let (queued, busy) = self.pending();
+        let count = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
+        ThumbProgress {
+            made: count(&self.stats.made),
+            make_micros: count(&self.stats.make_micros),
+            from_cache: count(&self.stats.from_cache),
+            failed: count(&self.stats.failed),
+            queued,
+            busy,
+            threads: self.thread_count(),
+        }
+    }
+
     /// Replaces the queue. Jobs already being worked on are skipped.
     pub fn set_wanted(&self, jobs: Vec<ThumbJob>) {
         let mut state = work::lock(&self.shared.state);
@@ -165,7 +196,7 @@ impl ThumbService {
     }
 
     /// (queued, being made)
-    pub fn pending(&self) -> (usize, usize) {
+    fn pending(&self) -> (usize, usize) {
         let state = work::lock(&self.shared.state);
         (state.queue.len(), state.in_flight.len())
     }

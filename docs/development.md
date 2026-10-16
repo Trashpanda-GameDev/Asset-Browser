@@ -40,6 +40,10 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/animated.rs` | Animated GIFs as sheets of their own frames, within a memory budget |
 | `src/app/` | The window's state (`BrowserApp`, in `mod.rs`) and what it does, a file an area: the library's folders and scans (`library.rs`), what's browsed and selected (`view.rs`), keys and asset actions (`actions.rs`), favorites, collections and categories (`organizing.rs`), deleting (`deleting.rs`), settings (`settings.rs`), the window's parts (`header.rs`, `toolbar.rs`, `sidebar.rs`, `panels.rs`, `toast.rs`), and the screenshots tool's hooks (`screenshots.rs`) |
 | `src/ui/mode.rs` | The modes, what each remembers, and the selection |
+| `src/ui/header.rs` | The window's top: the library's folders, the modes, the view's buttons and the search |
+| `src/ui/toolbar.rs` | Above the assets: where you are, the counts, the order and each mode's own options |
+| `src/ui/empty.rs` | The welcome before any folder is added, and why a view is empty |
+| `src/ui/status_bar.rs` | The bar along the bottom: the last error, scans, previews, updates, the sound playing |
 | `src/ui/browse.rs` | The grid and the list (with each mode's columns) |
 | `src/ui/inspector.rs` | The preview pane, with a section per kind |
 | `src/ui/image_view.rs` | The pane's zoomable picture, which animations are drawn through too |

@@ -1,114 +1,48 @@
 //! The rest of the window: the browsed assets in the middle, the preview pane on the right, the
 //! player at the bottom when the pane is hidden, and the status bar.
 
-use std::time::Duration;
-
-use eframe::egui::{self, Align, Frame, Layout, Margin, RichText};
-use egui_phosphor::regular as icon;
+use eframe::egui::{self, Frame, Margin, RichText};
 
 use crate::asset::AssetKind;
-use crate::groups::{GroupKind, UNCATEGORIZED};
-use crate::ui::browse::{self, Browse};
+use crate::diag;
+use crate::ui::browse::{self, Browse, BrowseOutput};
+use crate::ui::empty::{self, EmptyArgs};
 use crate::ui::folders::FolderAction;
-use crate::ui::format::grouped;
 use crate::ui::inspector::InspectorArgs;
 use crate::ui::mode::Layout as ViewLayout;
-use crate::ui::organize::plural;
 use crate::ui::sound;
+use crate::ui::status_bar::{self, StatusArgs, StatusCommand};
+use crate::ui::theme;
 use crate::ui::updates::UpdateAction;
-use crate::ui::{theme, widgets};
-use crate::{diag, paths};
 
 use super::BrowserApp;
 
 impl BrowserApp {
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub(super) fn status_bar(&mut self, ui: &mut egui::Ui) {
-        let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin::symmetric(12, 4));
-        let mut show = None;
-        let mut update = None;
-        egui::Panel::bottom("status").frame(frame).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let small = |text: String| RichText::new(text).size(11.5).color(theme::TEXT_FAINT);
-                if let Some(error) = diag::last() {
-                    ui.label(
-                        RichText::new(format!("{}  {error}", icon::WARNING_CIRCLE)).size(11.5).color(theme::ERROR),
-                    )
-                    .on_hover_text(format!("Logged to {}", paths::log_file().display()));
-                    widgets::divider(ui);
-                }
-                if let Some(library) = &self.library {
-                    ui.label(small(format!("{} assets", grouped(library.entries().len()))));
-                    widgets::divider(ui);
-                }
-                if self.deletion.deleting.is_some() {
-                    ui.add(egui::Spinner::new().size(12.0));
-                    ui.label(small("Deleting…".to_owned()));
-                    widgets::divider(ui);
-                }
-                if self.folders.scans > 0 {
-                    ui.add(egui::Spinner::new().size(12.0));
-                    ui.label(small(format!("Scanning… {:.1} s", self.folders.scan_started.elapsed().as_secs_f32())));
-                    ui.ctx().request_repaint_after(Duration::from_millis(100));
-                } else if let Some(scan) = &self.folders.last_scan {
-                    ui.label(small(format!(
-                        "Scanned {} in {:.2} s",
-                        plural(scan.dirs_visited, "folder"),
-                        scan.elapsed.as_secs_f32()
-                    )))
-                    .on_hover_text(format!(
-                        "{} assets; {} other files skipped. {}",
-                        grouped(scan.assets),
-                        grouped(scan.skipped),
-                        self.folders.index_note.as_deref().unwrap_or("")
-                    ));
-                }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    update = crate::ui::updates::status(ui, &self.updates);
-                    widgets::divider(ui);
-                    let stats = &self.thumbs.stats;
-                    let made = stats.made.load(std::sync::atomic::Ordering::Relaxed);
-                    let micros = stats.make_micros.load(std::sync::atomic::Ordering::Relaxed);
-                    let from_cache = stats.from_cache.load(std::sync::atomic::Ordering::Relaxed);
-                    let failed = stats.failed.load(std::sync::atomic::Ordering::Relaxed);
-                    let (queued, busy) = self.thumbs.pending();
-                    let average = if made > 0 { micros as f64 / made as f64 / 1000.0 } else { 0.0 };
-                    let details = format!(
-                        "{} made ({average:.1} ms average on {} threads), {} from the cache, {} couldn't be read",
-                        grouped(made as usize),
-                        self.thumbs.thread_count(),
-                        grouped(from_cache as usize),
-                        grouped(failed as usize),
-                    );
-                    if queued + busy > 0 {
-                        ui.label(small(format!("Making previews… {}", grouped(queued + busy)))).on_hover_text(details);
-                        ui.add(egui::Spinner::new().size(12.0));
-                    } else {
-                        ui.label(small(format!("{} previews", grouped((made + from_cache) as usize))))
-                            .on_hover_text(details);
-                    }
-                    // The playing sound, when it isn't the one shown.
-                    let focus = self.browsing.modes[self.browsing.mode.index()].selection.focus;
-                    let playing_elsewhere = self.playback.playing.is_some_and(|(index, _)| Some(index) != focus);
-                    if playing_elsewhere && let Some(library) = &self.library {
-                        widgets::divider(ui);
-                        show = sound::now_playing_chip(ui, &mut self.playback, library);
-                    }
-                });
-            });
-        });
-        if let Some(index) = show {
-            self.reveal(index);
-        }
-        match update {
-            Some(UpdateAction::Check) => self.updates.check_now(),
-            Some(UpdateAction::Restart) => self.restart_to_update(),
-            None => {}
+        let args = StatusArgs {
+            error: diag::last(),
+            library: self.library.as_ref(),
+            deleting: self.deletion.deleting.is_some(),
+            scanning_since: (self.folders.scans > 0).then_some(self.folders.scan_started),
+            last_scan: self.folders.last_scan.as_ref(),
+            index_note: self.folders.index_note.as_deref(),
+            previews: self.thumbs.progress(),
+            updates: &self.updates,
+            focus: self.browsing.mode_view().selection.focus,
+            playback: &mut self.playback,
+        };
+        for command in status_bar::show(ui, args) {
+            match command {
+                StatusCommand::Update(UpdateAction::Check) => self.updates.check_now(),
+                StatusCommand::Update(UpdateAction::Restart) => self.restart_to_update(),
+                StatusCommand::ShowPlaying(index) => self.reveal(index),
+            }
         }
     }
 
     pub(super) fn inspector_panel(&mut self, ui: &mut egui::Ui) {
         let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin::same(12));
+        let totals = self.source_totals();
         let mut output = None;
         egui::Panel::right("inspector")
             .resizable(true)
@@ -119,10 +53,6 @@ impl BrowserApp {
                 let Some(library) = &self.library else {
                     ui.label(RichText::new("Open a folder to see its assets here.").color(theme::TEXT_FAINT));
                     return;
-                };
-                let totals = match self.browsing.group {
-                    Some(id) => self.organizing.membership.totals(id),
-                    None => library.dirs().get(self.browsing.selected_dir as usize).map_or([0; 3], |dir| dir.totals),
                 };
                 let selection = &self.browsing.modes[self.browsing.mode.index()].selection;
                 let args = InspectorArgs {
@@ -199,94 +129,22 @@ impl BrowserApp {
         });
     }
 
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
+    /// The middle: the toolbar over the browsed assets, or the welcome before any folder is added.
     pub(super) fn central(&mut self, ui: &mut egui::Ui) {
         let frame = Frame::new().fill(theme::BG).inner_margin(Margin { left: 12, right: 6, top: 6, bottom: 0 });
         let mut output = None;
         let mut add_folder = false;
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             if self.library.is_none() {
-                // No folders yet.
-                ui.vertical_centered(|ui| {
-                    ui.add_space((ui.available_height() / 2.0 - 80.0).max(0.0));
-                    ui.label(RichText::new(icon::FOLDERS).size(44.0).color(theme::TEXT_FAINT));
-                    ui.add_space(10.0);
-                    ui.label(RichText::new("Add a folder to browse its assets").size(16.0).color(theme::TEXT_WEAK));
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new("Or drop one on the window. Add as many as you like: they're browsed together.")
-                            .size(12.5)
-                            .color(theme::TEXT_FAINT),
-                    );
-                    ui.add_space(14.0);
-                    add_folder = widgets::button(ui, icon::FOLDER_PLUS, "Add a folder…").clicked();
-                });
+                add_folder = empty::welcome(ui);
                 return;
             }
             self.toolbar(ui);
-            let Some(library) = self.library.as_ref() else { return };
             if self.browsing.view.is_empty() {
-                // A folder that's empty only because its first scan hasn't finished.
-                let scanning = self.folders.scans > 0
-                    && self.browsing.group.is_none()
-                    && library.dirs().get(self.browsing.selected_dir as usize).is_some_and(|dir| dir.totals == [0; 3]);
-                ui.centered_and_justified(|ui| {
-                    let what = self.browsing.mode.kind().map_or("assets", |kind| match kind {
-                        AssetKind::Image => "images",
-                        AssetKind::Audio => "sounds",
-                        AssetKind::Model => "models",
-                    });
-                    let place = match self.browsing.group {
-                        Some(UNCATEGORIZED) => "without a category".to_owned(),
-                        Some(id) => match self.organizing.groups.get(id) {
-                            Some(group) if group.kind == GroupKind::Favorites => {
-                                "in Favorites yet. Star assets with F or the star on their tile".to_owned()
-                            }
-                            Some(group) => {
-                                format!("in \u{201c}{}\u{201d} yet. Drag assets onto it in the sidebar", group.name)
-                            }
-                            None => "here".to_owned(),
-                        },
-                        None => "in this folder".to_owned(),
-                    };
-                    let text = if scanning {
-                        "Scanning…".to_owned()
-                    } else if self.browsing.query.trim().is_empty() {
-                        format!("No {what} {place}.")
-                    } else {
-                        format!("No {what} here match \u{201c}{}\u{201d}.", self.browsing.query.trim())
-                    };
-                    ui.add(egui::Label::new(RichText::new(text).size(14.0).color(theme::TEXT_FAINT)).wrap());
-                });
-                return;
+                self.nothing_here(ui);
+            } else {
+                output = self.browse(ui);
             }
-            let mode_view = &self.browsing.modes[self.browsing.mode.index()];
-            let scroll_to = std::mem::take(&mut self.browsing.scroll_to_focus)
-                .then_some(mode_view.selection.focus)
-                .flatten()
-                .and_then(|focus| self.browsing.view.iter().position(|&index| index == focus));
-            let now = self.playback.now();
-            let (sort, descending) = mode_view.order(self.browsing.in_group_order());
-            let browse = Browse {
-                library,
-                view: &self.browsing.view,
-                selection: &mode_view.selection,
-                now: now.as_ref(),
-                mode: self.browsing.mode,
-                sort,
-                descending,
-                backdrop: self.inspector.image.backdrop,
-                scroll_to,
-                groups: &self.organizing.groups,
-                membership: &self.organizing.membership,
-                viewing: self.browsing.group,
-            };
-            output = Some(match mode_view.layout {
-                ViewLayout::Grid => {
-                    browse::grid(ui, &browse, &mut self.previews, mode_view.tile, &mut self.browsing.scroll)
-                }
-                ViewLayout::List => browse::list(ui, &browse, &mut self.previews, &mut self.browsing.scroll),
-            });
         });
         if let Some(output) = output {
             self.apply_browse(output);
@@ -294,5 +152,54 @@ impl BrowserApp {
         if add_folder {
             self.run_folder_action(FolderAction::AddRoot);
         }
+    }
+
+    /// Why the view is empty.
+    fn nothing_here(&self, ui: &mut egui::Ui) {
+        let Some(library) = &self.library else { return };
+        // A folder that's empty only because its first scan hasn't finished.
+        let scanning = self.folders.scans > 0
+            && self.browsing.group.is_none()
+            && library.dirs().get(self.browsing.selected_dir as usize).is_some_and(|dir| dir.totals == [0; 3]);
+        let args = EmptyArgs {
+            kind: self.browsing.mode.kind(),
+            group: self.browsing.group,
+            groups: &self.organizing.groups,
+            query: &self.browsing.query,
+            scanning,
+        };
+        empty::nothing_here(ui, &args);
+    }
+
+    /// The browsed assets, as a grid or a list.
+    fn browse(&mut self, ui: &mut egui::Ui) -> Option<BrowseOutput> {
+        let library = self.library.as_ref()?;
+        let mode_view = &self.browsing.modes[self.browsing.mode.index()];
+        let scroll_to = std::mem::take(&mut self.browsing.scroll_to_focus)
+            .then_some(mode_view.selection.focus)
+            .flatten()
+            .and_then(|focus| self.browsing.view.iter().position(|&index| index == focus));
+        let now = self.playback.now();
+        let (sort, descending) = mode_view.order(self.browsing.in_group_order());
+        let browse = Browse {
+            library,
+            view: &self.browsing.view,
+            selection: &mode_view.selection,
+            now: now.as_ref(),
+            mode: self.browsing.mode,
+            sort,
+            descending,
+            backdrop: self.inspector.image.backdrop,
+            scroll_to,
+            groups: &self.organizing.groups,
+            membership: &self.organizing.membership,
+            viewing: self.browsing.group,
+        };
+        Some(match mode_view.layout {
+            ViewLayout::Grid => {
+                browse::grid(ui, &browse, &mut self.previews, mode_view.tile, &mut self.browsing.scroll)
+            }
+            ViewLayout::List => browse::list(ui, &browse, &mut self.previews, &mut self.browsing.scroll),
+        })
     }
 }
