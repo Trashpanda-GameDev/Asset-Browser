@@ -305,6 +305,7 @@ impl Reader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::vector::sub;
 
     fn chunk(id: u16, body: &[u8]) -> Vec<u8> {
         let mut out = id.to_le_bytes().to_vec();
@@ -366,6 +367,35 @@ mod tests {
         assert_eq!(model.bounds.min, [0.0, 0.0, -1.0]);
         let corner = model.vertices.iter().find(|v| v.position == [1.0, 0.0, -1.0]).unwrap();
         assert_eq!(corner.uv, [1.0, 0.0], "v flipped to count from the top");
+    }
+
+    #[test]
+    fn mirrored_object_keeps_front_faces_counter_clockwise() {
+        // The square mirrored along X in the editor: its points are mirrored, its faces' winding
+        // isn't, and its matrix says so.
+        let mut points = 4u16.to_le_bytes().to_vec();
+        for p in [[0.0f32, 0.0, 0.0], [-1.0, 0.0, 0.0], [-1.0, 1.0, 0.0], [0.0, 1.0, 0.0]] {
+            points.extend(p.iter().flat_map(|c| c.to_le_bytes()));
+        }
+        let mut faces = 2u16.to_le_bytes().to_vec();
+        for face in [[0u16, 1, 2], [0, 2, 3]] {
+            faces.extend(face.iter().flat_map(|i| i.to_le_bytes()));
+            faces.extend(0u16.to_le_bytes());
+        }
+        let axes = [-1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+        let mut mesh = chunk(POINTS, &points);
+        mesh.extend(chunk(FACES, &faces));
+        mesh.extend(chunk(MATRIX, &axes.iter().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>()));
+        let mut object = b"Mirrored\0".to_vec();
+        object.extend(chunk(TRIANGLES, &mesh));
+        let file = chunk(MAIN, &chunk(EDITOR, &chunk(OBJECT, &object)));
+        let model = parse(&file, Path::new("test.3ds"), &LoadOptions::default()).unwrap();
+        assert_eq!(model.info.triangles, 2);
+        for triangle in model.indices.as_chunks::<3>().0 {
+            let [a, b, c] = triangle.map(|index| model.vertices[index as usize].position);
+            // Facing up (+Z) in the file is facing up (+Y) here.
+            assert!(cross(sub(b, a), sub(c, a))[1] > 0.0);
+        }
     }
 
     #[test]

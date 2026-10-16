@@ -463,6 +463,7 @@ impl<'a, 'input> Reader<'a, 'input> {
 mod tests {
     use super::*;
     use crate::model::test_files::png_2x2;
+    use crate::model::vector::{cross, sub};
     use crate::test_support::TempDir;
 
     /// A unit quad (Z up, centimetres) as a polylist with one textured material, placed by a
@@ -535,6 +536,42 @@ mod tests {
         let part = model.parts.iter().find(|p| p.material == wood_index).unwrap();
         let first = model.vertices[model.indices[part.first as usize] as usize];
         assert!((first.normal[1] - 1.0).abs() < 1e-5, "{:?}", first.normal);
+    }
+
+    #[test]
+    fn every_kind_of_primitive_faces_front_even_mirrored() {
+        // A unit square facing +Z, its corners counter-clockwise: (0, 0), (1, 0), (1, 1), (0, 1).
+        let input = r##"<input semantic="VERTEX" source="#corners" offset="0"/>"##;
+        let primitives = [
+            format!(r#"<triangles count="2">{input}<p>0 1 2 0 2 3</p></triangles>"#),
+            format!(r#"<polylist count="1">{input}<vcount>4</vcount><p>0 1 2 3</p></polylist>"#),
+            format!(r#"<polygons count="1">{input}<p>0 1 2 3</p></polygons>"#),
+            format!(r#"<trifans count="1">{input}<p>0 1 2 3</p></trifans>"#),
+            format!(r#"<tristrips count="1">{input}<p>0 1 3 2</p></tristrips>"#),
+        ];
+        for primitive in &primitives {
+            for transform in ["", "<scale>-1 1 1</scale>"] {
+                let file = format!(
+                    r##"<COLLADA version="1.4.1"><library_geometries><geometry id="square"><mesh>
+  <source id="positions"><float_array id="numbers" count="12">0 0 0 1 0 0 1 1 0 0 1 0</float_array>
+    <technique_common><accessor source="#numbers" count="4" stride="3"/></technique_common></source>
+  <vertices id="corners"><input semantic="POSITION" source="#positions"/></vertices>
+  {primitive}
+</mesh></geometry></library_geometries>
+<library_visual_scenes><visual_scene id="scene">
+  <node>{transform}<instance_geometry url="#square"/></node>
+</visual_scene></library_visual_scenes>
+<scene><instance_visual_scene url="#scene"/></scene></COLLADA>"##
+                );
+                let model = parse(file.as_bytes(), Path::new("test.dae"), &LoadOptions::default()).unwrap();
+                assert_eq!(model.info.triangles, 2, "{primitive} {transform}");
+                for triangle in model.indices.as_chunks::<3>().0 {
+                    let [a, b, c] = triangle.map(|index| model.vertices[index as usize].position);
+                    let facing = cross(sub(b, a), sub(c, a));
+                    assert!(facing[2] > 0.0, "{primitive} {transform}: {facing:?}");
+                }
+            }
+        }
     }
 
     #[test]
