@@ -49,7 +49,7 @@ use crate::ui::theme;
 use crate::ui::whats_new::WhatsNew;
 use crate::updates::Updates;
 use crate::watch::Watch;
-use crate::{db, diag};
+use crate::{db, diag, paths};
 use deleting::{DeleteRequest, Deleting};
 use library::{LastScan, ScanDone};
 use settings::Clearing;
@@ -135,14 +135,14 @@ impl BrowserApp {
     pub fn new(cc: &eframe::CreationContext<'_>, start_root: Option<PathBuf>) -> Self {
         theme::apply(&cc.egui_ctx);
         theme::color_title_bar(&cc.egui_ctx, cc);
-        let db_path = db::default_path();
+        let db_path = paths::cache_file();
         let conn = db::open(&db_path)
             .map_err(|err| diag::report(&format!("Cache unavailable ({})", db_path.display()), err))
             .ok();
         let ctx = cc.egui_ctx.clone();
         let repaint: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || ctx.request_repaint());
         let thumbs = ThumbService::start(&db_path, &repaint);
-        let user_path = db::user_data_path();
+        let user_path = paths::user_data_file();
         let user_conn = db::open_user(&user_path)
             .map_err(|err| {
                 diag::report(&format!("The library's folders can't be saved ({})", user_path.display()), err)
@@ -185,7 +185,7 @@ impl BrowserApp {
             show_inspector: true,
             folders: FolderTree::default(),
             previews: Previews::new(&cc.egui_ctx),
-            inspector: Inspector::new(&cc.egui_ctx, &db::user_data_path()),
+            inspector: Inspector::new(&cc.egui_ctx, &paths::user_data_file()),
             sound: Sound::start(&cc.egui_ctx),
             updates,
             settings: Settings::default(),
@@ -193,7 +193,7 @@ impl BrowserApp {
             memory_mb: memory::DEFAULT_MB,
             whats_new: None,
             clearing: None,
-            groups: Groups::open(&db::user_data_path()),
+            groups: Groups::open(&paths::user_data_file()),
             membership: Membership::default(),
             membership_dirty: true,
             group: None,

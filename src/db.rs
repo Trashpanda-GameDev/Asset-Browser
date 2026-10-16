@@ -46,35 +46,6 @@ pub enum CacheWrite {
     Model(i64, StoredThumb, ModelInfo),
 }
 
-/// Set to a folder, the app keeps everything in it (the cache, the log and the user's own data)
-/// instead of in the user's folders. The screenshots tool's demo sets it, so it can't touch the
-/// real library.
-pub const HOME_VARIABLE: &str = "ASSET_BROWSER_HOME";
-
-fn home(part: &str) -> Option<PathBuf> {
-    std::env::var_os(HOME_VARIABLE).filter(|home| !home.is_empty()).map(|home| PathBuf::from(home).join(part))
-}
-
-/// The per-user cache location for this OS (`%LOCALAPPDATA%` on Windows, `~/Library/Caches` on
-/// macOS, `~/.cache` on Linux).
-pub fn default_path() -> PathBuf {
-    home("cache")
-        .or_else(|| directories::ProjectDirs::from("", "", "AssetBrowser").map(|dirs| dirs.cache_dir().to_path_buf()))
-        .unwrap_or_else(|| std::env::temp_dir().join("AssetBrowser"))
-        .join("library.sqlite")
-}
-
-/// The user's own data, which isn't a cache and must survive one being cleared: favourites,
-/// collections, categories (`groups`) and sprite sheet choices (`sheets`). The per-user data
-/// folder: `%APPDATA%` on Windows, `~/Library/Application Support` on macOS, `~/.local/share`
-/// on Linux.
-pub fn user_data_path() -> PathBuf {
-    home("data")
-        .or_else(|| directories::ProjectDirs::from("", "", "AssetBrowser").map(|dirs| dirs.data_dir().to_path_buf()))
-        .unwrap_or_else(|| std::env::temp_dir().join("AssetBrowser"))
-        .join("user.sqlite")
-}
-
 /// Opens the user data file for the library's folders (the other user data has its own
 /// connections: `groups::Groups`, `sheets::SheetStore`).
 pub fn open_user(path: &Path) -> rusqlite::Result<Connection> {

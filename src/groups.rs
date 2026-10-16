@@ -6,7 +6,7 @@
 //!   matched by the search box.
 //!
 //! They're the user's work rather than a cache, so they're kept in the user data file
-//! (`db::user_data_path`, in `%APPDATA%\AssetBrowser\data` on Windows), not in the cache
+//! (`paths::user_data_file`, in `%APPDATA%\AssetBrowser\data` on Windows), not in the cache
 //! database, which can be deleted at any time. Everything is held in memory too, and each change
 //! is written through at once, in one transaction.
 //!

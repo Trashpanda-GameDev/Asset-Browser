@@ -9,8 +9,8 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use asset_browser::db;
 use asset_browser::groups::{FAVORITES, GroupKind, Groups};
+use asset_browser::paths;
 
 /// Left in a folder holding the library, so it can be written there again.
 const MARK: &str = ".made-up-assets";
@@ -61,7 +61,7 @@ pub fn arrive(root: &Path, i: usize) -> io::Result<()> {
 /// Favorites, collections and categories over the library in `root`, in the app's user data.
 #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 pub fn organize(root: &Path) {
-    let mut groups = Groups::open(&db::user_data_path());
+    let mut groups = Groups::open(&paths::user_data_file());
     let paths = |files: &[&str]| files.iter().map(|file| root.join(file)).collect::<Vec<_>>();
     groups.add(
         FAVORITES,

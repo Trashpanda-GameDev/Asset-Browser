@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 /// The layers, lowest first, and the top-level modules in each.
 const LAYERS: [(&str, &[&str]); 5] = [
-    ("foundation", &["db", "diag", "platform"]),
+    ("foundation", &["paths", "db", "diag", "platform"]),
     ("domain", &["asset", "library", "scan", "groups", "sheets", "model", "animated", "psd_composite", "changelog"]),
     ("services", &["thumbs", "audio", "detail", "deletion", "updates", "watch", "storage", "memory"]),
     ("ui", &["ui", "keymap"]),

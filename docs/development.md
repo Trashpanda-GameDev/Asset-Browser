@@ -23,6 +23,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/scan.rs` | Parallel folder walk; which files count as assets |
 | `src/watch.rs` | Told by the OS when the library's folders change, to rescan them once the changes settle |
 | `src/library.rs` | The library's folders: sorted entries, one folder tree over all of them, filtering |
+| `src/paths.rs` | Where the cache, the user's own data and the log are kept (`ASSET_BROWSER_HOME` moves all three) |
 | `src/db.rs` | SQLite: folder index, thumbnail, waveform and model-facts caches, settings |
 | `src/thumbs.rs` | Preview worker pool and cache writer; image decoding and resizing |
 | `src/audio.rs` | Playback (cpal + symphonia, lock-free ring buffer), read-ahead, waveforms |

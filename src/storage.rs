@@ -1,8 +1,8 @@
 //! What the app keeps on disk, how big each part is, and clearing parts of it (Settings → Storage).
 //!
-//! The cache (`db::default_path`) is all made again as it's needed: thumbnails and model pictures,
+//! The cache (`paths::cache_file`) is all made again as it's needed: thumbnails and model pictures,
 //! waveforms, model facts, the folder index, and the window's settings. The user data file
-//! (`db::user_data_path`) holds what can't be: favorites, collections and categories, sprite sheet
+//! (`paths::user_data_file`) holds what can't be: favorites, collections and categories, sprite sheet
 //! choices and the library's folders.
 
 use std::collections::HashMap;

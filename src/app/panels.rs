@@ -7,7 +7,6 @@ use eframe::egui::{self, Align, Frame, Layout, Margin, RichText};
 use egui_phosphor::regular as icon;
 
 use crate::asset::AssetKind;
-use crate::diag;
 use crate::groups::{GroupKind, UNCATEGORIZED};
 use crate::ui::browse::{self, Browse};
 use crate::ui::folders::FolderAction;
@@ -18,6 +17,7 @@ use crate::ui::organize::plural;
 use crate::ui::sound;
 use crate::ui::updates::UpdateAction;
 use crate::ui::{theme, widgets};
+use crate::{diag, paths};
 
 use super::BrowserApp;
 
@@ -34,7 +34,7 @@ impl BrowserApp {
                     ui.label(
                         RichText::new(format!("{}  {error}", icon::WARNING_CIRCLE)).size(11.5).color(theme::ERROR),
                     )
-                    .on_hover_text(format!("Logged to {}", diag::log_path().display()));
+                    .on_hover_text(format!("Logged to {}", paths::log_file().display()));
                     widgets::divider(ui);
                 }
                 if let Some(library) = &self.library {

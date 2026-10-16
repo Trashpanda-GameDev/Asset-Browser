@@ -15,7 +15,7 @@ use crate::ui::image_view::{Backdrop, ImageView};
 use crate::ui::mode::{Layout as ViewLayout, Mode, ModeView};
 use crate::ui::settings::{Command, SettingsArgs};
 use crate::ui::whats_new::WhatsNew;
-use crate::{db, diag, platform};
+use crate::{db, diag, paths, platform};
 
 use super::BrowserApp;
 
@@ -68,7 +68,7 @@ impl BrowserApp {
         if !self.settings.open {
             return;
         }
-        let (user_path, log_path) = (db::user_data_path(), diag::log_path());
+        let (user_path, log_path) = (paths::user_data_file(), paths::log_file());
         let args = SettingsArgs {
             updates: &self.updates,
             keymap: &self.keymap,

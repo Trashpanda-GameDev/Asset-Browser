@@ -23,10 +23,10 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use asset_browser::app::{BrowserApp, ScreenshotView};
-use asset_browser::db;
 use asset_browser::library::SortBy;
 use asset_browser::ui::mode::{Layout, Mode};
 use asset_browser::ui::settings::Page;
+use asset_browser::{db, paths};
 use clip::{Clip, Recording};
 use eframe::egui;
 
@@ -294,7 +294,7 @@ fn main() -> eframe::Result {
         let dir = std::path::absolute("target/demo").unwrap_or_else(|_| PathBuf::from("target/demo"));
         let _ = std::fs::remove_dir_all(&dir);
         // SAFETY: no other thread has started yet, so nothing reads the environment meanwhile.
-        unsafe { std::env::set_var(db::HOME_VARIABLE, dir.join("home")) };
+        unsafe { std::env::set_var(paths::HOME_VARIABLE, dir.join("home")) };
         // The preview pane shows the files' paths, so a short folder reads best (F:\Assets, say);
         // else one beside the app's files. Not the temporary folder: its path has the user's name.
         let library = match args.get(1) {
@@ -308,7 +308,7 @@ fn main() -> eframe::Result {
         demo::organize(&library);
         // As if Auto-play had been turned off and the turntable on: no sound plays by itself while
         // the clips move through them, and the models turn.
-        let settings = db::open(&db::default_path())
+        let settings = db::open(&paths::cache_file())
             .and_then(|conn| db::set_settings(&conn, &[("sound.autoplay", "0"), ("model.turntable", "1")]));
         if let Err(err) = settings {
             eprintln!("couldn't set the demo's settings: {err}");
