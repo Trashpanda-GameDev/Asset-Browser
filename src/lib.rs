@@ -12,6 +12,7 @@ pub mod db;
 pub(crate) mod deletion;
 pub(crate) mod detail;
 pub mod diag;
+pub mod folder_index;
 pub mod groups;
 pub mod imaging;
 pub mod library;

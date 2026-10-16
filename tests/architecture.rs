@@ -14,15 +14,24 @@ const LAYERS: [(&str, &[&str]); 5] = [
     ("foundation", &["paths", "db", "diag", "platform", "work"]),
     (
         "domain",
-        &["asset", "library", "scan", "groups", "sheets", "model", "imaging", "preview_key", "animated", "changelog"],
+        &[
+            "asset",
+            "library",
+            "scan",
+            "groups",
+            "sheets",
+            "model",
+            "imaging",
+            "preview_key",
+            "folder_index",
+            "animated",
+            "changelog",
+        ],
     ),
     ("services", &["thumbs", "audio", "detail", "deletion", "updates", "watch", "storage", "memory"]),
     ("ui", &["ui"]),
     ("app", &["app"]),
 ];
-
-/// A module using one in a higher layer: (module, the module it uses).
-const UPWARD_EXCEPTIONS: [(&str, &str); 2] = [("db", "asset"), ("db", "scan")];
 
 /// Views that do what the app should: (file in src/, what it does).
 const VIEW_EXCEPTIONS: [(&str, Work); 3] =
@@ -73,18 +82,13 @@ fn modules_use_only_their_own_layer_or_below() {
         .into_iter()
         .flat_map(|(module, used)| used.into_iter().map(move |target| (module.clone(), target)))
         .filter(|(module, target)| layer(target) > layer(module))
-        .filter(|(module, target)| !UPWARD_EXCEPTIONS.contains(&(module.as_str(), target.as_str())))
         .collect();
     assert!(upward.is_empty(), "modules using a higher layer (docs/architecture.md): {upward:?}");
 }
 
 #[test]
 fn modules_do_not_depend_on_each_other_in_a_circle() {
-    let mut uses = module_uses();
-    for (module, target) in UPWARD_EXCEPTIONS {
-        uses.entry(module.to_owned()).or_default().remove(target);
-    }
-    let circle = find_circle(&uses);
+    let circle = find_circle(&module_uses());
     assert!(circle.is_none(), "modules that depend on each other in a circle: {circle:?}");
 }
 
@@ -109,18 +113,11 @@ fn views_read_no_files_start_no_threads_and_open_no_databases() {
 
 #[test]
 fn every_exception_is_still_needed() {
-    let uses = module_uses();
     let view_work = view_work();
-    let fixed: Vec<String> = UPWARD_EXCEPTIONS
+    let fixed: Vec<String> = VIEW_EXCEPTIONS
         .iter()
-        .filter(|(module, target)| !uses.get(*module).is_some_and(|used| used.contains(*target)))
-        .map(|(module, target)| format!("{module} uses {target}"))
-        .chain(
-            VIEW_EXCEPTIONS
-                .iter()
-                .filter(|(path, work)| !view_work.iter().any(|(found, did)| found == path && did == work))
-                .map(|(path, work)| format!("{path} does {work:?}")),
-        )
+        .filter(|(path, work)| !view_work.iter().any(|(found, did)| found == path && did == work))
+        .map(|(path, work)| format!("{path} does {work:?}"))
         .collect();
     assert!(fixed.is_empty(), "fixed, so take these out of the exceptions: {fixed:?}");
 }

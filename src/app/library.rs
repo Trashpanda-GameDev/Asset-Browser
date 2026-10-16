@@ -8,7 +8,7 @@ use eframe::egui;
 
 use crate::library::{self, Library, folder_name, path_key, root_string};
 use crate::scan::ScannedFile;
-use crate::{db, diag, platform, scan, work};
+use crate::{db, diag, folder_index, platform, scan, work};
 
 use super::BrowserApp;
 
@@ -116,7 +116,7 @@ impl BrowserApp {
     /// The files the last scan of `root` found, or none if it was never scanned.
     fn cached_index(&self, root: &Path) -> Vec<ScannedFile> {
         let Some(conn) = &self.conn else { return Vec::new() };
-        match db::load_index(conn, &root_string(root)) {
+        match folder_index::load(conn, &root_string(root)) {
             Ok(files) => files.unwrap_or_default(),
             Err(err) => {
                 diag::report("Loading the cached index", err);
@@ -286,7 +286,7 @@ impl BrowserApp {
                     continue;
                 }
                 if let Some(conn) = &conn
-                    && let Err(err) = db::save_index(conn, &root_string(root), &result.files)
+                    && let Err(err) = folder_index::save(conn, &root_string(root), &result.files)
                 {
                     diag::report("Saving the index", err);
                 }

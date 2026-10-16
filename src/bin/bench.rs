@@ -20,7 +20,7 @@ use asset_browser::library::{Entry, Library, root_string};
 use asset_browser::model::{self, LoadOptions, raster};
 use asset_browser::thumbs::{Preview, THUMB_MAX, THUMB_TEXTURE, ThumbJob, ThumbService};
 use asset_browser::work::Wake;
-use asset_browser::{db, scan};
+use asset_browser::{db, folder_index, scan};
 
 struct Options {
     thumbs: usize,
@@ -93,10 +93,10 @@ fn main() {
     let db_path = std::env::temp_dir().join(format!("asset_browser_bench_{}.sqlite", std::process::id()));
     let conn = db::open_cache(&db_path).expect("open bench database");
     let start = Instant::now();
-    db::save_index(&conn, &root_key, &result.files).expect("save index");
+    folder_index::save(&conn, &root_key, &result.files).expect("save index");
     println!("Save index:    {:.0} ms", ms(start.elapsed()));
     let start = Instant::now();
-    let loaded = db::load_index(&conn, &root_key).expect("load index").unwrap_or_default();
+    let loaded = folder_index::load(&conn, &root_key).expect("load index").unwrap_or_default();
     println!(
         "Load index:    {:.0} ms ({} rows)  <- what reopening a folder waits for",
         ms(start.elapsed()),

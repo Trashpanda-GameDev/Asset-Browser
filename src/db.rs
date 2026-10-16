@@ -1,16 +1,15 @@
-//! One SQLite file holds the folder index, the thumbnail, waveform and model caches, and settings.
+//! SQLite: how every file is opened, the tables of the cache and of the user's own data, the
+//! library's folders and the settings. One file holds the cache: the folder index
+//! (`folder_index`), the previews (`thumbs::cache`) and the settings.
 //!
 //! A single file rather than thousands of small thumbnail files: opening many small files is slow
 //! on Windows (NTFS plus antivirus scanning on every open). WAL mode lets the thumbnail workers
 //! read while the writer thread commits.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-
-use crate::asset::AssetKind;
-use crate::scan::ScannedFile;
 
 /// How much a file's last writes are worth after a crash or a power cut.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -169,43 +168,6 @@ pub fn open_cache(path: &Path) -> rusqlite::Result<Connection> {
              value TEXT NOT NULL);",
     )?;
     Ok(conn)
-}
-
-/// The files found by the last scan of `root`, or `None` if it was never scanned.
-pub fn load_index(conn: &Connection, root: &str) -> rusqlite::Result<Option<Vec<ScannedFile>>> {
-    let id: Option<i64> =
-        conn.query_row("SELECT id FROM roots WHERE path = ?1", [root], |row| row.get(0)).optional()?;
-    let Some(id) = id else { return Ok(None) };
-    let mut statement = conn.prepare("SELECT rel, kind, size, mtime FROM files WHERE root = ?1")?;
-    let rows = statement.query_map([id], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?))
-    })?;
-    let mut files = Vec::new();
-    for row in rows {
-        let (rel, kind, size, mtime) = row?;
-        if let Some(kind) = AssetKind::from_db(kind) {
-            files.push(ScannedFile { rel, kind, size: size as u64, mtime });
-        }
-    }
-    Ok(Some(files))
-}
-
-pub fn save_index(conn: &Connection, root: &str, files: &[ScannedFile]) -> rusqlite::Result<()> {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
-    in_transaction(conn, |tx| {
-        tx.execute(
-            "INSERT INTO roots(path, scanned_at) VALUES(?1, ?2)
-             ON CONFLICT(path) DO UPDATE SET scanned_at = excluded.scanned_at",
-            params![root, now],
-        )?;
-        let id: i64 = tx.query_row("SELECT id FROM roots WHERE path = ?1", [root], |row| row.get(0))?;
-        tx.execute("DELETE FROM files WHERE root = ?1", [id])?;
-        let mut insert = tx.prepare("INSERT INTO files(root, rel, kind, size, mtime) VALUES(?1, ?2, ?3, ?4, ?5)")?;
-        for file in files {
-            insert.execute(params![id, file.rel, file.kind.to_db(), file.size as i64, file.mtime])?;
-        }
-        Ok(())
-    })
 }
 
 pub fn get_setting(conn: &Connection, key: &str) -> Option<String> {
