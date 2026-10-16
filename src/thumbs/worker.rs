@@ -12,9 +12,9 @@ use fast_image_resize as fr;
 
 use super::cache::{cached_preview, to_cache};
 use super::writer::Store;
-use super::{Preview, Shared, THUMB_MAX, THUMB_TEXTURE, Thumb, ThumbJob, ThumbStats};
+use super::{Preview, PreviewError, Shared, THUMB_MAX, THUMB_TEXTURE, Thumb, ThumbJob, ThumbStats};
 use crate::asset::AssetKind;
-use crate::imaging::{self, Pixels};
+use crate::imaging::{self, PictureError, Pixels};
 use crate::model::{self, LoadOptions, ModelInfo, blend, raster};
 use crate::work::{self, Wake};
 use crate::{audio, db, diag};
@@ -72,12 +72,12 @@ impl Worker {
             AssetKind::Image => make_thumbnail(&job.path, resizer).map(Preview::Image),
             AssetKind::Audio => audio::waveform(&job.path)
                 .map(|waveform| Preview::Sound(Arc::new(waveform)))
-                .map_err(|err| err.to_string()),
+                .map_err(PreviewError::from),
             AssetKind::Model => {
                 model_thumbnail(&job.path, resizer).map(|(pixels, info)| Preview::Model(pixels, Arc::new(info)))
             }
         }))
-        .unwrap_or_else(|_| Err("the decoder crashed on this file".into()));
+        .unwrap_or_else(|_| Err(PreviewError::Crashed));
         let micros = start.elapsed().as_micros() as u64;
         if result.is_err() {
             self.stats.failed.fetch_add(1, Ordering::Relaxed);
@@ -91,8 +91,8 @@ impl Worker {
 }
 
 /// Reads an image file and shrinks the picture to fit `THUMB_MAX`.
-fn make_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<Pixels, String> {
-    imaging::make_image(path, resizer, THUMB_MAX).map_err(|err| err.to_string())
+fn make_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<Pixels, PreviewError> {
+    Ok(imaging::make_image(path, resizer, THUMB_MAX)?)
 }
 
 /// The grid thumbnail of a model file, `THUMB_MAX` square with a transparent background, and
@@ -100,33 +100,33 @@ fn make_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<Pixels, Stri
 /// (`blend::crop_to_content`) and scaled to fit.
 ///
 /// Renders have `src_w` and `src_h` set to 0: they weren't scaled from a picture of known size.
-fn model_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<(Pixels, ModelInfo), String> {
+fn model_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<(Pixels, ModelInfo), PreviewError> {
     if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("blend")) {
-        let preview = blend::read_preview(path).map_err(|err| err.to_string())?;
+        let preview = blend::read_preview(path)?;
         let (w, h, rgba) = blend::crop_to_content(&preview);
         let mut pixels = fit_picture(w, h, rgba, THUMB_MAX, resizer)?;
         (pixels.src_w, pixels.src_h) = (preview.width, preview.height);
         let info = ModelInfo { format: preview.format, ..ModelInfo::default() };
         return Ok((pixels, info));
     }
-    let model = model::load(path, &LoadOptions { max_texture: THUMB_TEXTURE }).map_err(|err| err.to_string())?;
+    let model = model::load(path, &LoadOptions { max_texture: THUMB_TEXTURE })?;
     let rgba = raster::render_thumbnail(&model, THUMB_MAX);
     Ok((Pixels { w: THUMB_MAX, h: THUMB_MAX, src_w: 0, src_h: 0, rgba }, model.info))
 }
 
 /// Scales a picture up or down so its longer side is `max`.
-fn fit_picture(w: u32, h: u32, rgba: Vec<u8>, max: u32, resizer: &mut fr::Resizer) -> Result<Pixels, String> {
+fn fit_picture(w: u32, h: u32, rgba: Vec<u8>, max: u32, resizer: &mut fr::Resizer) -> Result<Pixels, PreviewError> {
     if w == 0 || h == 0 {
-        return Err("the saved preview has no pixels".into());
+        return Err(PreviewError::EmptyPreview);
     }
     let scale = max as f64 / w.max(h) as f64;
     let (fit_w, fit_h) = (((w as f64 * scale).round() as u32).max(1), ((h as f64 * scale).round() as u32).max(1));
     if (fit_w, fit_h) == (w, h) {
         return Ok(Pixels { w, h, src_w: w, src_h: h, rgba });
     }
-    let src = fr::images::Image::from_vec_u8(w, h, rgba, fr::PixelType::U8x4).map_err(|err| err.to_string())?;
+    let src = fr::images::Image::from_vec_u8(w, h, rgba, fr::PixelType::U8x4).map_err(PictureError::from)?;
     let mut dst = fr::images::Image::new(fit_w, fit_h, fr::PixelType::U8x4);
     let options = fr::ResizeOptions::new().resize_alg(fr::ResizeAlg::Convolution(fr::FilterType::CatmullRom));
-    resizer.resize(&src, &mut dst, &options).map_err(|err| err.to_string())?;
+    resizer.resize(&src, &mut dst, &options).map_err(PictureError::from)?;
     Ok(Pixels { w: fit_w, h: fit_h, src_w: w, src_h: h, rgba: dst.into_vec() })
 }

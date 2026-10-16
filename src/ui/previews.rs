@@ -137,8 +137,8 @@ impl Previews {
                 Ok(Preview::Sound(waveform)) => {
                     self.waveforms.insert(thumb.key, waveform);
                 }
-                Err(message) => {
-                    self.failed.insert(thumb.key, message);
+                Err(error) => {
+                    self.failed.insert(thumb.key, error.to_string());
                 }
             }
         }

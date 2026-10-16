@@ -2,10 +2,12 @@
 //! the cache in turn with them.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 
+use super::ClearError;
 use super::cache::{CacheWrite, put_cache};
 use crate::storage::{self, Part};
 use crate::{db, diag};
@@ -14,19 +16,19 @@ use crate::{db, diag};
 /// the channel when done).
 pub(super) enum Store {
     Write(CacheWrite),
-    Clear(Vec<Part>, Sender<Result<(), String>>),
+    Clear(Vec<Part>, Sender<Result<(), ClearError>>),
 }
 
 pub(super) fn writer_loop(db_path: &Path, jobs: &Receiver<Store>) {
     let conn = match db::open_cache(db_path) {
         Ok(conn) => conn,
         Err(err) => {
-            let message = err.to_string();
-            diag::report("Thumbnail cache writer", err);
+            let err = Arc::new(err);
+            diag::report("Thumbnail cache writer", &err);
             while let Ok(job) = jobs.recv() {
                 if let Store::Clear(_, done) = job {
                     // Fails only when nobody's waiting for the answer any more.
-                    let _ = done.send(Err(message.clone()));
+                    let _ = done.send(Err(ClearError::Unopened(err.clone())));
                 }
             }
             return;
@@ -55,7 +57,7 @@ pub(super) fn writer_loop(db_path: &Path, jobs: &Receiver<Store>) {
         }
         if let Some((parts, done)) = clear {
             // Fails only when nobody's waiting for the answer any more.
-            let _ = done.send(storage::clear_cache(&conn, &parts).map_err(|err| err.to_string()));
+            let _ = done.send(storage::clear_cache(&conn, &parts).map_err(ClearError::from));
         }
     }
 }

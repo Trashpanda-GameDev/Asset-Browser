@@ -7,7 +7,7 @@ use std::sync::Arc;
 use image::{ExtendedColorType, ImageEncoder, ImageFormat};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::{Preview, ThumbJob};
+use super::{Preview, PreviewError, ThumbJob};
 use crate::asset::AssetKind;
 use crate::audio::Waveform;
 use crate::db::in_transaction;
@@ -163,7 +163,7 @@ pub(super) fn put_cache(conn: &Connection, batch: &[CacheWrite]) -> rusqlite::Re
     })
 }
 
-pub(super) fn cached_preview(conn: &rusqlite::Connection, job: &ThumbJob) -> Option<Result<Preview, String>> {
+pub(super) fn cached_preview(conn: &rusqlite::Connection, job: &ThumbJob) -> Option<Result<Preview, PreviewError>> {
     let report = |err: rusqlite::Error| diag::report("Reading the preview cache", err);
     match job.kind {
         AssetKind::Image => get_thumb(conn, job.key)
@@ -175,7 +175,7 @@ pub(super) fn cached_preview(conn: &rusqlite::Connection, job: &ThumbJob) -> Opt
         AssetKind::Model => {
             let stored = get_thumb(conn, job.key).map_err(report).ok().flatten()?;
             if stored.format == FORMAT_FAILED {
-                return Some(Err(String::from_utf8_lossy(&stored.data).into_owned()));
+                return Some(Err(PreviewError::Stored(String::from_utf8_lossy(&stored.data).into_owned())));
             }
             // A picture without its info is made again.
             let info = get_model(conn, job.key).map_err(report).ok().flatten()?;
@@ -184,24 +184,24 @@ pub(super) fn cached_preview(conn: &rusqlite::Connection, job: &ThumbJob) -> Opt
     }
 }
 
-pub(super) fn to_cache(job: &ThumbJob, result: &Result<Preview, String>) -> CacheWrite {
+pub(super) fn to_cache(job: &ThumbJob, result: &Result<Preview, PreviewError>) -> CacheWrite {
     match (job.kind, result) {
         (_, Ok(Preview::Image(pixels))) => CacheWrite::Thumb(job.key, encode_stored(pixels)),
         (_, Ok(Preview::Sound(waveform))) => CacheWrite::Waveform(job.key, encode_waveform(waveform)),
         (_, Ok(Preview::Model(pixels, info))) => CacheWrite::Model(job.key, encode_stored(pixels), (**info).clone()),
-        (AssetKind::Audio, Err(message)) => CacheWrite::Waveform(
+        (AssetKind::Audio, Err(error)) => CacheWrite::Waveform(
             job.key,
             StoredWaveform {
                 duration_ms: 0,
                 sample_rate: 0,
                 channels: 0,
                 peaks: Vec::new(),
-                error: Some(message.clone()),
+                error: Some(error.to_string()),
             },
         ),
-        (_, Err(message)) => CacheWrite::Thumb(
+        (_, Err(error)) => CacheWrite::Thumb(
             job.key,
-            StoredThumb { w: 0, h: 0, src_w: 0, src_h: 0, format: FORMAT_FAILED, data: message.clone().into_bytes() },
+            StoredThumb { w: 0, h: 0, src_w: 0, src_h: 0, format: FORMAT_FAILED, data: error.to_string().into_bytes() },
         ),
     }
 }
@@ -216,9 +216,9 @@ fn encode_waveform(waveform: &Waveform) -> StoredWaveform {
     }
 }
 
-fn decode_waveform(stored: StoredWaveform) -> Result<Preview, String> {
+fn decode_waveform(stored: StoredWaveform) -> Result<Preview, PreviewError> {
     if let Some(error) = stored.error {
-        return Err(error);
+        return Err(PreviewError::Stored(error));
     }
     Ok(Preview::Sound(Arc::new(Waveform {
         peaks: stored.peaks.as_chunks::<2>().0.iter().map(|pair| [pair[0] as i8, pair[1] as i8]).collect(),
@@ -249,16 +249,13 @@ fn encode_stored(pixels: &Pixels) -> StoredThumb {
     }
 }
 
-fn decode_stored(stored: &StoredThumb) -> Result<Pixels, String> {
+fn decode_stored(stored: &StoredThumb) -> Result<Pixels, PreviewError> {
     let rgba = match stored.format {
-        FORMAT_FAILED => return Err(String::from_utf8_lossy(&stored.data).into_owned()),
+        FORMAT_FAILED => return Err(PreviewError::Stored(String::from_utf8_lossy(&stored.data).into_owned())),
         FORMAT_RAW_RGBA => stored.data.clone(),
         format => {
             let format = if format == FORMAT_QOI { ImageFormat::Qoi } else { ImageFormat::Jpeg };
-            image::load_from_memory_with_format(&stored.data, format)
-                .map_err(|err| err.to_string())?
-                .into_rgba8()
-                .into_raw()
+            image::load_from_memory_with_format(&stored.data, format)?.into_rgba8().into_raw()
         }
     };
     Ok(Pixels { w: stored.w, h: stored.h, src_w: stored.src_w, src_h: stored.src_h, rgba })
@@ -270,6 +267,7 @@ mod tests {
 
     use super::*;
     use crate::db;
+    use crate::model::ModelError;
     use crate::test_support::TempDir;
 
     #[test]
@@ -295,7 +293,7 @@ mod tests {
         let failed = ThumbJob { key: 8, path: PathBuf::from("b.fbx"), kind: AssetKind::Model };
         let writes = [
             to_cache(&job, &Ok(Preview::Model(pixels, Arc::new(info.clone())))),
-            to_cache(&failed, &Err("there are no meshes in this file".into())),
+            to_cache(&failed, &Err(ModelError::NoMeshes.into())),
         ];
         put_cache(&conn, &writes).unwrap();
 
@@ -306,7 +304,7 @@ mod tests {
         let mut expected = info;
         expected.animations[0].0 = "Idle loop".into();
         assert_eq!(*back_info, expected);
-        let Some(Err(message)) = cached_preview(&conn, &failed) else { panic!("cached failure") };
+        let Some(Err(PreviewError::Stored(message))) = cached_preview(&conn, &failed) else { panic!("cached failure") };
         assert_eq!(message, "there are no meshes in this file");
         let unknown = ThumbJob { key: 9, path: PathBuf::from("c.fbx"), kind: AssetKind::Model };
         assert!(cached_preview(&conn, &unknown).is_none());

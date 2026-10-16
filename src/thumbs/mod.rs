@@ -20,9 +20,9 @@ use std::time::Duration;
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::asset::AssetKind;
-use crate::audio::Waveform;
-use crate::imaging::Pixels;
-use crate::model::ModelInfo;
+use crate::audio::{SoundError, Waveform};
+use crate::imaging::{PictureError, Pixels};
+use crate::model::{ModelError, ModelInfo};
 use crate::storage::Part;
 use crate::work::{self, Wake};
 use worker::Worker;
@@ -51,9 +51,45 @@ pub enum Preview {
     Model(Pixels, Arc<ModelInfo>),
 }
 
+/// Why a file has no preview. The message is what the user reads, and the cache keeps it with the
+/// file, so a broken file is tried only once.
+#[derive(Debug, thiserror::Error)]
+pub enum PreviewError {
+    #[error("{0}")]
+    Picture(#[from] PictureError),
+    #[error("{0}")]
+    Sound(#[from] SoundError),
+    #[error("{0}")]
+    Model(#[from] ModelError),
+    #[error("the saved preview has no pixels")]
+    EmptyPreview,
+    #[error("the decoder crashed on this file")]
+    Crashed,
+    /// A thumbnail kept in the cache that couldn't be decoded again.
+    #[error("{0}")]
+    Cached(#[from] image::ImageError),
+    /// A file that failed before: the reason, as the cache kept it.
+    #[error("{0}")]
+    Stored(String),
+}
+
+/// Why the cache wasn't cleared.
+#[derive(Debug, thiserror::Error)]
+pub enum ClearError {
+    #[error("the cache isn't open")]
+    NotOpen,
+    /// The cache writer couldn't open the cache when it started; every clear asked of it says so.
+    #[error("{0}")]
+    Unopened(Arc<rusqlite::Error>),
+    #[error("{0}")]
+    Database(#[from] rusqlite::Error),
+    #[error("the cache writer stopped")]
+    WriterStopped,
+}
+
 pub struct Thumb {
     pub key: i64,
-    pub result: Result<Preview, String>,
+    pub result: Result<Preview, PreviewError>,
     pub micros: u64,
 }
 
@@ -150,12 +186,12 @@ impl ThumbService {
 
     /// Clears parts of the cache, after what's waiting to be saved and before anything after it,
     /// then gives the space back. Answers on the channel when done (it can take seconds).
-    pub fn clear(&self, parts: Vec<Part>) -> Receiver<Result<(), String>> {
+    pub fn clear(&self, parts: Vec<Part>) -> Receiver<Result<(), ClearError>> {
         let (done_tx, done) = crossbeam_channel::bounded(1);
         let sent = self.store.as_ref().is_some_and(|store| store.send(Store::Clear(parts, done_tx.clone())).is_ok());
         if !sent {
             // Can't fail: the receiver is right here.
-            let _ = done_tx.send(Err("the cache isn't open".to_owned()));
+            let _ = done_tx.send(Err(ClearError::NotOpen));
         }
         done
     }
@@ -229,5 +265,27 @@ impl Drop for ThumbService {
             // A writer that panicked was logged by the panic hook.
             let _ = writer.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn messages_stay_as_the_thumbnail_cache_keeps_them() {
+        assert_eq!(PreviewError::EmptyPreview.to_string(), "the saved preview has no pixels");
+        assert_eq!(PreviewError::Crashed.to_string(), "the decoder crashed on this file");
+        assert_eq!(PreviewError::Stored("kept as it was".into()).to_string(), "kept as it was");
+        // A reader's error reads as it did.
+        assert_eq!(PreviewError::from(PictureError::NoPixels).to_string(), "image has no pixels");
+        assert_eq!(PreviewError::from(SoundError::NoAudio).to_string(), "no audio in this file");
+        assert_eq!(PreviewError::from(ModelError::NoMeshes).to_string(), "there are no meshes in this file");
+    }
+
+    #[test]
+    fn a_failed_clear_says_why() {
+        assert_eq!(ClearError::NotOpen.to_string(), "the cache isn't open");
+        assert_eq!(ClearError::WriterStopped.to_string(), "the cache writer stopped");
     }
 }

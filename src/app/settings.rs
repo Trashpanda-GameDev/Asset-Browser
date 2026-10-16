@@ -9,6 +9,7 @@ use eframe::egui;
 use crate::changelog;
 use crate::library::SortBy;
 use crate::storage::{Measurement, Part};
+use crate::thumbs::ClearError;
 use crate::ui::display::{Backdrop, Display};
 use crate::ui::keymap::Keymap;
 use crate::ui::mode::{Layout as ViewLayout, Mode, ModeView};
@@ -24,7 +25,7 @@ use super::setting_keys::{self as key, of_mode};
 /// Parts of the cache being cleared on the cache writer's thread.
 pub(super) struct Clearing {
     parts: Vec<Part>,
-    done: Receiver<Result<(), String>>,
+    done: Receiver<Result<(), ClearError>>,
 }
 
 /// The settings window, what it sets, and what it has under way.
@@ -202,7 +203,7 @@ impl BrowserApp {
                 self.ctx.request_repaint_after(Duration::from_millis(100));
                 return;
             }
-            Err(crossbeam_channel::TryRecvError::Disconnected) => Err("the cache writer stopped".to_owned()),
+            Err(crossbeam_channel::TryRecvError::Disconnected) => Err(ClearError::WriterStopped),
         };
         let parts = clearing.parts.clone();
         self.preferences.clearing = None;

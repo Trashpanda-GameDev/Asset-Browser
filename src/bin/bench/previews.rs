@@ -139,7 +139,7 @@ impl Results {
             Ok(Preview::Model(pixels, _)) if keep_pictures => self.models[order[&thumb.key]] = Some(pixels),
             Ok(Preview::Image(pixels)) if keep_pictures && self.pictures.len() < PER_PAGE => self.pictures.push(pixels),
             Ok(_) => {}
-            Err(message) => self.failed.push((thumb.key, message)),
+            Err(error) => self.failed.push((thumb.key, error.to_string())),
         }
         self.times.push((thumb.micros, thumb.key));
     }
