@@ -15,6 +15,35 @@ use std::path::Path;
 
 use super::Pixels;
 
+/// Why a PSD's picture couldn't be read.
+#[derive(Debug, thiserror::Error)]
+pub enum PsdError {
+    #[error("{0}")]
+    Read(#[from] std::io::Error),
+    #[error("not a Photoshop file")]
+    NotPhotoshop,
+    #[error("unknown version {0}")]
+    Version(u16),
+    #[error("empty image")]
+    Empty,
+    #[error("its header says it's bigger than Photoshop allows")]
+    TooBig,
+    #[error("unsupported bit depth {0}")]
+    BitDepth(u16),
+    #[error("unsupported colour mode {0}")]
+    ColorMode(u16),
+    #[error("too few channels for its colour mode")]
+    TooFewChannels,
+    #[error("ZIP-compressed picture data isn't supported")]
+    Zip,
+    #[error("unknown compression {0}")]
+    Compression(u16),
+    #[error("the file ends before its data does")]
+    EndsEarly,
+    #[error("row data ends early")]
+    RowEndsEarly,
+}
+
 /// Photoshop's own limits: 30,000 pixels a side for a PSD, 300,000 for a PSB, and 56 channels. A
 /// header past them is damaged, and believing it could ask for gigabytes.
 const MAX_SIDE_PSD: u32 = 30_000;
@@ -23,13 +52,9 @@ const MAX_CHANNELS: usize = 56;
 
 /// Reads the picture at no less than `2 * max` pixels on its longest side (or its full size if
 /// smaller), so the final resize still has detail to average.
-pub fn read(path: &Path, max: u32) -> Result<Pixels, String> {
-    read_inner(path, max).map_err(|err| format!("PSD: {err}"))
-}
-
-fn read_inner(path: &Path, max: u32) -> Result<Pixels, String> {
-    let file = File::open(path).map_err(|err| err.to_string())?;
-    let len = file.metadata().map_err(|err| err.to_string())?.len();
+pub fn read(path: &Path, max: u32) -> Result<Pixels, PsdError> {
+    let file = File::open(path)?;
+    let len = file.metadata()?.len();
     let mut r = Reader { inner: BufReader::with_capacity(64 * 1024, file), pos: 0, len };
     let header = Header::read(&mut r)?;
     let palette = read_color_data(&mut r, header.mode)?;
@@ -41,8 +66,8 @@ fn read_inner(path: &Path, max: u32) -> Result<Pixels, String> {
     let planes = match compression {
         0 => read_raw(&mut r, &header, &layout)?,
         1 => read_rle(&mut r, &header, &layout)?,
-        2 | 3 => return Err("ZIP-compressed picture data isn't supported".into()),
-        other => return Err(format!("unknown compression {other}")),
+        2 | 3 => return Err(PsdError::Zip),
+        other => return Err(PsdError::Compression(other)),
     };
     Ok(compose(&header, &layout, &planes, &palette))
 }
@@ -59,28 +84,28 @@ struct Header {
 }
 
 impl Header {
-    fn read(r: &mut Reader) -> Result<Self, String> {
+    fn read(r: &mut Reader) -> Result<Self, PsdError> {
         let header = r.bytes(26)?;
         if &header[0..4] != b"8BPS" {
-            return Err("not a Photoshop file".into());
+            return Err(PsdError::NotPhotoshop);
         }
         let big = match be16(&header[4..]) {
             1 => false,
             2 => true,
-            version => return Err(format!("unknown version {version}")),
+            version => return Err(PsdError::Version(version)),
         };
         let channels = be16(&header[12..]) as usize;
         let (h, w) = (be32(&header[14..]), be32(&header[18..]));
         let (depth, mode) = (be16(&header[22..]), be16(&header[24..]));
         if w == 0 || h == 0 || channels == 0 {
-            return Err("empty image".into());
+            return Err(PsdError::Empty);
         }
         let max_side = if big { MAX_SIDE_PSB } else { MAX_SIDE_PSD };
         if w > max_side || h > max_side || channels > MAX_CHANNELS {
-            return Err("its header says it's bigger than Photoshop allows".into());
+            return Err(PsdError::TooBig);
         }
         if !matches!(depth, 1 | 8 | 16 | 32) {
-            return Err(format!("unsupported bit depth {depth}"));
+            return Err(PsdError::BitDepth(depth));
         }
         Ok(Self { big, channels, w, h, depth, mode })
     }
@@ -106,16 +131,16 @@ struct Layout {
 }
 
 impl Layout {
-    fn new(header: &Header, merged_alpha: bool, max: u32) -> Result<Self, String> {
+    fn new(header: &Header, merged_alpha: bool, max: u32) -> Result<Self, PsdError> {
         let (color_channels, alpha) = match header.mode {
             0 | 1 | 7 | 8 => (1, merged_alpha && header.channels >= 2), // bitmap, grey, multichannel, duotone
             2 => (1, false),                                            // indexed
             3 => (3, merged_alpha && header.channels >= 4),             // RGB
             4 => (4, merged_alpha && header.channels >= 5),             // CMYK
-            mode => return Err(format!("unsupported colour mode {mode}")),
+            mode => return Err(PsdError::ColorMode(mode)),
         };
         if header.channels < color_channels {
-            return Err("too few channels for its colour mode".into());
+            return Err(PsdError::TooFewChannels);
         }
         let needed = (0..color_channels).chain(alpha.then_some(color_channels)).collect();
         let step = (header.w.max(header.h) / (2 * max.max(1))).max(1);
@@ -134,7 +159,7 @@ impl Layout {
 
 /// The palette of an indexed picture: 256 reds, then 256 greens, then 256 blues. Other modes'
 /// colour data is skipped.
-fn read_color_data(r: &mut Reader, mode: u16) -> Result<Vec<u8>, String> {
+fn read_color_data(r: &mut Reader, mode: u16) -> Result<Vec<u8>, PsdError> {
     let len = u64::from(r.u32()?);
     if mode == 2 {
         r.bytes(len)
@@ -146,7 +171,7 @@ fn read_color_data(r: &mut Reader, mode: u16) -> Result<Vec<u8>, String> {
 
 /// Whether the flattened picture's first extra channel is its transparency: the layer count is
 /// negative when it is; otherwise extra channels are saved selections. Leaves `r` past the layers.
-fn read_merged_alpha(r: &mut Reader, big: bool) -> Result<bool, String> {
+fn read_merged_alpha(r: &mut Reader, big: bool) -> Result<bool, PsdError> {
     let layers_len = if big { r.u64()? } else { u64::from(r.u32()?) };
     let layers_end = r.pos.saturating_add(layers_len);
     let mut merged_alpha = false;
@@ -161,7 +186,7 @@ fn read_merged_alpha(r: &mut Reader, big: bool) -> Result<bool, String> {
 }
 
 /// Uncompressed: each channel's rows one after another, so each row wanted is read where it is.
-fn read_raw(r: &mut Reader, header: &Header, layout: &Layout) -> Result<Vec<Vec<u8>>, String> {
+fn read_raw(r: &mut Reader, header: &Header, layout: &Layout) -> Result<Vec<Vec<u8>>, PsdError> {
     let row_bytes = header.row_bytes();
     let mut planes = vec![vec![0u8; layout.plane_len()]; layout.needed.len()];
     let mut row = vec![0u8; row_bytes];
@@ -178,7 +203,7 @@ fn read_raw(r: &mut Reader, header: &Header, layout: &Layout) -> Result<Vec<Vec<
 }
 
 /// PackBits: every row's packed length first, for all the channels, then the rows.
-fn read_rle(r: &mut Reader, header: &Header, layout: &Layout) -> Result<Vec<Vec<u8>>, String> {
+fn read_rle(r: &mut Reader, header: &Header, layout: &Layout) -> Result<Vec<Vec<u8>>, PsdError> {
     let offsets = read_row_table(r, header)?;
     let mut planes = vec![vec![0u8; layout.plane_len()]; layout.needed.len()];
     let mut row = vec![0u8; header.row_bytes()];
@@ -198,7 +223,7 @@ fn read_rle(r: &mut Reader, header: &Header, layout: &Layout) -> Result<Vec<Vec<
 }
 
 /// Where each row's packed data starts, from the first row's, and where the last one ends.
-fn read_row_table(r: &mut Reader, header: &Header) -> Result<Vec<u64>, String> {
+fn read_row_table(r: &mut Reader, header: &Header) -> Result<Vec<u64>, PsdError> {
     let rows = header.channels * header.h as usize;
     let width = if header.big { 4 } else { 2 };
     let table = r.bytes((rows * width) as u64)?;
@@ -263,22 +288,22 @@ fn sample_row(row: &[u8], depth: u16, step: u32, out: &mut [u8]) {
 
 /// PackBits: a signed count byte, then either count+1 literal bytes or one byte repeated
 /// 1-count times.
-fn unpack_bits(src: &[u8], dst: &mut [u8]) -> Result<(), String> {
+fn unpack_bits(src: &[u8], dst: &mut [u8]) -> Result<(), PsdError> {
     let (mut i, mut o) = (0, 0);
     while o < dst.len() {
-        let Some(&count) = src.get(i) else { return Err("row data ends early".into()) };
+        let Some(&count) = src.get(i) else { return Err(PsdError::RowEndsEarly) };
         i += 1;
         let count = count as i8;
         if count >= 0 {
             let n = count as usize + 1;
-            let literal = src.get(i..i + n).ok_or("row data ends early")?;
+            let literal = src.get(i..i + n).ok_or(PsdError::RowEndsEarly)?;
             let end = (o + n).min(dst.len());
             dst[o..end].copy_from_slice(&literal[..end - o]);
             i += n;
             o += n;
         } else if count != -128 {
             let n = (1 - count as isize) as usize;
-            let value = *src.get(i).ok_or("row data ends early")?;
+            let value = *src.get(i).ok_or(PsdError::RowEndsEarly)?;
             i += 1;
             let end = (o + n).min(dst.len());
             dst[o..end].fill(value);
@@ -298,53 +323,53 @@ struct Reader {
 }
 
 impl Reader {
-    fn bytes(&mut self, n: u64) -> Result<Vec<u8>, String> {
+    fn bytes(&mut self, n: u64) -> Result<Vec<u8>, PsdError> {
         let mut buf = Vec::new();
         self.read_to(&mut buf, n)?;
         Ok(buf)
     }
 
     /// Reads `n` bytes into `buf`, once it's known the file has them.
-    fn read_to(&mut self, buf: &mut Vec<u8>, n: u64) -> Result<(), String> {
+    fn read_to(&mut self, buf: &mut Vec<u8>, n: u64) -> Result<(), PsdError> {
         if self.pos.saturating_add(n) > self.len {
-            return Err("the file ends before its data does".into());
+            return Err(PsdError::EndsEarly);
         }
         buf.resize(n as usize, 0);
         self.read_exact(buf)
     }
 
-    fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), String> {
-        self.inner.read_exact(buf).map_err(|err| err.to_string())?;
+    fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), PsdError> {
+        self.inner.read_exact(buf)?;
         self.pos += buf.len() as u64;
         Ok(())
     }
 
-    fn u16(&mut self) -> Result<u16, String> {
+    fn u16(&mut self) -> Result<u16, PsdError> {
         Ok(be16(&self.bytes(2)?))
     }
 
-    fn u32(&mut self) -> Result<u32, String> {
+    fn u32(&mut self) -> Result<u32, PsdError> {
         Ok(be32(&self.bytes(4)?))
     }
 
-    fn u64(&mut self) -> Result<u64, String> {
+    fn u64(&mut self) -> Result<u64, PsdError> {
         let b = self.bytes(8)?;
         Ok(u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
     }
 
-    fn skip(&mut self, n: u64) -> Result<(), String> {
+    fn skip(&mut self, n: u64) -> Result<(), PsdError> {
         self.seek_to(self.pos.saturating_add(n))
     }
 
-    fn seek_to(&mut self, target: u64) -> Result<(), String> {
+    fn seek_to(&mut self, target: u64) -> Result<(), PsdError> {
         if target == self.pos {
             return Ok(());
         }
         let delta = target as i128 - self.pos as i128;
         if let Ok(delta) = i64::try_from(delta) {
-            self.inner.seek_relative(delta).map_err(|err| err.to_string())?;
+            self.inner.seek_relative(delta)?;
         } else {
-            self.inner.seek(SeekFrom::Start(target)).map_err(|err| err.to_string())?;
+            self.inner.seek(SeekFrom::Start(target))?;
         }
         self.pos = target;
         Ok(())
@@ -448,23 +473,26 @@ mod tests {
         let mut huge = psd(2, 2, false);
         huge[14..22].copy_from_slice(&[0xff; 8]);
         let Err(error) = read(&dir.write("huge.psd", &huge), 64) else { panic!("read a huge header") };
-        assert!(error.contains("bigger than Photoshop allows"), "{error}");
+        assert!(matches!(error, PsdError::TooBig), "{error}");
         let mut palette = psd(2, 2, false);
         palette[25] = 2;
         palette[26..30].copy_from_slice(&[0xff; 4]);
         let Err(error) = read(&dir.write("palette.psd", &palette), 64) else { panic!("read a huge palette") };
-        assert!(error.contains("ends before its data"), "{error}");
+        assert!(matches!(error, PsdError::EndsEarly), "{error}");
     }
 
     #[test]
     fn other_files_are_errors() {
         let dir = TempDir::new("psd_wrong");
         let not_psd = dir.write("picture.psd", b"\x89PNG\r\n\x1a\n not a photoshop file");
-        assert_eq!(read(&not_psd, 64).err().as_deref(), Some("PSD: not a Photoshop file"));
+        let error = read(&not_psd, 64).err().unwrap();
+        assert!(matches!(error, PsdError::NotPhotoshop), "{error}");
+        // As the user reads it, from the thumbnail or the preview pane.
+        assert_eq!(crate::imaging::PictureError::from(error).to_string(), "PSD: not a Photoshop file");
         let mut zip = psd(2, 2, false);
         zip[38] = 0;
         zip[39] = 2;
         let zip = dir.write("zip.psd", &zip);
-        assert!(read(&zip, 64).err().is_some_and(|err| err.contains("ZIP")));
+        assert!(matches!(read(&zip, 64), Err(PsdError::Zip)));
     }
 }

@@ -125,7 +125,7 @@ fn load_picture(path: &Path, resizer: &mut fr::Resizer, superseded: &dyn Fn() ->
             Ok(None) | Err(_) => {}
         }
     }
-    let pixels = imaging::make_image(path, resizer, DETAIL_MAX)?;
+    let pixels = imaging::make_image(path, resizer, DETAIL_MAX).map_err(|err| err.to_string())?;
     let sheet = sheets::detect(path, &pixels);
     Ok(Detail::Image(pixels, sheet))
 }

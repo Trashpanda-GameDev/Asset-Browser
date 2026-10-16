@@ -57,7 +57,7 @@ pub fn load_gif(
         let picture = frame.into_buffer();
         let (w, h) = picture.dimensions();
         let picture = Pixels { w, h, src_w: width, src_h: height, rgba: picture.into_raw() };
-        let small = shrink(picture, layout.longest, resizer)?;
+        let small = shrink(picture, layout.longest, resizer).map_err(|err| err.to_string())?;
         if (small.w, small.h) != (layout.frame_w, layout.frame_h) {
             return Err("a frame came out a different size".to_owned());
         }

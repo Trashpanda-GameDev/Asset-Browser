@@ -90,7 +90,7 @@ impl Worker {
 
 /// Reads an image file and shrinks the picture to fit `THUMB_MAX`.
 fn make_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<Pixels, String> {
-    imaging::make_image(path, resizer, THUMB_MAX)
+    imaging::make_image(path, resizer, THUMB_MAX).map_err(|err| err.to_string())
 }
 
 /// The grid thumbnail of a model file, `THUMB_MAX` square with a transparent background, and

@@ -67,20 +67,37 @@ pub fn join_decode_budget() {
     IN_BUDGET.set(true);
 }
 
+/// Why a picture couldn't be read or made smaller. The message is what the user reads, and the
+/// thumbnail cache keeps it with a failed file, so it doesn't change.
+#[derive(Debug, thiserror::Error)]
+pub enum PictureError {
+    #[error("{0}")]
+    Read(#[from] std::io::Error),
+    #[error("{0}")]
+    Decode(#[from] image::ImageError),
+    #[error("PSD: {0}")]
+    Psd(#[from] psd::PsdError),
+    #[error("image has no pixels")]
+    NoPixels,
+    #[error("{0}")]
+    Buffer(#[from] fr::ImageBufferError),
+    #[error("{0}")]
+    Resize(#[from] fr::ResizeError),
+}
+
 /// Reads an image file and shrinks the picture to fit `max` pixels on its longer side. Pictures
 /// no bigger are kept as they are.
-pub fn make_image(path: &Path, resizer: &mut fr::Resizer, max: u32) -> Result<Pixels, String> {
+pub fn make_image(path: &Path, resizer: &mut fr::Resizer, max: u32) -> Result<Pixels, PictureError> {
     if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("psd")) {
         // Reads only the part of the file it needs, so it opens the file itself.
         let sampled = psd::read(path, max)?;
         return shrink(sampled, max, resizer);
     }
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+    let bytes = std::fs::read(path)?;
     // Trust the content over the extension (a PNG named .jpg is common); TGA has no signature,
     // so fall back to the extension.
-    let reader = || -> Result<image::ImageReader<Cursor<&[u8]>>, String> {
-        let mut reader =
-            image::ImageReader::new(Cursor::new(&bytes[..])).with_guessed_format().map_err(|err| err.to_string())?;
+    let reader = || -> Result<image::ImageReader<Cursor<&[u8]>>, PictureError> {
+        let mut reader = image::ImageReader::new(Cursor::new(&bytes[..])).with_guessed_format()?;
         if reader.format().is_none()
             && let Ok(format) = ImageFormat::from_path(path)
         {
@@ -90,12 +107,12 @@ pub fn make_image(path: &Path, resizer: &mut fr::Resizer, max: u32) -> Result<Pi
     };
     // The header says how big the picture is before it's decoded; the budget is held meanwhile.
     let _decoding = if IN_BUDGET.get() {
-        let (w, h) = reader()?.into_dimensions().map_err(|err| err.to_string())?;
+        let (w, h) = reader()?.into_dimensions()?;
         reserve_decode(w, h)
     } else {
         None
     };
-    let image = reader()?.decode().map_err(|err| err.to_string())?;
+    let image = reader()?.decode()?;
     let (w, h) = (image.width(), image.height());
     if image.color().has_alpha() {
         shrink(Pixels { w, h, src_w: w, src_h: h, rgba: image.into_rgba8().into_raw() }, max, resizer)
@@ -109,10 +126,10 @@ fn resize_options(alpha: bool) -> fr::ResizeOptions {
 }
 
 /// Fits a picture (already reduced from `src_w` × `src_h`, or not) into `max`.
-pub(crate) fn shrink(picture: Pixels, max: u32, resizer: &mut fr::Resizer) -> Result<Pixels, String> {
+pub(crate) fn shrink(picture: Pixels, max: u32, resizer: &mut fr::Resizer) -> Result<Pixels, PictureError> {
     let Pixels { w, h, src_w, src_h, rgba } = picture;
     if w == 0 || h == 0 {
-        return Err("image has no pixels".into());
+        return Err(PictureError::NoPixels);
     }
     let (thumb_w, thumb_h) = fit_size(src_w, src_h, max);
     if (thumb_w, thumb_h) == (w, h) {
@@ -120,25 +137,25 @@ pub(crate) fn shrink(picture: Pixels, max: u32, resizer: &mut fr::Resizer) -> Re
     }
     // A fully opaque picture (most textures) needs no premultiplied copy of itself.
     let opaque = rgba.as_chunks::<4>().0.iter().all(|px| px[3] == 255);
-    let src = fr::images::Image::from_vec_u8(w, h, rgba, fr::PixelType::U8x4).map_err(|err| err.to_string())?;
+    let src = fr::images::Image::from_vec_u8(w, h, rgba, fr::PixelType::U8x4)?;
     let mut dst = fr::images::Image::new(thumb_w, thumb_h, fr::PixelType::U8x4);
-    resizer.resize(&src, &mut dst, &resize_options(!opaque)).map_err(|err| err.to_string())?;
+    resizer.resize(&src, &mut dst, &resize_options(!opaque))?;
     Ok(Pixels { w: thumb_w, h: thumb_h, src_w, src_h, rgba: dst.into_vec() })
 }
 
 /// `shrink` for a picture without alpha (JPEGs, many textures): resized as it was decoded, so
 /// it's never copied at full size with an alpha channel added.
-fn shrink_rgb(w: u32, h: u32, rgb: Vec<u8>, max: u32, resizer: &mut fr::Resizer) -> Result<Pixels, String> {
+fn shrink_rgb(w: u32, h: u32, rgb: Vec<u8>, max: u32, resizer: &mut fr::Resizer) -> Result<Pixels, PictureError> {
     if w == 0 || h == 0 {
-        return Err("image has no pixels".into());
+        return Err(PictureError::NoPixels);
     }
     let (thumb_w, thumb_h) = fit_size(w, h, max);
     let rgb = if (thumb_w, thumb_h) == (w, h) {
         rgb
     } else {
-        let src = fr::images::Image::from_vec_u8(w, h, rgb, fr::PixelType::U8x3).map_err(|err| err.to_string())?;
+        let src = fr::images::Image::from_vec_u8(w, h, rgb, fr::PixelType::U8x3)?;
         let mut dst = fr::images::Image::new(thumb_w, thumb_h, fr::PixelType::U8x3);
-        resizer.resize(&src, &mut dst, &resize_options(false)).map_err(|err| err.to_string())?;
+        resizer.resize(&src, &mut dst, &resize_options(false))?;
         dst.into_vec()
     };
     let rgba = rgb.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 255]).collect();
@@ -260,6 +277,13 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn messages_stay_as_the_thumbnail_cache_keeps_them() {
+        assert_eq!(PictureError::NoPixels.to_string(), "image has no pixels");
+        let gone = std::io::Error::new(std::io::ErrorKind::NotFound, "the file is gone");
+        assert_eq!(PictureError::from(gone).to_string(), "the file is gone", "a library's message as it is");
+    }
 
     #[test]
     fn mips_go_down_to_one_pixel() {
