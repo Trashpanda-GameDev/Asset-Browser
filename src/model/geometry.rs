@@ -120,21 +120,11 @@ pub(super) const DEFAULT_CREASE: Smoothing<'static> = Smoothing::Crease(0.642_78
 
 /// Gives every triangle corner a normal: the area-weighted average of the faces around its
 /// position that are smoothed together with its own, then merges corners that came out equal.
-/// Positions are matched by value, since files often split vertices at UV seams.
-#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 pub(super) fn smooth_normals(vertices: &[Vertex], indices: &[u32], smoothing: Smoothing) -> (Vec<Vertex>, Vec<u32>) {
-    let triangles = indices.as_chunks::<3>().0;
-    let mut position_ids: HashMap<[u32; 3], u32> = HashMap::with_capacity(vertices.len());
-    let position_of: Vec<u32> = vertices
-        .iter()
-        .map(|vertex| {
-            // + 0.0 folds -0.0 into 0.0.
-            let key = vertex.position.map(|c| (c + 0.0).to_bits());
-            let next = position_ids.len() as u32;
-            *position_ids.entry(key).or_insert(next)
-        })
-        .collect();
-    let normals: Vec<[f32; 3]> = triangles
+    let (position_of, positions) = shared_positions(vertices);
+    let normals: Vec<[f32; 3]> = indices
+        .as_chunks::<3>()
+        .0
         .iter()
         .map(|t| {
             face_normal(
@@ -145,23 +135,7 @@ pub(super) fn smooth_normals(vertices: &[Vertex], indices: &[u32], smoothing: Sm
         })
         .collect();
     let units: Vec<[f32; 3]> = normals.iter().map(|&n| normalize(n)).collect();
-
-    // The faces around each position, as one list sliced by `start`.
-    let mut start = vec![0u32; position_ids.len() + 1];
-    for &index in indices {
-        start[position_of[index as usize] as usize + 1] += 1;
-    }
-    for i in 1..start.len() {
-        start[i] += start[i - 1];
-    }
-    let mut fill = start.clone();
-    let mut around = vec![0u32; indices.len()];
-    for (corner, &index) in indices.iter().enumerate() {
-        let slot = &mut fill[position_of[index as usize] as usize];
-        around[*slot as usize] = (corner / 3) as u32;
-        *slot += 1;
-    }
-
+    let around = FacesAround::new(indices, &position_of, positions);
     let smooth = |a: usize, b: usize| match smoothing {
         Smoothing::Crease(cos_limit) => dot(units[a], units[b]) >= cos_limit,
         Smoothing::Groups(groups) => groups.get(a).zip(groups.get(b)).is_some_and(|(a, b)| a & b != 0),
@@ -171,9 +145,8 @@ pub(super) fn smooth_normals(vertices: &[Vertex], indices: &[u32], smoothing: Sm
     let mut merged: HashMap<(u32, [u32; 3]), u32> = HashMap::with_capacity(vertices.len());
     for (corner, &index) in indices.iter().enumerate() {
         let face = corner / 3;
-        let position = position_of[index as usize] as usize;
         let mut sum = normals[face];
-        for &other in &around[start[position] as usize..start[position + 1] as usize] {
+        for &other in around.at(position_of[index as usize] as usize) {
             let other = other as usize;
             if other != face && smooth(face, other) {
                 sum = [sum[0] + normals[other][0], sum[1] + normals[other][1], sum[2] + normals[other][2]];
@@ -192,6 +165,53 @@ pub(super) fn smooth_normals(vertices: &[Vertex], indices: &[u32], smoothing: Sm
         out_indices.push(out);
     }
     (out_vertices, out_indices)
+}
+
+/// Each vertex's position as a number, the same for vertices at the same position: matched by
+/// value, since files often split vertices at UV seams. And how many positions there are.
+fn shared_positions(vertices: &[Vertex]) -> (Vec<u32>, usize) {
+    let mut ids: HashMap<[u32; 3], u32> = HashMap::with_capacity(vertices.len());
+    let position_of = vertices
+        .iter()
+        .map(|vertex| {
+            // + 0.0 folds -0.0 into 0.0.
+            let key = vertex.position.map(|c| (c + 0.0).to_bits());
+            let next = ids.len() as u32;
+            *ids.entry(key).or_insert(next)
+        })
+        .collect();
+    (position_of, ids.len())
+}
+
+/// The faces around each position, as one list sliced by `start`.
+struct FacesAround {
+    start: Vec<u32>,
+    faces: Vec<u32>,
+}
+
+impl FacesAround {
+    fn new(indices: &[u32], position_of: &[u32], positions: usize) -> Self {
+        let mut start = vec![0u32; positions + 1];
+        for &index in indices {
+            start[position_of[index as usize] as usize + 1] += 1;
+        }
+        for i in 1..start.len() {
+            start[i] += start[i - 1];
+        }
+        let mut fill = start.clone();
+        let mut faces = vec![0u32; indices.len()];
+        for (corner, &index) in indices.iter().enumerate() {
+            let slot = &mut fill[position_of[index as usize] as usize];
+            faces[*slot as usize] = (corner / 3) as u32;
+            *slot += 1;
+        }
+        Self { start, faces }
+    }
+
+    /// The faces with a corner at `position`.
+    fn at(&self, position: usize) -> &[u32] {
+        &self.faces[self.start[position] as usize..self.start[position + 1] as usize]
+    }
 }
 
 /// Gives every triangle its own three vertices carrying the face normal: faceted shading, as glTF
