@@ -141,6 +141,117 @@ impl Source {
         let values = self.values.get(at..at.checked_add(N)?)?;
         Some(std::array::from_fn(|i| values[i]))
     }
+
+    /// How many items it holds, `stride` numbers each.
+    fn count(&self) -> usize {
+        self.values.len() / self.stride
+    }
+}
+
+/// Where a primitive's vertices come from: each attribute's source, and its offset among a
+/// corner's `stride` indices.
+struct Attributes {
+    stride: usize,
+    positions: (Source, usize),
+    normals: Option<(Source, usize)>,
+    uvs: Option<(Source, usize)>,
+    colors: Option<(Source, usize)>,
+}
+
+impl Attributes {
+    /// `None` without positions.
+    fn of(inputs: &[Input]) -> Option<Self> {
+        let stride = inputs.iter().map(|input| input.offset).max()?.checked_add(1)?;
+        let find = |semantic: &str| {
+            let input = inputs.iter().find(|input| input.semantic == semantic)?;
+            Some((source(input.source), input.offset))
+        };
+        let positions = find("POSITION")?;
+        Some(Self { stride, positions, normals: find("NORMAL"), uvs: find("TEXCOORD"), colors: find("COLOR") })
+    }
+
+    /// The vertex a corner's indices pick out; `None` when its position isn't there.
+    fn vertex(&self, corner: &[u32]) -> Option<Vertex> {
+        let at = |offset: usize| corner.get(offset).map(|&index| index as usize);
+        let attribute3 = |input: &Option<(Source, usize)>| {
+            let (source, offset) = input.as_ref()?;
+            source.get::<3>(at(*offset)?)
+        };
+        let uv = self.uvs.as_ref().and_then(|(source, offset)| source.get::<2>(at(*offset)?));
+        let color = attribute3(&self.colors).map(|rgb| {
+            let [r, g, b] = rgb.map(srgb_to_linear);
+            [r, g, b, 1.0]
+        });
+        let (positions, position_offset) = &self.positions;
+        Some(Vertex {
+            position: positions.get::<3>(at(*position_offset)?)?,
+            normal: attribute3(&self.normals).unwrap_or([0.0; 3]),
+            uv: uv.map_or([0.0; 2], flip_v),
+            color: color.unwrap_or([1.0; 4]),
+        })
+    }
+
+    /// The polygons' corners as vertices (merged where all their indices match) and triangles,
+    /// cut as strips or else as fans. A polygon with a corner that isn't there is left out.
+    fn triangles(&self, polygons: &[&[u32]], strips: bool) -> (Vec<Vertex>, Vec<u32>) {
+        let mut vertices: Vec<Vertex> = Vec::new();
+        let mut merged: HashMap<&[u32], u32> = HashMap::new();
+        let mut indices = Vec::new();
+        let mut ids: Vec<u32> = Vec::new();
+        for &polygon in polygons {
+            ids.clear();
+            for corner in polygon.chunks_exact(self.stride) {
+                let index = if let Some(&index) = merged.get(corner) {
+                    index
+                } else {
+                    let Some(vertex) = self.vertex(corner) else { break };
+                    vertices.push(vertex);
+                    let index = (vertices.len() - 1) as u32;
+                    merged.insert(corner, index);
+                    index
+                };
+                ids.push(index);
+            }
+            if ids.len() != polygon.len() / self.stride {
+                continue;
+            }
+            let corners = |triangle: [usize; 3]| triangle.map(|k| ids[k]);
+            if strips {
+                indices.extend(geometry::strip(ids.len()).flat_map(corners));
+            } else {
+                // Fans, and polygons cut into fans: convex in practice.
+                indices.extend(geometry::fan(ids.len()).flat_map(corners));
+            }
+        }
+        (vertices, indices)
+    }
+}
+
+/// A primitive's polygons as runs of corners, each corner `stride` indices: three corners each
+/// for triangles, as `vcount` says for a polylist, and otherwise a `p` each. `None` for a polylist
+/// without a `p`.
+fn polygons<'l>(primitive: Node, lists: &'l [Vec<u32>], stride: usize) -> Option<Vec<&'l [u32]>> {
+    let mut polygons: Vec<&[u32]> = Vec::new();
+    match primitive.tag_name().name() {
+        "triangles" => {
+            for list in lists {
+                polygons.extend(list.chunks_exact(stride.checked_mul(3)?));
+            }
+        }
+        "polylist" => {
+            let counts: Vec<usize> = numbers(child(primitive, "vcount"));
+            let list = lists.first()?;
+            let mut at = 0usize;
+            for count in counts {
+                let end = count.checked_mul(stride).and_then(|len| len.checked_add(at));
+                let Some(polygon) = end.and_then(|end| list.get(at..end)) else { break };
+                polygons.push(polygon);
+                at += polygon.len();
+            }
+        }
+        _ => polygons.extend(lists.iter().map(Vec::as_slice)),
+    }
+    Some(polygons)
 }
 
 struct Reader<'a, 'input> {
@@ -251,10 +362,19 @@ impl<'a, 'input> Reader<'a, 'input> {
 
     /// The primitive's corners as vertices (merged where all their indices match) and triangles,
     /// in the geometry's own space; and whether normals came with it.
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn read_primitive(&mut self, primitive: Node<'a, 'input>) -> Option<(Vec<Vertex>, Vec<u32>, bool)> {
-        // Inputs of the primitive; VERTEX expands into the `vertices` element's inputs.
-        let mut inputs: Vec<Input> = Vec::new();
+        let attributes = Attributes::of(&self.inputs(primitive))?;
+        let lists: Vec<Vec<u32>> = elements(primitive, "p").map(|p| numbers(Some(p))).collect();
+        let polygons = polygons(primitive, &lists, attributes.stride)?;
+        let strips = primitive.tag_name().name() == "tristrips";
+        let (vertices, indices) = attributes.triangles(&polygons, strips);
+        self.source_vertices += attributes.positions.0.count() as u64;
+        Some((vertices, indices, attributes.normals.is_some()))
+    }
+
+    /// The primitive's inputs, with VERTEX expanded into the `vertices` element's own.
+    fn inputs(&self, primitive: Node<'a, 'input>) -> Vec<Input<'a, 'input>> {
+        let mut inputs = Vec::new();
         for input in elements(primitive, "input") {
             let semantic = input.attribute("semantic").unwrap_or("");
             let offset = input.attribute("offset").and_then(|o| o.parse().ok()).unwrap_or(0);
@@ -268,87 +388,7 @@ impl<'a, 'input> Reader<'a, 'input> {
                 inputs.push(Input { semantic, source, offset });
             }
         }
-        let stride = inputs.iter().map(|input| input.offset).max()?.checked_add(1)?;
-        let find = |semantic: &str| {
-            let input = inputs.iter().find(|input| input.semantic == semantic)?;
-            Some((source(input.source), input.offset))
-        };
-        let (positions, position_offset) = find("POSITION")?;
-        let (normals, uvs, colors) = (find("NORMAL"), find("TEXCOORD"), find("COLOR"));
-
-        // Polygons as runs of corners, each corner `stride` indices.
-        let lists: Vec<Vec<u32>> = elements(primitive, "p").map(|p| numbers(Some(p))).collect();
-        let mut polygons: Vec<&[u32]> = Vec::new();
-        let kind = primitive.tag_name().name();
-        match kind {
-            "triangles" => {
-                for list in &lists {
-                    polygons.extend(list.chunks_exact(stride.checked_mul(3)?));
-                }
-            }
-            "polylist" => {
-                let counts: Vec<usize> = numbers(child(primitive, "vcount"));
-                let list = lists.first()?;
-                let mut at = 0usize;
-                for count in counts {
-                    let end = count.checked_mul(stride).and_then(|len| len.checked_add(at));
-                    let Some(polygon) = end.and_then(|end| list.get(at..end)) else { break };
-                    polygons.push(polygon);
-                    at += polygon.len();
-                }
-            }
-            _ => polygons.extend(lists.iter().map(Vec::as_slice)),
-        }
-
-        let vertex = |corner: &[u32]| -> Option<Vertex> {
-            let at = |offset: usize| corner.get(offset).map(|&index| index as usize);
-            let attribute3 = |input: &Option<(Source, usize)>| {
-                let (source, offset) = input.as_ref()?;
-                source.get::<3>(at(*offset)?)
-            };
-            let uv = uvs.as_ref().and_then(|(source, offset)| source.get::<2>(at(*offset)?));
-            let color = attribute3(&colors).map(|rgb| {
-                let [r, g, b] = rgb.map(srgb_to_linear);
-                [r, g, b, 1.0]
-            });
-            Some(Vertex {
-                position: positions.get::<3>(at(position_offset)?)?,
-                normal: attribute3(&normals).unwrap_or([0.0; 3]),
-                uv: uv.map_or([0.0; 2], flip_v),
-                color: color.unwrap_or([1.0; 4]),
-            })
-        };
-        let mut vertices: Vec<Vertex> = Vec::new();
-        let mut merged: HashMap<&[u32], u32> = HashMap::new();
-        let mut indices = Vec::new();
-        let mut ids: Vec<u32> = Vec::new();
-        for polygon in polygons {
-            ids.clear();
-            for corner in polygon.chunks_exact(stride) {
-                let index = if let Some(&index) = merged.get(corner) {
-                    index
-                } else {
-                    let Some(vertex) = vertex(corner) else { break };
-                    vertices.push(vertex);
-                    let index = (vertices.len() - 1) as u32;
-                    merged.insert(corner, index);
-                    index
-                };
-                ids.push(index);
-            }
-            if ids.len() != polygon.len() / stride {
-                continue;
-            }
-            let corners = |triangle: [usize; 3]| triangle.map(|k| ids[k]);
-            if kind == "tristrips" {
-                indices.extend(geometry::strip(ids.len()).flat_map(corners));
-            } else {
-                // Fans, and polygons cut into fans: convex in practice.
-                indices.extend(geometry::fan(ids.len()).flat_map(corners));
-            }
-        }
-        self.source_vertices += (positions.values.len() / positions.stride) as u64;
-        Some((vertices, indices, normals.is_some()))
+        inputs
     }
 
     fn material(&mut self, material: Node<'a, 'input>, vertex_colors: bool) -> u32 {
