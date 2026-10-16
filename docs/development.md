@@ -29,7 +29,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/thumbs/` | Previews: the service the window asks (`mod.rs`), its workers (`worker.rs`), the cache writer (`writer.rs`), and how previews are kept in the cache (`cache.rs`) |
 | `src/preview_key.rs` | The key a file's previews are cached under, with the versions to bump when previews are made differently |
 | `src/imaging/` | Reading pictures and shrinking them, within a memory budget shared by the threads that decode |
-| `src/audio.rs` | Playback (cpal + symphonia, lock-free ring buffer), read-ahead, waveforms |
+| `src/audio/` | Sound: the player (`mod.rs`), the device callback (`output.rs`), the decoder thread (`decoder.rs`), reading a file with symphonia (`stream.rs`), resampling, waveforms, read-ahead |
 | `src/imaging/psd.rs` | Reads a PSD/PSB's flattened picture at reduced size |
 | `src/model/` | 3D models: the loaders, the CPU thumbnail renderer, and the lighting shared with the 3D view |
 | `src/detail.rs` | Loads the preview pane's large picture (or a GIF's frames) or whole model |
