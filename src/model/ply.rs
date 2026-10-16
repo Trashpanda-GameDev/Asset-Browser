@@ -79,6 +79,13 @@ struct Element {
     properties: Vec<Property>,
 }
 
+impl Element {
+    /// The property named one of `aliases` (the first that's there), by position.
+    fn find(&self, aliases: &[&str]) -> Option<usize> {
+        aliases.iter().find_map(|alias| self.properties.iter().position(|property| property.name == *alias))
+    }
+}
+
 struct Header {
     encoding: Encoding,
     elements: Vec<Element>,
@@ -168,136 +175,238 @@ impl Values<'_> {
             Scalar::F64 => f64::from_le_bytes(b),
         })
     }
+
+    /// Steps over a list: its length, then that many entries.
+    fn skip_list(&mut self, count: Scalar, scalar: Scalar) -> Result<(), String> {
+        let n = self.next(count)?;
+        for _ in 0..n.clamp(0.0, MAX_LIST) as usize {
+            self.next(scalar)?;
+        }
+        Ok(())
+    }
 }
 
 /// More list entries than this means a damaged file, not a polygon.
 const MAX_LIST: f64 = 4096.0;
 
-#[expect(clippy::cognitive_complexity, clippy::too_many_lines, reason = "refactor: split into named steps")]
+/// Vertices given room up front at most, so a damaged count can't reserve gigabytes.
+const MAX_RESERVED_VERTICES: usize = 1 << 24;
+
 pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
     let header = parse_header(bytes)?;
     let mut values = Values { encoding: header.encoding, bytes, at: header.data };
     let mut vertices: Vec<Vertex> = Vec::new();
-    let mut has_normals = false;
-    let mut has_colors = false;
+    let (mut has_normals, mut has_colors) = (false, false);
     // Triangles as (vertex, optional per-corner texture coordinate).
     let mut corners: Vec<(u32, Option<[f32; 2]>)> = Vec::new();
     let mut points_only = true;
     for element in &header.elements {
-        let names: Vec<&str> = element.properties.iter().map(|p| p.name.as_str()).collect();
-        let find = |aliases: &[&str]| aliases.iter().find_map(|alias| names.iter().position(|name| name == alias));
         match element.name.as_str() {
             "vertex" => {
-                let position = [find(&["x"]), find(&["y"]), find(&["z"])];
-                let normal = [find(&["nx"]), find(&["ny"]), find(&["nz"])];
-                let color = [
-                    find(&["red", "r", "diffuse_red"]),
-                    find(&["green", "g", "diffuse_green"]),
-                    find(&["blue", "b", "diffuse_blue"]),
-                ];
-                let alpha = find(&["alpha", "a"]);
-                let uv = [find(&["s", "u", "texture_u", "texture_s"]), find(&["t", "v", "texture_v", "texture_t"])];
-                has_normals = normal.iter().all(Option::is_some);
-                has_colors = color.iter().all(Option::is_some);
-                vertices.reserve(element.count.min(1 << 24));
-                let mut row = vec![0.0f64; element.properties.len()];
-                for _ in 0..element.count {
-                    for (value, property) in row.iter_mut().zip(&element.properties) {
-                        *value = match property.list {
-                            None => values.next(property.scalar)?,
-                            Some(count) => {
-                                // A list on a vertex isn't something we use: step over it.
-                                let n = values.next(count)?;
-                                for _ in 0..n.clamp(0.0, MAX_LIST) as usize {
-                                    values.next(property.scalar)?;
-                                }
-                                0.0
-                            }
-                        };
-                    }
-                    let get = |index: Option<usize>| index.map_or(0.0, |i| row[i] as f32);
-                    let scale = |index: Option<usize>| {
-                        index.map_or(1.0, |i| (row[i] / element.properties[i].scalar.color_scale()) as f32)
-                    };
-                    let color = if has_colors {
-                        // Stored as display colours.
-                        let [r, g, b] = color.map(|index| super::srgb_to_linear(scale(index)));
-                        [r, g, b, scale(alpha)]
-                    } else {
-                        [1.0; 4]
-                    };
-                    let uv = uv.map(get);
-                    vertices.push(Vertex {
-                        position: z_up_to_y_up(position.map(get)),
-                        normal: if has_normals { vector::normalize(z_up_to_y_up(normal.map(get))) } else { [0.0; 3] },
-                        uv: flip_v(uv),
-                        color,
-                    });
-                }
+                let layout = VertexLayout::of(element);
+                (has_normals, has_colors) = (layout.has_normals, layout.has_colors);
+                read_vertices(element, &layout, &mut values, &mut vertices)?;
             }
             "face" => {
-                let indices = find(&["vertex_indices", "vertex_index"]).ok_or("PLY faces without vertex indices")?;
-                let texcoord = find(&["texcoord"]);
-                let mut face: Vec<u32> = Vec::new();
-                let mut uvs: Vec<f32> = Vec::new();
-                for _ in 0..element.count {
-                    face.clear();
-                    uvs.clear();
-                    for (i, property) in element.properties.iter().enumerate() {
-                        match property.list {
-                            Some(count) => {
-                                let n = values.next(count)?;
-                                if !(0.0..=MAX_LIST).contains(&n) {
-                                    return Err("damaged PLY face".into());
-                                }
-                                for _ in 0..n as usize {
-                                    let value = values.next(property.scalar)?;
-                                    if i == indices {
-                                        face.push(value as u32);
-                                    } else if Some(i) == texcoord {
-                                        uvs.push(value as f32);
-                                    }
-                                }
-                            }
-                            None => {
-                                values.next(property.scalar)?;
-                            }
-                        }
-                    }
-                    if face.len() >= 3 {
-                        points_only = false;
-                    }
-                    let uv_of = |k: usize| (uvs.len() == face.len() * 2).then(|| flip_v([uvs[k * 2], uvs[k * 2 + 1]]));
-                    // A fan: faces are convex polygons in practice.
-                    for triangle in geometry::fan(face.len()) {
-                        corners.extend(triangle.map(|k| (face[k], uv_of(k))));
-                    }
+                if read_faces(element, &mut values, &mut corners)? {
+                    points_only = false;
                 }
             }
-            _ => {
-                for _ in 0..element.count {
-                    for property in &element.properties {
-                        match property.list {
-                            Some(count) => {
-                                let n = values.next(count)?;
-                                for _ in 0..n.clamp(0.0, MAX_LIST) as usize {
-                                    values.next(property.scalar)?;
-                                }
-                            }
-                            None => {
-                                values.next(property.scalar)?;
-                            }
-                        }
-                    }
-                }
-            }
+            _ => skip(element, &mut values)?,
         }
     }
     if points_only {
         return Err("there are only points, no faces to draw".into());
     }
 
-    // Faces with their own texture coordinates get their own corners.
+    let count = vertices.len() as u32;
+    let mut indices = corner_indices(&mut vertices, &corners);
+    if !has_normals {
+        (vertices, indices) = geometry::smooth_normals(&vertices, &indices, DEFAULT_CREASE);
+    }
+    let mut builder = Builder::default();
+    let material = match header.texture.as_deref().filter(|_| options.max_texture > 0) {
+        Some(name) => {
+            let slot = TextureFiles::new(file, options).slot(&mut builder, name);
+            builder.material(name.to_owned(), [1.0; 4], slot)
+        }
+        None => builder.default_material(has_colors),
+    };
+    let base = builder.add_vertices(&vertices);
+    builder.add_triangles(material, base, &indices);
+    builder.count_mesh();
+    builder.set_source_vertices(count as u64);
+    let format = if header.encoding == Encoding::Ascii { "PLY ASCII" } else { "PLY binary" };
+    builder.finish(format)
+}
+
+/// Where a vertex's attributes are among its element's properties, under their usual names.
+struct VertexLayout {
+    position: [Option<usize>; 3],
+    normal: [Option<usize>; 3],
+    color: [Option<usize>; 3],
+    alpha: Option<usize>,
+    uv: [Option<usize>; 2],
+    has_normals: bool,
+    has_colors: bool,
+}
+
+impl VertexLayout {
+    fn of(element: &Element) -> Self {
+        let find = |aliases: &[&str]| element.find(aliases);
+        let normal = [find(&["nx"]), find(&["ny"]), find(&["nz"])];
+        let color = [
+            find(&["red", "r", "diffuse_red"]),
+            find(&["green", "g", "diffuse_green"]),
+            find(&["blue", "b", "diffuse_blue"]),
+        ];
+        Self {
+            position: [find(&["x"]), find(&["y"]), find(&["z"])],
+            normal,
+            color,
+            alpha: find(&["alpha", "a"]),
+            uv: [find(&["s", "u", "texture_u", "texture_s"]), find(&["t", "v", "texture_v", "texture_t"])],
+            has_normals: normal.iter().all(Option::is_some),
+            has_colors: color.iter().all(Option::is_some),
+        }
+    }
+
+    /// A vertex from its row of values, in our space.
+    fn vertex(&self, row: &[f64], properties: &[Property]) -> Vertex {
+        let get = |index: Option<usize>| index.map_or(0.0, |i| row[i] as f32);
+        let scale = |index: Option<usize>| index.map_or(1.0, |i| (row[i] / properties[i].scalar.color_scale()) as f32);
+        let color = if self.has_colors {
+            // Stored as display colours.
+            let [r, g, b] = self.color.map(|index| super::srgb_to_linear(scale(index)));
+            [r, g, b, scale(self.alpha)]
+        } else {
+            [1.0; 4]
+        };
+        Vertex {
+            position: z_up_to_y_up(self.position.map(get)),
+            normal: if self.has_normals { vector::normalize(z_up_to_y_up(self.normal.map(get))) } else { [0.0; 3] },
+            uv: flip_v(self.uv.map(get)),
+            color,
+        }
+    }
+}
+
+/// The vertex element's vertices, onto `vertices`.
+fn read_vertices(
+    element: &Element,
+    layout: &VertexLayout,
+    values: &mut Values,
+    vertices: &mut Vec<Vertex>,
+) -> Result<(), String> {
+    vertices.reserve(element.count.min(MAX_RESERVED_VERTICES));
+    let mut row = vec![0.0f64; element.properties.len()];
+    for _ in 0..element.count {
+        for (value, property) in row.iter_mut().zip(&element.properties) {
+            *value = match property.list {
+                None => values.next(property.scalar)?,
+                Some(count) => {
+                    // A list on a vertex isn't something we use: step over it.
+                    values.skip_list(count, property.scalar)?;
+                    0.0
+                }
+            };
+        }
+        vertices.push(layout.vertex(&row, &element.properties));
+    }
+    Ok(())
+}
+
+/// Where a face's corners, and the texture coordinates it may give them, are among its properties.
+struct FaceLayout {
+    indices: usize,
+    texcoord: Option<usize>,
+}
+
+impl FaceLayout {
+    fn of(element: &Element) -> Result<Self, String> {
+        let indices = element.find(&["vertex_indices", "vertex_index"]).ok_or("PLY faces without vertex indices")?;
+        Ok(Self { indices, texcoord: element.find(&["texcoord"]) })
+    }
+}
+
+/// A face as read: its corners' vertices, and the texture coordinates it gives them, if any.
+#[derive(Default)]
+struct Face {
+    corners: Vec<u32>,
+    /// u, v for each corner, or nothing.
+    uvs: Vec<f32>,
+}
+
+impl Face {
+    fn read(&mut self, element: &Element, layout: &FaceLayout, values: &mut Values) -> Result<(), String> {
+        self.corners.clear();
+        self.uvs.clear();
+        for (i, property) in element.properties.iter().enumerate() {
+            let Some(count) = property.list else {
+                values.next(property.scalar)?;
+                continue;
+            };
+            let n = values.next(count)?;
+            if !(0.0..=MAX_LIST).contains(&n) {
+                return Err("damaged PLY face".into());
+            }
+            for _ in 0..n as usize {
+                let value = values.next(property.scalar)?;
+                if i == layout.indices {
+                    self.corners.push(value as u32);
+                } else if Some(i) == layout.texcoord {
+                    self.uvs.push(value as f32);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The face cut into triangles: each corner's vertex, and the face's own texture coordinate
+    /// for it when it gives one.
+    fn triangles(&self) -> impl Iterator<Item = (u32, Option<[f32; 2]>)> + '_ {
+        let own_uvs = self.uvs.len() == self.corners.len() * 2;
+        let uv_of = move |k: usize| own_uvs.then(|| flip_v([self.uvs[k * 2], self.uvs[k * 2 + 1]]));
+        // A fan: faces are convex polygons in practice.
+        geometry::fan(self.corners.len()).flat_map(move |triangle| triangle.map(|k| (self.corners[k], uv_of(k))))
+    }
+}
+
+/// The face element's polygons as triangles, onto `corners`; whether any face has three corners.
+fn read_faces(
+    element: &Element,
+    values: &mut Values,
+    corners: &mut Vec<(u32, Option<[f32; 2]>)>,
+) -> Result<bool, String> {
+    let layout = FaceLayout::of(element)?;
+    let mut face = Face::default();
+    let mut any = false;
+    for _ in 0..element.count {
+        face.read(element, &layout, values)?;
+        any |= face.corners.len() >= 3;
+        corners.extend(face.triangles());
+    }
+    Ok(any)
+}
+
+/// Steps over an element this reader has no use for.
+fn skip(element: &Element, values: &mut Values) -> Result<(), String> {
+    for _ in 0..element.count {
+        for property in &element.properties {
+            match property.list {
+                Some(count) => values.skip_list(count, property.scalar)?,
+                None => {
+                    values.next(property.scalar)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The triangles as indices into `vertices`: a corner with its face's own texture coordinate gets
+/// a vertex of its own, and triangles naming a vertex that isn't there are left out.
+fn corner_indices(vertices: &mut Vec<Vertex>, corners: &[(u32, Option<[f32; 2]>)]) -> Vec<u32> {
     let count = vertices.len() as u32;
     let mut indices = Vec::with_capacity(corners.len());
     for triangle in corners.as_chunks::<3>().0 {
@@ -314,31 +423,14 @@ pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<
             }
         }
     }
-    if !has_normals {
-        (vertices, indices) = geometry::smooth_normals(&vertices, &indices, DEFAULT_CREASE);
-    }
-
-    let mut builder = Builder::default();
-    let texture = header
-        .texture
-        .as_deref()
-        .filter(|_| options.max_texture > 0)
-        .map(|name| TextureFiles::new(file, options).slot(&mut builder, name));
-    let material = match texture {
-        Some(slot) => builder.material(header.texture.clone().unwrap_or_default(), [1.0; 4], slot),
-        None => builder.default_material(has_colors),
-    };
-    let base = builder.add_vertices(&vertices);
-    builder.add_triangles(material, base, &indices);
-    builder.count_mesh();
-    builder.set_source_vertices(count as u64);
-    let format = if header.encoding == Encoding::Ascii { "PLY ASCII" } else { "PLY binary" };
-    builder.finish(format)
+    indices
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::test_files::png_2x2;
+    use crate::test_support::TempDir;
 
     fn options() -> LoadOptions {
         LoadOptions { max_texture: 64 }
@@ -361,6 +453,27 @@ mod tests {
         assert_eq!(model.materials[model.parts[0].material as usize].color, [1.0; 4]);
         // Z up: the quad lying in the file's XY plane faces +Y here.
         assert!(model.vertices.iter().all(|v| v.normal == [0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn texture_file_and_texture_coordinates_per_face() {
+        let dir = TempDir::new("ply_texture");
+        dir.write("wood grain.png", &png_2x2());
+        let quad = "ply\nformat ascii 1.0\ncomment TextureFile wood grain.png\nelement vertex 4\n\
+            property float x\nproperty float y\nproperty float z\n\
+            element face 1\nproperty list uchar int vertex_indices\nproperty list uchar float texcoord\nend_header\n\
+            0 0 0\n1 0 0\n1 1 0\n0 1 0\n4 0 1 2 3 8 0 0 1 0 1 1 0 1\n";
+        let path = dir.write("quad.ply", quad.as_bytes());
+        let model = crate::model::load(&path, &options()).unwrap();
+        assert_eq!((model.info.triangles, model.info.textures, model.info.missing_textures), (2, 1, 0));
+        let material = &model.materials[model.parts[0].material as usize];
+        assert_eq!((material.name.as_str(), material.texture), ("wood grain.png", Some(0)));
+        // Each corner has the face's own coordinate, v counted from the top: the file's (1, 1)
+        // corner is the top right of the picture.
+        let corner = model.vertices.iter().find(|v| v.position == [1.0, 0.0, -1.0]).unwrap();
+        assert_eq!(corner.uv, [1.0, 0.0]);
+        let without = crate::model::load(&path, &LoadOptions::default()).unwrap();
+        assert_eq!((without.info.textures, without.materials[0].texture), (0, None));
     }
 
     /// A triangle with normals as doubles and floats, a face with a flag before its list, and an
