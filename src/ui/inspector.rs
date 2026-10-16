@@ -21,7 +21,7 @@ use crate::playback::Playback;
 use crate::sheets::{Saved, Sheet, Source};
 
 use super::asset_actions::{self, AssetAction};
-use super::browse::{Look, draw_preview};
+use super::browse::{Look, PreviewOf, draw_preview};
 use super::display::{self, Display};
 use super::format::{channels, dimensions, format_age, format_size, format_time, grouped, sample_rate};
 use super::image_view::{ImageView, Picture, Place};
@@ -383,7 +383,8 @@ impl Inspector {
         // Until the model is loaded (or when it can't be shown in 3D), the thumbnail stands in.
         ui.painter().rect_filled(rect, theme::CARD_RADIUS, theme::WELL);
         let inner = rect.shrink(16.0);
-        draw_preview(ui.painter(), inner, entry, previews, None, Look::new(ui, self.display.backdrop), true);
+        let preview = PreviewOf { entry, previews, playing: None, large: true };
+        draw_preview(ui.painter(), inner, &preview, Look::new(ui, self.display.backdrop));
         let note = match &self.detail {
             Some((key, DetailState::Loading)) if *key == entry.key => {
                 spinner_badge(ui, rect);
@@ -587,7 +588,8 @@ fn selection_strip(
                 theme::RADIUS,
                 if response.hovered() { theme::CARD_HOVER } else { theme::CARD },
             );
-            draw_preview(ui.painter(), rect.shrink(4.0), entry, previews, None, look, false);
+            let preview = PreviewOf { entry, previews, playing: None, large: false };
+            draw_preview(ui.painter(), rect.shrink(4.0), &preview, look);
             if focused {
                 ui.painter().rect_stroke(
                     rect,
@@ -722,7 +724,8 @@ fn favorite_button(ui: &mut Ui, favorite: bool) -> egui::Response {
 /// A stand-in while the preview is made.
 fn placeholder(ui: &Ui, rect: Rect, entry: &Entry, previews: &Previews, look: Look) {
     ui.painter().rect_filled(rect, theme::CARD_RADIUS, theme::WELL);
-    draw_preview(ui.painter(), rect.shrink(24.0), entry, previews, None, look, true);
+    let preview = PreviewOf { entry, previews, playing: None, large: true };
+    draw_preview(ui.painter(), rect.shrink(24.0), &preview, look);
 }
 
 /// A small spinner in the corner while the large preview loads.

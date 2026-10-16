@@ -309,7 +309,8 @@ impl Tile<'_, '_> {
         painter.rect_filled(card, theme::CARD_RADIUS, fill);
         let inner = card.shrink(6.0);
         let playing = self.browse.now.filter(|now| now.key == entry.key && !now.finished);
-        draw_preview(painter, inner, entry, self.previews, playing, self.look, true);
+        let preview = PreviewOf { entry, previews: self.previews, playing, large: true };
+        draw_preview(painter, inner, &preview, self.look);
 
         if selected {
             painter.rect_filled(card, theme::CARD_RADIUS, theme::ACCENT_SOFT.gamma_multiply(0.6));
@@ -363,24 +364,26 @@ impl Tile<'_, '_> {
     }
 }
 
+/// An asset's preview to draw, and what goes with it.
+#[derive(Clone, Copy)]
+pub struct PreviewOf<'a> {
+    pub entry: &'a Entry,
+    pub previews: &'a Previews,
+    /// It's the sound playing: its waveform shows how far.
+    pub playing: Option<&'a NowPlaying>,
+    /// There's room for a sound's length (and a speaker while it plays) under its waveform.
+    pub large: bool,
+}
+
 /// Draws an asset's preview into `rect`: its thumbnail, waveform, or a placeholder while it's made.
-#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
-pub fn draw_preview(
-    painter: &egui::Painter,
-    rect: Rect,
-    entry: &Entry,
-    previews: &Previews,
-    playing: Option<&NowPlaying>,
-    look: Look,
-    large: bool,
-) {
+pub fn draw_preview(painter: &egui::Painter, rect: Rect, preview: &PreviewOf<'_>, look: Look) {
+    let PreviewOf { entry, previews, playing, large } = *preview;
     if entry.kind == AssetKind::Model {
-        // A soft studio backdrop, lighter at the top.
-        widgets::vertical_gradient(painter, rect, theme::SOUND_TILE[0], theme::SOUND_TILE[1]);
+        widgets::vertical_gradient(painter, rect, theme::MODEL_TILE[0], theme::MODEL_TILE[1]);
     }
     if let Some(texture) = previews.texture(entry.key) {
-        let backdrop = (entry.kind == AssetKind::Image).then_some(look.backdrop);
-        draw_texture(painter, rect, texture, previews.checker.id(), backdrop, look.pixels_per_point);
+        let backdrop = (entry.kind == AssetKind::Image).then_some((look.backdrop, previews.checker.id()));
+        draw_texture(painter, rect, texture, backdrop, look.pixels_per_point);
     } else if let Some(waveform) = previews.waveforms.get(&entry.key) {
         let color = theme::kind_color(entry.kind);
         let progress = playing.map(|now| now.progress(waveform.duration as f64));
@@ -425,26 +428,26 @@ pub fn draw_preview(
     }
 }
 
-#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
+/// A thumbnail fitted into `area`, a picture's with its backdrop (and the checkerboard's texture)
+/// behind it.
 fn draw_texture(
     painter: &egui::Painter,
     area: Rect,
     texture: &CachedTexture,
-    checker: TextureId,
-    backdrop: Option<Backdrop>,
+    backdrop: Option<(Backdrop, TextureId)>,
     pixels_per_point: f32,
 ) {
     let [w, h] = texture.handle.size();
     let fitted = fit_rect(area, w as f32, h as f32, texture.unscaled, pixels_per_point);
     match backdrop {
-        Some(Backdrop::Checker) => {
+        Some((Backdrop::Checker, checker)) => {
             let checker_uv = Rect::from_min_max(Pos2::ZERO, pos2(fitted.width() / 12.0, fitted.height() / 12.0));
             painter.image(checker, fitted, checker_uv, Color32::WHITE);
         }
-        Some(Backdrop::Light) => {
+        Some((Backdrop::Light, _)) => {
             painter.rect_filled(fitted, 0.0, Backdrop::LIGHT);
         }
-        Some(Backdrop::Dark) | None => {}
+        Some((Backdrop::Dark, _)) | None => {}
     }
     painter.image(texture.handle.id(), fitted, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
 }
@@ -616,7 +619,6 @@ struct ListRow<'a, 'b> {
 
 impl ListRow<'_, '_> {
     /// Draws the row; returns what its star asked for.
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn show(
         self,
         ui: &Ui,
@@ -624,148 +626,147 @@ impl ListRow<'_, '_> {
         response: &egui::Response,
         layout: &[(Column, Range<f32>)],
     ) -> Option<GroupCommand> {
-        let entry = self.entry;
-        let mut command = None;
         let painter = ui.painter();
-        let selected = self.browse.selection.contains(self.index);
-        let row = rect.shrink2(vec2(4.0, 1.0));
-        if selected {
-            painter.rect_filled(row, theme::RADIUS, theme::ACCENT_SOFT);
-            if self.browse.selection.focus == Some(self.index) {
-                painter.rect_stroke(
-                    row,
-                    theme::RADIUS,
-                    Stroke::new(1.0, theme::ACCENT.gamma_multiply(0.7)),
-                    StrokeKind::Inside,
-                );
-            }
-        } else if response.hovered() {
-            painter.rect_filled(row, theme::RADIUS, theme::CARD);
-        }
-        let playing = self.browse.now.filter(|now| now.key == entry.key && !now.finished);
-        let x0 = rect.left();
+        self.background(painter, rect, response);
+        let mut command = None;
         for (column, span) in layout {
-            let cell = Rect::from_x_y_ranges((x0 + span.start)..=(x0 + span.end), rect.y_range());
+            let cell = Rect::from_x_y_ranges((rect.left() + span.start)..=(rect.left() + span.end), rect.y_range());
             let (anchor, align) = text_anchor(*column, &cell);
-            let weak = |text: String| {
-                painter.text(anchor, align, text, FontId::proportional(theme::size::LABEL), theme::TEXT_WEAK);
-            };
             match column {
                 Column::Star => {
                     command = star_button(ui, self.browse, self.index, cell.center(), response.contains_pointer());
                 }
-                Column::Categories => {
-                    let mut x = cell.left() + 4.0;
-                    let font = FontId::proportional(theme::size::SMALL);
-                    for group in self.browse.categories(self.index) {
-                        let galley = painter.layout_no_wrap(group.name.clone(), font.clone(), theme::TEXT_WEAK);
-                        let width = galley.size().x + 20.0;
-                        if x + width > cell.right() - 4.0 {
-                            painter.text(
-                                pos2(x, cell.center().y),
-                                Align2::LEFT_CENTER,
-                                "…",
-                                font.clone(),
-                                theme::TEXT_FAINT,
-                            );
-                            break;
-                        }
-                        let pill = Rect::from_min_size(pos2(x, cell.center().y - 9.0), vec2(width, 18.0));
-                        painter.rect_filled(pill, CornerRadius::same(9), theme::CARD_HOVER);
-                        painter.circle_filled(
-                            pos2(pill.left() + 8.0, pill.center().y),
-                            3.5,
-                            theme::category_color(group.color),
-                        );
-                        painter.galley(
-                            pos2(pill.left() + 15.0, pill.center().y - galley.size().y / 2.0),
-                            galley,
-                            theme::TEXT_WEAK,
-                        );
-                        x += width + 4.0;
-                    }
-                }
-                Column::Name => {
-                    let thumb = Rect::from_min_size(pos2(cell.left() + 2.0, cell.top() + 4.0), vec2(26.0, 26.0));
-                    painter.rect_filled(thumb, CornerRadius::same(4), theme::CARD);
-                    if entry.kind == AssetKind::Audio {
-                        let glyph = if playing.is_some() { icon::SPEAKER_HIGH } else { icon::WAVEFORM };
-                        painter.text(
-                            thumb.center(),
-                            Align2::CENTER_CENTER,
-                            glyph,
-                            FontId::proportional(theme::size::TITLE),
-                            theme::kind_color(entry.kind),
-                        );
-                    } else {
-                        draw_preview(painter, thumb.shrink(1.0), entry, self.previews, None, self.look, false);
-                    }
-                    let color = if selected { theme::TEXT } else { theme::TEXT.gamma_multiply(0.9) };
-                    let text_left = thumb.right() + 10.0;
-                    let galley = widgets::elided(
-                        painter,
-                        entry.name().to_owned(),
-                        FontId::proportional(theme::size::BODY),
-                        color,
-                        (cell.right() - text_left - 8.0).max(10.0),
-                    );
-                    painter.galley(pos2(text_left, cell.center().y - galley.size().y / 2.0), galley, color);
-                }
+                Column::Categories => self.category_pills(painter, cell),
+                Column::Name => self.name_cell(painter, cell),
                 Column::Type => {
-                    widgets::badge(
-                        painter,
-                        anchor,
-                        Align2::LEFT_CENTER,
-                        &entry.extension().to_uppercase(),
-                        theme::kind_color(entry.kind),
-                    );
+                    let kind = self.entry.kind;
+                    let extension = self.entry.extension().to_uppercase();
+                    widgets::badge(painter, anchor, Align2::LEFT_CENTER, &extension, theme::kind_color(kind));
                 }
-                Column::Details => weak(self.details()),
-                Column::Dimensions => weak(self.previews.dimensions(entry.key).map_or_else(String::new, dimensions)),
-                Column::Waveform => {
-                    if let Some(waveform) = self.previews.waveforms.get(&entry.key) {
-                        let progress = playing.map(|now| now.progress(waveform.duration as f64));
-                        let color = theme::kind_color(entry.kind);
-                        let wave = cell.shrink2(vec2(4.0, 7.0));
-                        draw_waveform(painter, wave, waveform, [color.gamma_multiply(0.5), color], progress);
-                    }
+                Column::Waveform => self.waveform_cell(painter, cell),
+                Column::Folder => self.folder_cell(painter, cell),
+                text => {
+                    let font = FontId::proportional(theme::size::LABEL);
+                    painter.text(anchor, align, self.text(*text), font, theme::TEXT_WEAK);
                 }
-                Column::Length => weak(
-                    self.previews
-                        .waveforms
-                        .get(&entry.key)
-                        .map_or_else(String::new, |w| format_time(w.duration as f64)),
-                ),
-                Column::Format => weak(self.previews.waveforms.get(&entry.key).map_or_else(String::new, |w| {
-                    format!("{} · {}", sample_rate(w.sample_rate), channels(w.channels))
-                })),
-                Column::Triangles => weak(
-                    self.previews
-                        .models
-                        .get(&entry.key)
-                        .filter(|info| info.geometry)
-                        .map_or_else(String::new, |info| grouped(info.triangles as usize)),
-                ),
-                Column::Folder => {
-                    let galley = widgets::elided(
-                        painter,
-                        self.browse.library.folder_label(entry),
-                        FontId::proportional(theme::size::LABEL),
-                        theme::TEXT_FAINT,
-                        (cell.width() - 12.0).max(10.0),
-                    );
-                    painter.galley(
-                        pos2(cell.left() + 4.0, cell.center().y - galley.size().y / 2.0),
-                        galley,
-                        theme::TEXT_FAINT,
-                    );
-                }
-                Column::Size => weak(format_size(entry.size)),
-                Column::Modified => weak(format_age(entry.mtime)),
             }
         }
-        response.clone().on_hover_text_at_pointer(&entry.rel);
+        response.clone().on_hover_text_at_pointer(&self.entry.rel);
         command
+    }
+
+    fn selected(&self) -> bool {
+        self.browse.selection.contains(self.index)
+    }
+
+    /// What's playing, if it's this asset.
+    fn playing(&self) -> Option<&NowPlaying> {
+        self.browse.now.filter(|now| now.key == self.entry.key && !now.finished)
+    }
+
+    /// Selected rows are tinted and the focused one outlined; others light up under the pointer.
+    fn background(&self, painter: &egui::Painter, rect: Rect, response: &egui::Response) {
+        let row = rect.shrink2(vec2(4.0, 1.0));
+        if self.selected() {
+            painter.rect_filled(row, theme::RADIUS, theme::ACCENT_SOFT);
+            if self.browse.selection.focus == Some(self.index) {
+                let outline = Stroke::new(1.0, theme::ACCENT.gamma_multiply(0.7));
+                painter.rect_stroke(row, theme::RADIUS, outline, StrokeKind::Inside);
+            }
+        } else if response.hovered() {
+            painter.rect_filled(row, theme::RADIUS, theme::CARD);
+        }
+    }
+
+    /// The asset's categories as pills, as many as fit, then "…".
+    fn category_pills(&self, painter: &egui::Painter, cell: Rect) {
+        let mut x = cell.left() + 4.0;
+        let font = FontId::proportional(theme::size::SMALL);
+        for group in self.browse.categories(self.index) {
+            let galley = painter.layout_no_wrap(group.name.clone(), font.clone(), theme::TEXT_WEAK);
+            let width = galley.size().x + 20.0;
+            if x + width > cell.right() - 4.0 {
+                painter.text(pos2(x, cell.center().y), Align2::LEFT_CENTER, "…", font.clone(), theme::TEXT_FAINT);
+                break;
+            }
+            let pill = Rect::from_min_size(pos2(x, cell.center().y - 9.0), vec2(width, 18.0));
+            painter.rect_filled(pill, CornerRadius::same(9), theme::CARD_HOVER);
+            painter.circle_filled(pos2(pill.left() + 8.0, pill.center().y), 3.5, theme::category_color(group.color));
+            painter.galley(pos2(pill.left() + 15.0, pill.center().y - galley.size().y / 2.0), galley, theme::TEXT_WEAK);
+            x += width + 4.0;
+        }
+    }
+
+    /// A small preview (for a sound, a speaker while it plays or else a waveform glyph), and the
+    /// name.
+    fn name_cell(&self, painter: &egui::Painter, cell: Rect) {
+        let entry = self.entry;
+        let thumb = Rect::from_min_size(pos2(cell.left() + 2.0, cell.top() + 4.0), vec2(26.0, 26.0));
+        painter.rect_filled(thumb, CornerRadius::same(4), theme::CARD);
+        if entry.kind == AssetKind::Audio {
+            let glyph = if self.playing().is_some() { icon::SPEAKER_HIGH } else { icon::WAVEFORM };
+            let font = FontId::proportional(theme::size::TITLE);
+            painter.text(thumb.center(), Align2::CENTER_CENTER, glyph, font, theme::kind_color(entry.kind));
+        } else {
+            let preview = PreviewOf { entry, previews: self.previews, playing: None, large: false };
+            draw_preview(painter, thumb.shrink(1.0), &preview, self.look);
+        }
+        let color = if self.selected() { theme::TEXT } else { theme::TEXT.gamma_multiply(0.9) };
+        let text_left = thumb.right() + 10.0;
+        let galley = widgets::elided(
+            painter,
+            entry.name().to_owned(),
+            FontId::proportional(theme::size::BODY),
+            color,
+            (cell.right() - text_left - 8.0).max(10.0),
+        );
+        painter.galley(pos2(text_left, cell.center().y - galley.size().y / 2.0), galley, color);
+    }
+
+    /// A sound's waveform, how far it's played shown while it plays.
+    fn waveform_cell(&self, painter: &egui::Painter, cell: Rect) {
+        if let Some(waveform) = self.previews.waveforms.get(&self.entry.key) {
+            let progress = self.playing().map(|now| now.progress(waveform.duration as f64));
+            let color = theme::kind_color(self.entry.kind);
+            let wave = cell.shrink2(vec2(4.0, 7.0));
+            draw_waveform(painter, wave, waveform, [color.gamma_multiply(0.5), color], progress);
+        }
+    }
+
+    /// The folder the asset is in, cut short to fit.
+    fn folder_cell(&self, painter: &egui::Painter, cell: Rect) {
+        let galley = widgets::elided(
+            painter,
+            self.browse.library.folder_label(self.entry),
+            FontId::proportional(theme::size::LABEL),
+            theme::TEXT_FAINT,
+            (cell.width() - 12.0).max(10.0),
+        );
+        painter.galley(pos2(cell.left() + 4.0, cell.center().y - galley.size().y / 2.0), galley, theme::TEXT_FAINT);
+    }
+
+    /// A text column's value, empty while it isn't known.
+    fn text(&self, column: Column) -> String {
+        let entry = self.entry;
+        let waveform = || self.previews.waveforms.get(&entry.key);
+        match column {
+            Column::Details => self.details(),
+            Column::Dimensions => self.previews.dimensions(entry.key).map_or_else(String::new, dimensions),
+            Column::Length => waveform().map_or_else(String::new, |w| format_time(w.duration as f64)),
+            Column::Format => waveform()
+                .map_or_else(String::new, |w| format!("{} · {}", sample_rate(w.sample_rate), channels(w.channels))),
+            Column::Triangles => self
+                .previews
+                .models
+                .get(&entry.key)
+                .filter(|info| info.geometry)
+                .map_or_else(String::new, |info| grouped(info.triangles as usize)),
+            Column::Size => format_size(entry.size),
+            Column::Modified => format_age(entry.mtime),
+            Column::Star | Column::Categories | Column::Name | Column::Type | Column::Waveform | Column::Folder => {
+                String::new()
+            }
+        }
     }
 
     /// One line about the asset, whatever its kind.

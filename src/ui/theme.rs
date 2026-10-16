@@ -82,8 +82,8 @@ pub const ON_ACCENT: Color32 = Color32::WHITE;
 pub const PLAYHEAD: Color32 = Color32::WHITE;
 /// The toast's background, a step above the panels.
 pub const TOAST: Color32 = Color32::from_rgb(40, 43, 51);
-/// A sound's tile, top to bottom.
-pub const SOUND_TILE: [Color32; 2] = [Color32::from_rgb(44, 47, 56), Color32::from_rgb(29, 31, 37)];
+/// A 3D model's tile, top to bottom: a soft studio backdrop, lighter at the top.
+pub const MODEL_TILE: [Color32; 2] = [Color32::from_rgb(44, 47, 56), Color32::from_rgb(29, 31, 37)];
 /// The top of the 3D view's backdrop, which darkens to `WELL` at the bottom.
 pub const VIEWPORT_TOP: Color32 = Color32::from_rgb(34, 37, 44);
 /// The checkerboard behind transparency: its light and dark squares.
