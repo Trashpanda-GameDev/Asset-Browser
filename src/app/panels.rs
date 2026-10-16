@@ -41,16 +41,16 @@ impl BrowserApp {
                     ui.label(small(format!("{} assets", grouped(library.entries().len()))));
                     widgets::divider(ui);
                 }
-                if self.deleting.is_some() {
+                if self.deletion.deleting.is_some() {
                     ui.add(egui::Spinner::new().size(12.0));
                     ui.label(small("Deleting…".to_owned()));
                     widgets::divider(ui);
                 }
-                if self.scans > 0 {
+                if self.folders.scans > 0 {
                     ui.add(egui::Spinner::new().size(12.0));
-                    ui.label(small(format!("Scanning… {:.1} s", self.scan_started.elapsed().as_secs_f32())));
+                    ui.label(small(format!("Scanning… {:.1} s", self.folders.scan_started.elapsed().as_secs_f32())));
                     ui.ctx().request_repaint_after(Duration::from_millis(100));
-                } else if let Some(scan) = &self.last_scan {
+                } else if let Some(scan) = &self.folders.last_scan {
                     ui.label(small(format!(
                         "Scanned {} in {:.2} s",
                         plural(scan.dirs_visited, "folder"),
@@ -60,7 +60,7 @@ impl BrowserApp {
                         "{} assets; {} other files skipped. {}",
                         grouped(scan.assets),
                         grouped(scan.skipped),
-                        self.index_note.as_deref().unwrap_or("")
+                        self.folders.index_note.as_deref().unwrap_or("")
                     ));
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -88,7 +88,7 @@ impl BrowserApp {
                             .on_hover_text(details);
                     }
                     // The playing sound, when it isn't the one shown.
-                    let focus = self.modes[self.mode.index()].selection.focus;
+                    let focus = self.browsing.modes[self.browsing.mode.index()].selection.focus;
                     let playing_elsewhere = self.sound.playing.is_some_and(|(index, _)| Some(index) != focus);
                     if playing_elsewhere && let Some(library) = &self.library {
                         widgets::divider(ui);
@@ -115,25 +115,25 @@ impl BrowserApp {
             .default_size(360.0)
             .size_range(260.0..=720.0)
             .frame(frame)
-            .show_collapsible(ui, &mut self.show_inspector, |ui| {
+            .show_collapsible(ui, &mut self.chrome.show_inspector, |ui| {
                 let Some(library) = &self.library else {
                     ui.label(RichText::new("Open a folder to see its assets here.").color(theme::TEXT_FAINT));
                     return;
                 };
-                let totals = match self.group {
-                    Some(id) => self.membership.totals(id),
-                    None => library.dirs().get(self.selected_dir as usize).map_or([0; 3], |dir| dir.totals),
+                let totals = match self.browsing.group {
+                    Some(id) => self.organizing.membership.totals(id),
+                    None => library.dirs().get(self.browsing.selected_dir as usize).map_or([0; 3], |dir| dir.totals),
                 };
                 let args = InspectorArgs {
                     library,
-                    selection: &self.modes[self.mode.index()].selection,
+                    selection: &self.browsing.modes[self.browsing.mode.index()].selection,
                     previews: &mut self.previews,
                     sound: &mut self.sound,
                     render_state: self.render_state.as_ref(),
                     totals,
-                    kinds: self.mode.kinds(),
-                    groups: &self.groups,
-                    membership: &self.membership,
+                    kinds: self.browsing.mode.kinds(),
+                    groups: &self.organizing.groups,
+                    membership: &self.organizing.membership,
                 };
                 output = Some(self.inspector.show(ui, args));
             });
@@ -146,7 +146,7 @@ impl BrowserApp {
             selection.focus = Some(index);
             selection.anchor = Some(index);
             self.focused(index);
-            self.scroll_to_focus = true;
+            self.browsing.scroll_to_focus = true;
         }
         if let Some(action) = output.action {
             self.run_action(action);
@@ -206,20 +206,20 @@ impl BrowserApp {
             }
             self.toolbar(ui);
             let Some(library) = self.library.as_ref() else { return };
-            if self.view.is_empty() {
+            if self.browsing.view.is_empty() {
                 // A folder that's empty only because its first scan hasn't finished.
-                let scanning = self.scans > 0
-                    && self.group.is_none()
-                    && library.dirs().get(self.selected_dir as usize).is_some_and(|dir| dir.totals == [0; 3]);
+                let scanning = self.folders.scans > 0
+                    && self.browsing.group.is_none()
+                    && library.dirs().get(self.browsing.selected_dir as usize).is_some_and(|dir| dir.totals == [0; 3]);
                 ui.centered_and_justified(|ui| {
-                    let what = self.mode.kind().map_or("assets", |kind| match kind {
+                    let what = self.browsing.mode.kind().map_or("assets", |kind| match kind {
                         AssetKind::Image => "images",
                         AssetKind::Audio => "sounds",
                         AssetKind::Model => "models",
                     });
-                    let place = match self.group {
+                    let place = match self.browsing.group {
                         Some(UNCATEGORIZED) => "without a category".to_owned(),
-                        Some(id) => match self.groups.get(id) {
+                        Some(id) => match self.organizing.groups.get(id) {
                             Some(group) if group.kind == GroupKind::Favorites => {
                                 "in Favorites yet. Star assets with F or the star on their tile".to_owned()
                             }
@@ -232,39 +232,41 @@ impl BrowserApp {
                     };
                     let text = if scanning {
                         "Scanning…".to_owned()
-                    } else if self.query.trim().is_empty() {
+                    } else if self.browsing.query.trim().is_empty() {
                         format!("No {what} {place}.")
                     } else {
-                        format!("No {what} here match \u{201c}{}\u{201d}.", self.query.trim())
+                        format!("No {what} here match \u{201c}{}\u{201d}.", self.browsing.query.trim())
                     };
                     ui.add(egui::Label::new(RichText::new(text).size(14.0).color(theme::TEXT_FAINT)).wrap());
                 });
                 return;
             }
-            let mode_view = &self.modes[self.mode.index()];
-            let scroll_to = std::mem::take(&mut self.scroll_to_focus)
+            let mode_view = &self.browsing.modes[self.browsing.mode.index()];
+            let scroll_to = std::mem::take(&mut self.browsing.scroll_to_focus)
                 .then_some(mode_view.selection.focus)
                 .flatten()
-                .and_then(|focus| self.view.iter().position(|&index| index == focus));
+                .and_then(|focus| self.browsing.view.iter().position(|&index| index == focus));
             let now = self.sound.now();
             let (sort, descending) = mode_view.order(self.in_group_order());
             let browse = Browse {
                 library,
-                view: &self.view,
+                view: &self.browsing.view,
                 selection: &mode_view.selection,
                 now: now.as_ref(),
-                mode: self.mode,
+                mode: self.browsing.mode,
                 sort,
                 descending,
                 backdrop: self.inspector.image.backdrop,
                 scroll_to,
-                groups: &self.groups,
-                membership: &self.membership,
-                viewing: self.group,
+                groups: &self.organizing.groups,
+                membership: &self.organizing.membership,
+                viewing: self.browsing.group,
             };
             output = Some(match mode_view.layout {
-                ViewLayout::Grid => browse::grid(ui, &browse, &mut self.previews, mode_view.tile, &mut self.scroll),
-                ViewLayout::List => browse::list(ui, &browse, &mut self.previews, &mut self.scroll),
+                ViewLayout::Grid => {
+                    browse::grid(ui, &browse, &mut self.previews, mode_view.tile, &mut self.browsing.scroll)
+                }
+                ViewLayout::List => browse::list(ui, &browse, &mut self.previews, &mut self.browsing.scroll),
             });
         });
         if let Some(output) = output {

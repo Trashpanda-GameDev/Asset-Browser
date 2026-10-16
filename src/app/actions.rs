@@ -72,22 +72,22 @@ impl BrowserApp {
     pub(super) fn handle_keys(&mut self, ctx: &egui::Context) {
         // A "Delete?" dialog takes the keys itself (Enter, Esc), and so do the settings and "What's
         // new" (Esc, a shortcut being changed).
-        if self.confirm_files.is_some()
-            || self.confirm_delete.is_some()
-            || self.settings.wants_keys()
-            || self.whats_new.is_some()
+        if self.deletion.confirm_files.is_some()
+            || self.organizing.confirm_delete.is_some()
+            || self.preferences.settings.wants_keys()
+            || self.preferences.whats_new.is_some()
         {
             return;
         }
         // The shortcuts are the user's (Settings → Keyboard), so a shortcut's press is matched
         // exactly: Ctrl+Shift+F isn't Ctrl+F.
-        let keys = self.keymap.clone();
+        let keys = self.preferences.keymap.clone();
         let typing = ctx.egui_wants_keyboard_input();
         // The window's own shortcuts work while typing in the search box when they have Ctrl or
         // Alt; a plain key is typed.
         let window = |action: Action| (!typing || keys.has_modifier(action)) && keys.pressed(ctx, action).is_some();
         if window(Action::Search) {
-            self.focus_search = true;
+            self.chrome.focus_search = true;
         }
         for (action, mode) in
             [Action::ModeAll, Action::ModeImages, Action::ModeSounds, Action::ModeModels].into_iter().zip(Mode::ALL)
@@ -97,15 +97,15 @@ impl BrowserApp {
             }
         }
         if window(Action::Settings) {
-            self.settings.open = true;
+            self.preferences.settings.open = true;
         }
         if window(Action::TogglePane) {
-            self.show_inspector = !self.show_inspector;
+            self.chrome.show_inspector = !self.chrome.show_inspector;
         }
         for (action, layout) in [(Action::Grid, ViewLayout::Grid), (Action::List, ViewLayout::List)] {
             if window(action) {
                 self.mode_view_mut().layout = layout;
-                self.scroll_to_focus = true;
+                self.browsing.scroll_to_focus = true;
             }
         }
         if typing {
@@ -116,9 +116,9 @@ impl BrowserApp {
             self.ask_to_delete_selection();
         }
         if pressed(Action::SelectAll).is_some() {
-            let view = std::mem::take(&mut self.view);
+            let view = std::mem::take(&mut self.browsing.view);
             self.mode_view_mut().selection.all(&view);
-            self.view = view;
+            self.browsing.view = view;
         }
         if pressed(Action::CopyFiles).is_some() {
             self.run_action(MenuAction::CopyFiles);
@@ -133,9 +133,9 @@ impl BrowserApp {
             self.run_group_command(GroupCommand::ToggleFavorite(Targets::Selection));
         }
 
-        let columns = self.columns.max(1) as isize;
-        let page = columns * self.page_rows.max(1) as isize;
-        let len = self.view.len() as isize;
+        let columns = self.browsing.columns.max(1) as isize;
+        let page = columns * self.browsing.page_rows.max(1) as isize;
+        let len = self.browsing.view.len() as isize;
         let mut step = None;
         // Holding Shift on a move selects as it goes.
         let mut shift = false;
@@ -159,27 +159,27 @@ impl BrowserApp {
         let escape = pressed(Action::StopOrClear).is_some();
 
         if let Some(step) = step
-            && !self.view.is_empty()
+            && !self.browsing.view.is_empty()
         {
             let focus = self.mode_view().selection.focus;
-            let current = focus.and_then(|focus| self.view.iter().position(|&index| index == focus));
+            let current = focus.and_then(|focus| self.browsing.view.iter().position(|&index| index == focus));
             let next = match current {
                 Some(position) => (position as isize + step).clamp(0, len - 1) as usize,
                 None => 0,
             };
-            let index = self.view[next];
+            let index = self.browsing.view[next];
             if current != Some(next) {
-                let view = std::mem::take(&mut self.view);
+                let view = std::mem::take(&mut self.browsing.view);
                 let selection = &mut self.mode_view_mut().selection;
                 if shift {
                     selection.extend_to(&view, index);
                 } else {
                     selection.only(index);
                 }
-                self.view = view;
+                self.browsing.view = view;
                 self.focused(index);
             }
-            self.scroll_to_focus = true;
+            self.browsing.scroll_to_focus = true;
         }
         let focus = self.mode_view().selection.focus;
         if enter && let Some(focus) = focus {

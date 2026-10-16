@@ -4,11 +4,29 @@
 use eframe::egui::{self, Align, Layout, RichText};
 use egui_phosphor::regular as icon;
 
-use crate::groups::{self, FAVORITES, Groups};
+use crate::groups::{self, FAVORITES, Groups, Membership};
 use crate::ui::organize::{GroupCommand, GroupEdit, plural};
 use crate::ui::{theme, widgets};
 
 use super::BrowserApp;
+
+/// Favorites, collections and categories, where their members are in the library, and what's
+/// being done to them.
+pub(super) struct Organizing {
+    pub(super) groups: Groups,
+    pub(super) membership: Membership,
+    pub(super) membership_dirty: bool,
+    /// A group being named in the sidebar.
+    pub(super) edit: Option<GroupEdit>,
+    /// A group waiting for "Delete?" to be confirmed.
+    pub(super) confirm_delete: Option<i64>,
+}
+
+impl Organizing {
+    pub(super) fn new(groups: Groups) -> Self {
+        Self { groups, membership: Membership::default(), membership_dirty: true, edit: None, confirm_delete: None }
+    }
+}
 
 impl BrowserApp {
     /// Applies what the user asked for from the sidebar, a menu, a star, a drop or the pane.
@@ -23,15 +41,15 @@ impl BrowserApp {
                 | GroupCommand::ToggleFavorite(_)
                 | GroupCommand::FinishEdit(_)
         ) {
-            self.follow_focus = true;
+            self.browsing.follow_focus = true;
         }
         match command {
             GroupCommand::Show(id) => self.show_group(Some(id)),
             GroupCommand::Add(id, targets) => {
                 let paths = self.resolve(targets);
-                let added = self.groups.add(id, &paths);
-                self.membership_dirty = true;
-                let name = name_of(&self.groups, id);
+                let added = self.organizing.groups.add(id, &paths);
+                self.organizing.membership_dirty = true;
+                let name = name_of(&self.organizing.groups, id);
                 self.notify(match added {
                     0 if paths.is_empty() => return,
                     0 => format!("Already in {name}"),
@@ -40,10 +58,10 @@ impl BrowserApp {
             }
             GroupCommand::Remove(id, targets) => {
                 let keys: Vec<String> = self.resolve(targets).iter().map(|path| groups::path_key(path)).collect();
-                let removed = self.groups.remove(id, &keys);
-                self.membership_dirty = true;
+                let removed = self.organizing.groups.remove(id, &keys);
+                self.organizing.membership_dirty = true;
                 if removed > 0 {
-                    let name = name_of(&self.groups, id);
+                    let name = name_of(&self.organizing.groups, id);
                     self.notify(format!(
                         "Took {} out of {name}; the files stay where they are",
                         plural(removed, "asset")
@@ -56,42 +74,42 @@ impl BrowserApp {
                     return;
                 }
                 let keys: Vec<String> = paths.iter().map(|path| groups::path_key(path)).collect();
-                if keys.iter().all(|key| self.groups.contains(FAVORITES, key)) {
-                    let removed = self.groups.remove(FAVORITES, &keys);
+                if keys.iter().all(|key| self.organizing.groups.contains(FAVORITES, key)) {
+                    let removed = self.organizing.groups.remove(FAVORITES, &keys);
                     self.notify(format!("Took {} out of Favorites", plural(removed, "asset")));
                 } else {
-                    let added = self.groups.add(FAVORITES, &paths);
+                    let added = self.organizing.groups.add(FAVORITES, &paths);
                     self.notify(format!("Added {} to Favorites", plural(added, "asset")));
                 }
-                self.membership_dirty = true;
+                self.organizing.membership_dirty = true;
             }
             GroupCommand::New(kind, targets) => {
                 let paths = self.resolve(targets);
-                self.edit = Some(GroupEdit::new(kind, self.groups.unused_name(kind), paths));
+                self.organizing.edit = Some(GroupEdit::new(kind, self.organizing.groups.unused_name(kind), paths));
             }
             GroupCommand::StartRename(id) => {
-                self.edit = self.groups.get(id).map(GroupEdit::rename);
+                self.organizing.edit = self.organizing.groups.get(id).map(GroupEdit::rename);
             }
             GroupCommand::FinishEdit(edit) => match edit.id {
                 Some(id) => {
-                    self.groups.rename(id, &edit.name);
+                    self.organizing.groups.rename(id, &edit.name);
                 }
                 None => {
-                    if let Some(id) = self.groups.create(edit.kind, &edit.name) {
-                        let added = self.groups.add(id, &edit.add);
-                        self.membership_dirty = true;
+                    if let Some(id) = self.organizing.groups.create(edit.kind, &edit.name) {
+                        let added = self.organizing.groups.add(id, &edit.add);
+                        self.organizing.membership_dirty = true;
                         if added > 0 {
                             self.notify(format!("Made {} with {}", edit.name.trim(), plural(added, "asset")));
                         }
                     }
                 }
             },
-            GroupCommand::Recolor(id, color) => self.groups.set_color(id, color),
-            GroupCommand::AskDelete(id) => self.confirm_delete = Some(id),
+            GroupCommand::Recolor(id, color) => self.organizing.groups.set_color(id, color),
+            GroupCommand::AskDelete(id) => self.organizing.confirm_delete = Some(id),
             GroupCommand::RemoveMissing(id) => {
-                let keys = self.membership.missing.get(&id).cloned().unwrap_or_default();
-                let removed = self.groups.remove(id, &keys);
-                self.membership_dirty = true;
+                let keys = self.organizing.membership.missing.get(&id).cloned().unwrap_or_default();
+                let removed = self.organizing.groups.remove(id, &keys);
+                self.organizing.membership_dirty = true;
                 self.notify(format!("Took out {} that weren't found", plural(removed, "missing asset")));
             }
         }
@@ -99,9 +117,9 @@ impl BrowserApp {
 
     /// "Delete this collection?" The files are never touched.
     pub(super) fn delete_dialog(&mut self, ctx: &egui::Context) {
-        let Some(id) = self.confirm_delete else { return };
-        let Some(group) = self.groups.get(id) else {
-            self.confirm_delete = None;
+        let Some(id) = self.organizing.confirm_delete else { return };
+        let Some(group) = self.organizing.groups.get(id) else {
+            self.organizing.confirm_delete = None;
             return;
         };
         let (name, noun, count) = (group.name.clone(), group.kind.noun(), group.members.len());
@@ -136,16 +154,16 @@ impl BrowserApp {
         }
         match decision {
             Some(true) => {
-                if self.groups.delete(id) {
-                    self.membership_dirty = true;
-                    if self.group == Some(id) {
+                if self.organizing.groups.delete(id) {
+                    self.organizing.membership_dirty = true;
+                    if self.browsing.group == Some(id) {
                         self.show_group(None);
                     }
                     self.notify(format!("Deleted the {noun} \u{201c}{name}\u{201d}"));
                 }
-                self.confirm_delete = None;
+                self.organizing.confirm_delete = None;
             }
-            Some(false) => self.confirm_delete = None,
+            Some(false) => self.organizing.confirm_delete = None,
             None => {}
         }
     }

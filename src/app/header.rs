@@ -22,7 +22,7 @@ impl BrowserApp {
         egui::Panel::top("header").frame(frame).show(ui, |ui| {
             ui.horizontal(|ui| {
                 // The library's folders: click for the list, to go to one, add one or take one out.
-                let (glyph, name) = match self.roots.as_slice() {
+                let (glyph, name) = match self.folders.roots.as_slice() {
                     [] => (icon::FOLDER_PLUS, "Add a folder".to_owned()),
                     [root] => (icon::FOLDER_SIMPLE, folder_name(root)),
                     roots => (icon::FOLDERS, format!("{} folders", roots.len())),
@@ -34,12 +34,12 @@ impl BrowserApp {
                 let response = ui.add(button);
                 match &self.library {
                     Some(library) => {
-                        let paths: Vec<String> = self.roots.iter().map(|root| platform::native(root)).collect();
+                        let paths: Vec<String> = self.folders.roots.iter().map(|root| platform::native(root)).collect();
                         let response = response.on_hover_text(format!(
                             "{}\nClick to go to a folder, add one or take one out",
                             paths.join("\n")
                         ));
-                        let kinds = self.mode.kinds();
+                        let kinds = self.browsing.mode.kinds();
                         egui::Popup::menu(&response).show(|ui| {
                             action = crate::ui::folders::library_menu(ui, library, kinds);
                         });
@@ -85,40 +85,50 @@ impl BrowserApp {
                         tooltip: tip,
                     })
                     .collect();
-                if let Some(index) = widgets::segmented(ui, ui.id().with("modes"), &segments, self.mode.index()) {
+                if let Some(index) =
+                    widgets::segmented(ui, ui.id().with("modes"), &segments, self.browsing.mode.index())
+                {
                     self.set_mode(Mode::ALL[index]);
                 }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let settings_tip = format!("Settings{}", keymap::hint(ui.ctx(), Action::Settings));
-                    if widgets::icon_button(ui, icon::GEAR_SIX, &settings_tip, self.settings.open).clicked() {
-                        self.settings.open = true;
+                    if widgets::icon_button(ui, icon::GEAR_SIX, &settings_tip, self.preferences.settings.open).clicked()
+                    {
+                        self.preferences.settings.open = true;
                     }
                     widgets::divider(ui);
                     let inspector_tip = format!(
                         "{} the preview pane{}",
-                        if self.show_inspector { "Hide" } else { "Show" },
+                        if self.chrome.show_inspector { "Hide" } else { "Show" },
                         keymap::hint(ui.ctx(), Action::TogglePane)
                     );
-                    if widgets::icon_button(ui, icon::SIDEBAR_SIMPLE, &inspector_tip, self.show_inspector).clicked() {
-                        self.show_inspector = !self.show_inspector;
+                    if widgets::icon_button(ui, icon::SIDEBAR_SIMPLE, &inspector_tip, self.chrome.show_inspector)
+                        .clicked()
+                    {
+                        self.chrome.show_inspector = !self.chrome.show_inspector;
                     }
                     widgets::divider(ui);
                     let layout = self.mode_view().layout;
                     let list_tip = format!("List{}", keymap::hint(ui.ctx(), Action::List));
                     if widgets::icon_button(ui, icon::LIST, &list_tip, layout == ViewLayout::List).clicked() {
                         self.mode_view_mut().layout = ViewLayout::List;
-                        self.scroll_to_focus = true;
+                        self.browsing.scroll_to_focus = true;
                     }
                     let grid_tip = format!("Grid{}", keymap::hint(ui.ctx(), Action::Grid));
                     if widgets::icon_button(ui, icon::SQUARES_FOUR, &grid_tip, layout == ViewLayout::Grid).clicked() {
                         self.mode_view_mut().layout = ViewLayout::Grid;
-                        self.scroll_to_focus = true;
+                        self.browsing.scroll_to_focus = true;
                     }
                     widgets::divider(ui);
                     let width = (ui.available_width() - 8.0).clamp(140.0, 340.0);
-                    if widgets::search_field(ui, &mut self.query, width, std::mem::take(&mut self.focus_search)) {
-                        self.view_dirty = true;
+                    if widgets::search_field(
+                        ui,
+                        &mut self.browsing.query,
+                        width,
+                        std::mem::take(&mut self.chrome.focus_search),
+                    ) {
+                        self.browsing.view_dirty = true;
                     }
                 });
             });

@@ -37,8 +37,8 @@ impl BrowserApp {
     /// Opens the settings at `page`; `None` closes them. (Also for `src/bin/shots.rs`.)
     pub fn show_settings(&mut self, page: Option<crate::ui::settings::Page>) {
         match page {
-            Some(page) => self.settings.open_at(page),
-            None => self.settings.open = false,
+            Some(page) => self.preferences.settings.open_at(page),
+            None => self.preferences.settings.open = false,
         }
     }
 
@@ -46,7 +46,7 @@ impl BrowserApp {
     /// (Also for `src/bin/shots.rs`.)
     pub fn show_whats_new(&mut self, every_version: bool) {
         let Ok(current) = semver::Version::parse(&self.updates.version()) else { return };
-        self.whats_new = Some(if every_version {
+        self.preferences.whats_new = Some(if every_version {
             WhatsNew::every_version(current)
         } else {
             WhatsNew::since(semver::Version::new(0, 0, 0), current)
@@ -54,7 +54,7 @@ impl BrowserApp {
     }
 
     pub fn hide_whats_new(&mut self) {
-        self.whats_new = None;
+        self.preferences.whats_new = None;
     }
 
     /// Shows what `view` says, with its asset selected but not played. For `src/bin/shots`.
@@ -66,7 +66,7 @@ impl BrowserApp {
         }
         let group = view.group.and_then(|name| match name {
             groups::UNCATEGORIZED_NAME => Some(UNCATEGORIZED),
-            name => self.groups.all().iter().find(|group| group.name == name).map(|group| group.id),
+            name => self.organizing.groups.all().iter().find(|group| group.name == name).map(|group| group.id),
         });
         let folder = (self.library.as_ref().zip(view.folder)).and_then(|(library, folder)| {
             let lower = folder.to_lowercase();
@@ -77,8 +77,8 @@ impl BrowserApp {
             (None, Some(dir)) => self.select_dir(dir as u32),
             (None, None) => self.select_dir(self.library.as_ref().map_or(0, Library::home)),
         }
-        if self.query != view.query {
-            view.query.clone_into(&mut self.query);
+        if self.browsing.query != view.query {
+            view.query.clone_into(&mut self.browsing.query);
         }
         if let Some(sort) = view.sort {
             let in_group = self.in_group_order();
@@ -91,7 +91,7 @@ impl BrowserApp {
             Some(index) => selection.only(index as u32),
             None => selection.clear(),
         }
-        self.view_dirty = true;
-        self.scroll_to_focus = true;
+        self.browsing.view_dirty = true;
+        self.browsing.scroll_to_focus = true;
     }
 }

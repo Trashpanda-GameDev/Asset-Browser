@@ -18,10 +18,10 @@ impl BrowserApp {
     pub(super) fn toolbar(&mut self, ui: &mut egui::Ui) {
         let Some(library) = &self.library else { return };
         // A folder's path, or the group's name with what's not here.
-        let crumbs: Vec<(u32, String)> = match self.group {
+        let crumbs: Vec<(u32, String)> = match self.browsing.group {
             Some(_) => Vec::new(),
             None => library
-                .dir_chain(self.selected_dir)
+                .dir_chain(self.browsing.selected_dir)
                 .into_iter()
                 // "All folders" only with several.
                 .filter(|&dir| dir >= library.home())
@@ -29,20 +29,22 @@ impl BrowserApp {
                 .collect(),
         };
         // `None` for the kind is Uncategorized.
-        let group_title = match self.group {
+        let group_title = match self.browsing.group {
             Some(UNCATEGORIZED) => Some((None, groups::UNCATEGORIZED_NAME.to_owned(), 0)),
-            Some(id) => self.groups.get(id).map(|group| (Some(group.kind), group.name.clone(), group.color)),
+            Some(id) => self.organizing.groups.get(id).map(|group| (Some(group.kind), group.name.clone(), group.color)),
             None => None,
         };
-        let missing = self.group.and_then(|id| self.membership.missing.get(&id)).map_or(0, Vec::len);
-        let elsewhere = self.group.and_then(|id| self.membership.elsewhere.get(&id)).copied().unwrap_or(0);
+        let missing =
+            self.browsing.group.and_then(|id| self.organizing.membership.missing.get(&id)).map_or(0, Vec::len);
+        let elsewhere =
+            self.browsing.group.and_then(|id| self.organizing.membership.elsewhere.get(&id)).copied().unwrap_or(0);
         let outside = match library.roots() {
             [root] => root.name.clone(),
             _ => "the library's folders".to_owned(),
         };
-        let mode = self.mode;
+        let mode = self.browsing.mode;
         let in_group = self.in_group_order();
-        let shown = self.view.len();
+        let shown = self.browsing.view.len();
         let mut go_to = None;
         let mut command = None;
         ui.horizontal(|ui| {
@@ -85,7 +87,7 @@ impl BrowserApp {
                 }
             }
             ui.add_space(10.0);
-            let view = &mut self.modes[mode.index()];
+            let view = &mut self.browsing.modes[mode.index()];
             let mut count = format!("{} {}", grouped(shown), if shown == 1 { "item" } else { "items" });
             if view.selection.len() > 1 {
                 count.push_str(&format!(" · {} selected", grouped(view.selection.len())));
@@ -95,7 +97,7 @@ impl BrowserApp {
             }
             ui.label(RichText::new(count).size(12.0).color(theme::TEXT_FAINT));
             if missing > 0
-                && let Some(id) = self.group
+                && let Some(id) = self.browsing.group
             {
                 ui.add_space(6.0);
                 let text = RichText::new(format!("{}  {} missing", icon::WARNING, grouped(missing)))
@@ -125,7 +127,7 @@ impl BrowserApp {
                     for &option in options {
                         if ui.selectable_label(option == sort, option.label()).clicked() {
                             view.set_order(in_group, option, option.starts_descending());
-                            self.view_dirty = true;
+                            self.browsing.view_dirty = true;
                             ui.close();
                         }
                     }
@@ -135,7 +137,7 @@ impl BrowserApp {
                     {
                         if ui.selectable_label(descending == down, format!("{glyph}  {label}")).clicked() {
                             view.set_order(in_group, sort, down);
-                            self.view_dirty = true;
+                            self.browsing.view_dirty = true;
                             ui.close();
                         }
                     }

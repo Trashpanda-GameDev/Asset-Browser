@@ -26,11 +26,11 @@ impl BrowserApp {
                 ui,
                 |ui| {
                     let sidebar = Sidebar {
-                        groups: &self.groups,
-                        membership: &self.membership,
-                        kinds: self.mode.kinds(),
-                        viewing: self.group,
-                        edit: &mut self.edit,
+                        groups: &self.organizing.groups,
+                        membership: &self.organizing.membership,
+                        kinds: self.browsing.mode.kinds(),
+                        viewing: self.browsing.group,
+                        edit: &mut self.organizing.edit,
                     };
                     commands = sidebar.show(ui);
                 },
@@ -58,8 +58,8 @@ impl BrowserApp {
                 return;
             };
             // No folder is highlighted while a group is browsed.
-            let selected = if self.group.is_some() { u32::MAX } else { self.selected_dir };
-            if let Some(asked) = self.folders.show(ui, library, self.mode.kinds(), selected) {
+            let selected = if self.browsing.group.is_some() { u32::MAX } else { self.browsing.selected_dir };
+            if let Some(asked) = self.chrome.folder_tree.show(ui, library, self.browsing.mode.kinds(), selected) {
                 action = Some(asked);
             }
         });
@@ -95,7 +95,7 @@ impl BrowserApp {
                 }
             }
             FolderAction::RemoveRoot(path) => {
-                if let Some(index) = self.roots.iter().position(|root| *root == path) {
+                if let Some(index) = self.folders.roots.iter().position(|root| *root == path) {
                     self.remove_root(index);
                 }
             }

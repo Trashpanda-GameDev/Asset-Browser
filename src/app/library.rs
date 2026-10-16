@@ -4,11 +4,14 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crossbeam_channel::{Receiver, Sender};
+
 use eframe::egui;
 
 use crate::library::{self, Library, folder_name, path_key, root_string};
-use crate::rescan::{self, Rescanned};
+use crate::rescan::{self, Rescanned, ScanTotals};
 use crate::scan::ScannedFile;
+use crate::watch::Watch;
 use crate::{db, diag, folder_index, platform, work};
 
 use super::BrowserApp;
@@ -25,16 +28,50 @@ pub(super) struct ScanDone {
     version: u64,
 }
 
+/// The folders the library is made of, scanning them and watching them for changes.
+pub(super) struct Folders {
+    /// In the order they were added.
+    pub(super) roots: Vec<PathBuf>,
+    /// Counts the libraries put in, so a scan can tell whether the one it started from is current.
+    pub(super) library_version: u64,
+    pub(super) index_note: Option<String>,
+    pub(super) scan_tx: Sender<ScanDone>,
+    pub(super) scan_rx: Receiver<ScanDone>,
+    /// Scans running.
+    pub(super) scans: usize,
+    /// Told by the OS when files change in the library's folders, to rescan them.
+    pub(super) watch: Watch,
+    pub(super) scan_started: Instant,
+    pub(super) last_scan: Option<ScanTotals>,
+}
+
+impl Folders {
+    pub(super) fn new(watch: Watch) -> Self {
+        let (scan_tx, scan_rx) = crossbeam_channel::unbounded();
+        Self {
+            roots: Vec::new(),
+            library_version: 0,
+            index_note: None,
+            scan_tx,
+            scan_rx,
+            scans: 0,
+            watch,
+            scan_started: Instant::now(),
+            last_scan: None,
+        }
+    }
+}
+
 impl BrowserApp {
     /// Shows the library's folders from the cached index at once, then rescans them all in the
     /// background. `start` (from the command line) is added to them, or shown if it's in already.
     pub(super) fn open_library(&mut self, start: Option<PathBuf>) {
-        self.roots = self.saved_roots();
+        self.folders.roots = self.saved_roots();
         let mut show = None;
         if let Some(path) = start {
             let path = std::path::absolute(&path).unwrap_or(path);
             if path.is_dir() {
-                if library::add_root(&mut self.roots, path.clone()).is_ok() {
+                if library::add_root(&mut self.folders.roots, path.clone()).is_ok() {
                     self.save_roots();
                 }
                 show = Some(path_key(&path));
@@ -44,16 +81,16 @@ impl BrowserApp {
         }
         let start = Instant::now();
         let files: Vec<(PathBuf, Vec<ScannedFile>)> =
-            self.roots.iter().map(|root| (root.clone(), self.cached_index(root))).collect();
+            self.folders.roots.iter().map(|root| (root.clone(), self.cached_index(root))).collect();
         if !files.is_empty() {
             self.set_library(Some(Library::build(files)));
-            self.index_note = Some(format!("Index from cache in {} ms", start.elapsed().as_millis()));
+            self.folders.index_note = Some(format!("Index from cache in {} ms", start.elapsed().as_millis()));
         }
         if let Some(dir) = show.and_then(|key| self.library.as_ref()?.find_dir(&key)) {
             self.select_dir(dir);
         }
         self.update_title();
-        self.scan(self.roots.clone());
+        self.scan(self.folders.roots.clone());
     }
 
     /// The library's folders as saved; the first time, the one folder that was open before the
@@ -91,7 +128,7 @@ impl BrowserApp {
 
     pub(super) fn save_roots(&self) {
         if let Some(user) = &self.user_conn
-            && let Err(err) = db::save_roots(user, &self.roots)
+            && let Err(err) = db::save_roots(user, &self.folders.roots)
         {
             diag::report("Saving the library's folders", err);
         }
@@ -110,7 +147,7 @@ impl BrowserApp {
     }
 
     pub(super) fn update_title(&self) {
-        let title = match self.roots.as_slice() {
+        let title = match self.folders.roots.as_slice() {
             [] => "Asset Browser".to_owned(),
             [root] => format!("Asset Browser - {}", platform::native(root)),
             roots => {
@@ -129,13 +166,13 @@ impl BrowserApp {
             return;
         }
         let name = folder_name(&path);
-        match library::add_root(&mut self.roots, path.clone()) {
+        match library::add_root(&mut self.folders.roots, path.clone()) {
             Err(index) => {
                 if let Some(dir) = self.library.as_ref().and_then(|library| library.find_dir(&path_key(&path))) {
                     self.select_dir(dir);
                 }
-                let root = folder_name(&self.roots[index]);
-                self.notify(if path_key(&path) == path_key(&self.roots[index]) {
+                let root = folder_name(&self.folders.roots[index]);
+                self.notify(if path_key(&path) == path_key(&self.folders.roots[index]) {
                     format!("{root} is in the library already")
                 } else {
                     format!("{name} is in {root}, which is in the library already")
@@ -163,10 +200,10 @@ impl BrowserApp {
     /// Takes a folder out of the library. Its files, and the favorites, collections and
     /// categories they're in, are untouched: adding it back brings them all back.
     pub(super) fn remove_root(&mut self, index: usize) {
-        if index >= self.roots.len() {
+        if index >= self.folders.roots.len() {
             return;
         }
-        let removed = self.roots.remove(index);
+        let removed = self.folders.roots.remove(index);
         self.save_roots();
         self.rebuild_library(Vec::new());
         self.update_title();
@@ -176,7 +213,8 @@ impl BrowserApp {
     /// The files each folder of the library has now, with `fresh` (newly scanned or loaded)
     /// taking the place of what a folder had.
     fn current_files(&self, mut fresh: Vec<(PathBuf, Vec<ScannedFile>)>) -> Vec<(PathBuf, Vec<ScannedFile>)> {
-        self.roots
+        self.folders
+            .roots
             .iter()
             .map(|root| {
                 let files = match fresh.iter().position(|(path, _)| path == root) {
@@ -195,40 +233,40 @@ impl BrowserApp {
 
     /// Builds the library again after its folders changed (on this thread: it's a user's action).
     pub(super) fn rebuild_library(&mut self, fresh: Vec<(PathBuf, Vec<ScannedFile>)>) {
-        let library = (!self.roots.is_empty()).then(|| Library::build(self.current_files(fresh)));
+        let library = (!self.folders.roots.is_empty()).then(|| Library::build(self.current_files(fresh)));
         self.set_library(library);
     }
 
     /// Puts in a new library, keeping the selections, the folder and the playing sound: entry
     /// indices change, keys don't.
     pub(super) fn set_library(&mut self, library: Option<Library>) {
-        self.library_version += 1;
-        self.follow_focus = false;
+        self.folders.library_version += 1;
+        self.browsing.follow_focus = false;
         match (&self.library, &library) {
             (Some(old), Some(new)) => {
                 let new_index = new.index_by_key();
                 let old_keys: Vec<i64> = old.entries().iter().map(|entry| entry.key).collect();
-                for view in &mut self.modes {
+                for view in &mut self.browsing.modes {
                     view.selection.remap(&old_keys, &new_index);
                 }
-                let dir = old.dirs().get(self.selected_dir as usize).and_then(|dir| new.find_dir(&dir.key));
+                let dir = old.dirs().get(self.browsing.selected_dir as usize).and_then(|dir| new.find_dir(&dir.key));
                 // The top only shows with several folders.
-                self.selected_dir = dir.unwrap_or(new.home()).max(new.home());
+                self.browsing.selected_dir = dir.unwrap_or(new.home()).max(new.home());
                 self.sound.remap(&new_index);
             }
-            (None, Some(new)) => self.selected_dir = new.home(),
+            (None, Some(new)) => self.browsing.selected_dir = new.home(),
             (_, None) => {
-                for view in &mut self.modes {
+                for view in &mut self.browsing.modes {
                     view.selection.clear();
                 }
-                self.selected_dir = 0;
+                self.browsing.selected_dir = 0;
                 self.sound.reset();
             }
         }
         self.library = library;
         self.previews.forget_wanted();
-        self.view_dirty = true;
-        self.membership_dirty = true;
+        self.browsing.view_dirty = true;
+        self.organizing.membership_dirty = true;
     }
 
     /// Scans `targets` (some of the library's folders) in the background, then builds the
@@ -237,15 +275,16 @@ impl BrowserApp {
         if targets.is_empty() {
             return;
         }
-        let roots = self.roots.clone();
+        let roots = self.folders.roots.clone();
         let others: Vec<(PathBuf, Vec<ScannedFile>)> = self
+            .folders
             .roots
             .iter()
             .filter(|root| !targets.contains(root))
             .map(|root| (root.clone(), self.files_now(root)))
             .collect();
-        let version = self.library_version;
-        let tx = self.scan_tx.clone();
+        let version = self.folders.library_version;
+        let tx = self.folders.scan_tx.clone();
         let db_path = self.db_path.clone();
         let ctx = self.ctx.clone();
         let spawned = work::spawn("scan", move || {
@@ -255,34 +294,34 @@ impl BrowserApp {
             ctx.request_repaint();
         });
         if spawned.is_some() {
-            if self.scans == 0 {
-                self.scan_started = Instant::now();
+            if self.folders.scans == 0 {
+                self.folders.scan_started = Instant::now();
             }
-            self.scans += 1;
+            self.folders.scans += 1;
         }
     }
 
     /// Rescans the folders whose files changed while the app was open, once the changes settle.
     pub(super) fn poll_watch(&mut self, ctx: &egui::Context) {
-        self.watch.sync(&self.roots);
-        let changed = self.watch.poll();
+        self.folders.watch.sync(&self.folders.roots);
+        let changed = self.folders.watch.poll();
         self.scan(changed);
-        if let Some(due) = self.watch.next_due() {
+        if let Some(due) = self.folders.watch.next_due() {
             ctx.request_repaint_after(due);
         }
     }
 
     pub(super) fn poll_scans(&mut self) {
-        while let Ok(ScanDone { rescanned: done, version }) = self.scan_rx.try_recv() {
-            self.scans = self.scans.saturating_sub(1);
-            self.last_scan = Some(done.totals);
+        while let Ok(ScanDone { rescanned: done, version }) = self.folders.scan_rx.try_recv() {
+            self.folders.scans = self.folders.scans.saturating_sub(1);
+            self.folders.last_scan = Some(done.totals);
             for root in &done.scanned {
-                self.folders.unreadable.remove(&path_key(root));
+                self.chrome.folder_tree.unreadable.remove(&path_key(root));
             }
             for root in &done.unreadable {
-                self.folders.unreadable.insert(path_key(root));
+                self.chrome.folder_tree.unreadable.insert(path_key(root));
             }
-            let current = version == self.library_version && done.roots == self.roots;
+            let current = version == self.folders.library_version && done.roots == self.folders.roots;
             let library = match done.built {
                 Ok(library) if current => Some(library),
                 built => {
@@ -297,7 +336,7 @@ impl BrowserApp {
                             .collect(),
                         Err(found) => found,
                     };
-                    (!self.roots.is_empty()).then(|| Library::build(self.current_files(found)))
+                    (!self.folders.roots.is_empty()).then(|| Library::build(self.current_files(found)))
                 }
             };
             let unchanged = match (&self.library, &library) {

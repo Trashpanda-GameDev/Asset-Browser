@@ -14,15 +14,15 @@ const TOAST_TIME: Duration = Duration::from_millis(2600);
 
 impl BrowserApp {
     pub(super) fn notify(&mut self, text: String) {
-        self.toast = Some((text, Instant::now()));
+        self.chrome.toast = Some((text, Instant::now()));
     }
 
     /// The brief confirmation at the bottom of the window.
     pub(super) fn draw_toast(&mut self, ctx: &egui::Context) {
-        let Some((text, at)) = &self.toast else { return };
+        let Some((text, at)) = &self.chrome.toast else { return };
         let age = at.elapsed();
         if age > TOAST_TIME {
-            self.toast = None;
+            self.chrome.toast = None;
             return;
         }
         let fade = 1.0 - ((age.as_secs_f32() - (TOAST_TIME.as_secs_f32() - 0.4)) / 0.4).clamp(0.0, 1.0);

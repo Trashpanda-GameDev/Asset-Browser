@@ -9,11 +9,11 @@ use eframe::egui;
 use crate::changelog;
 use crate::library::SortBy;
 use crate::memory;
-use crate::storage::Part;
+use crate::storage::{Measurement, Part};
 use crate::ui::image_view::{Backdrop, ImageView};
 use crate::ui::keymap::Keymap;
 use crate::ui::mode::{Layout as ViewLayout, Mode, ModeView};
-use crate::ui::settings::{Command, SettingsArgs};
+use crate::ui::settings::{Command, Settings, SettingsArgs};
 use crate::ui::whats_new::WhatsNew;
 use crate::{db, diag, paths, platform};
 
@@ -29,10 +29,34 @@ pub(super) struct Clearing {
     done: Receiver<Result<(), String>>,
 }
 
+/// The settings window, what it sets, and what it has under way.
+pub(super) struct Preferences {
+    pub(super) settings: Settings,
+    pub(super) keymap: Keymap,
+    pub(super) memory_mb: u64,
+    pub(super) whats_new: Option<WhatsNew>,
+    pub(super) clearing: Option<Clearing>,
+    /// The Storage page's measure of the files.
+    pub(super) storage: Measurement,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            settings: Settings::default(),
+            keymap: Keymap::default(),
+            memory_mb: memory::DEFAULT_MB,
+            whats_new: None,
+            clearing: None,
+            storage: Measurement::default(),
+        }
+    }
+}
+
 impl BrowserApp {
     /// Shares the memory limit out among what the app keeps (`memory`).
     pub(super) fn apply_memory(&mut self) {
-        let shares = memory::apply(self.memory_mb);
+        let shares = memory::apply(self.preferences.memory_mb);
         self.previews.set_max_textures(shares.thumbnails);
     }
 
@@ -46,7 +70,7 @@ impl BrowserApp {
         if let changelog::AtStart::Since(seen) =
             changelog::at_start(changelog::releases(), seen.as_deref(), used_before, &current)
         {
-            self.whats_new = Some(WhatsNew::since(seen, current.clone()));
+            self.preferences.whats_new = Some(WhatsNew::since(seen, current.clone()));
         }
         let remembered = changelog::remembered(seen.as_deref(), &current);
         if let Err(err) = db::set_setting(conn, SETTING_WHATS_NEW, &remembered.to_string()) {
@@ -65,23 +89,23 @@ impl BrowserApp {
 
     /// The settings window, and doing what's asked in it.
     pub(super) fn settings_window(&mut self, ctx: &egui::Context) {
-        if !self.settings.open {
+        if !self.preferences.settings.open {
             return;
         }
-        self.storage.poll();
+        self.preferences.storage.poll();
         let (user_path, log_path) = (paths::user_data_file(), paths::log_file());
         let args = SettingsArgs {
             updates: &self.updates,
-            keymap: &self.keymap,
-            memory_mb: self.memory_mb,
-            clearing: self.clearing.is_some(),
+            keymap: &self.preferences.keymap,
+            memory_mb: self.preferences.memory_mb,
+            clearing: self.preferences.clearing.is_some(),
             cache_path: &self.db_path,
             user_path: &user_path,
             log_path: &log_path,
-            usage: self.storage.usage(),
-            measuring: self.storage.is_measuring(),
+            usage: self.preferences.storage.usage(),
+            measuring: self.preferences.storage.is_measuring(),
         };
-        for command in self.settings.show(ctx, &args) {
+        for command in self.preferences.settings.show(ctx, &args) {
             self.run_settings_command(ctx, command);
         }
     }
@@ -93,24 +117,24 @@ impl BrowserApp {
             Command::RestartToUpdate => self.restart_to_update(),
             Command::WhatsNew => {
                 if let Ok(current) = semver::Version::parse(&self.updates.version()) {
-                    self.whats_new = Some(WhatsNew::every_version(current));
+                    self.preferences.whats_new = Some(WhatsNew::every_version(current));
                 }
             }
             Command::SetShortcut(action, shortcut) => {
-                self.settings.keys_note = self.keymap.set(action, shortcut).and_then(|other| {
+                self.preferences.settings.keys_note = self.preferences.keymap.set(action, shortcut).and_then(|other| {
                     let shortcut = shortcut?.label(ctx);
                     Some(format!("{shortcut} was for “{}”, which has no shortcut now.", other.label()))
                 });
                 self.save_settings();
             }
             Command::ResetShortcuts => {
-                self.keymap = Keymap::default();
-                self.settings.keys_note = None;
+                self.preferences.keymap = Keymap::default();
+                self.preferences.settings.keys_note = None;
                 self.save_settings();
             }
             Command::Clear(parts) => self.clear(parts),
             Command::SetMemory(mb) => {
-                self.memory_mb = mb.clamp(memory::MIN_MB, memory::MAX_MB);
+                self.preferences.memory_mb = mb.clamp(memory::MIN_MB, memory::MAX_MB);
                 self.apply_memory();
                 self.save_settings();
             }
@@ -127,7 +151,7 @@ impl BrowserApp {
             Command::Measure => {
                 let ctx = ctx.clone();
                 let wake = std::sync::Arc::new(move || ctx.request_repaint());
-                self.storage.start(self.db_path.clone(), paths::user_data_file(), wake);
+                self.preferences.storage.start(self.db_path.clone(), paths::user_data_file(), wake);
             }
         }
     }
@@ -139,15 +163,15 @@ impl BrowserApp {
             match part {
                 // A clear the file refused is reported, and nothing changes.
                 Part::Groups => {
-                    if self.groups.clear() {
-                        self.group = None;
-                        self.membership_dirty = true;
-                        self.view_dirty = true;
+                    if self.organizing.groups.clear() {
+                        self.browsing.group = None;
+                        self.organizing.membership_dirty = true;
+                        self.browsing.view_dirty = true;
                     }
                 }
                 Part::SheetChoices => self.inspector.sheet.forget_choices(),
                 Part::LibraryFolders => {
-                    self.roots.clear();
+                    self.folders.roots.clear();
                     self.save_roots();
                     self.set_library(None);
                     self.update_title();
@@ -157,16 +181,16 @@ impl BrowserApp {
         }
         let cache: Vec<Part> = parts.into_iter().filter(|part| !part.in_user_data()).collect();
         if cache.is_empty() {
-            self.storage.forget();
+            self.preferences.storage.forget();
             self.notify("Cleared".to_owned());
             return;
         }
         let done = self.thumbs.clear(cache.clone());
-        self.clearing = Some(Clearing { parts: cache, done });
+        self.preferences.clearing = Some(Clearing { parts: cache, done });
     }
 
     pub(super) fn poll_clearing(&mut self) {
-        let Some(clearing) = &self.clearing else { return };
+        let Some(clearing) = &self.preferences.clearing else { return };
         let result = match clearing.done.try_recv() {
             Ok(result) => result,
             Err(crossbeam_channel::TryRecvError::Empty) => {
@@ -176,8 +200,8 @@ impl BrowserApp {
             Err(crossbeam_channel::TryRecvError::Disconnected) => Err("the cache writer stopped".to_owned()),
         };
         let parts = clearing.parts.clone();
-        self.clearing = None;
-        self.storage.forget();
+        self.preferences.clearing = None;
+        self.preferences.storage.forget();
         if let Err(err) = result {
             diag::report("Clearing the cache", err);
             return;
@@ -188,7 +212,7 @@ impl BrowserApp {
             self.reset_settings();
         }
         if has(Part::Index) {
-            self.scan(self.roots.clone());
+            self.scan(self.folders.roots.clone());
         }
         self.notify("Cleared".to_owned());
     }
@@ -197,11 +221,11 @@ impl BrowserApp {
         let Some(conn) = &self.conn else { return };
         let get = |key: &str| db::get_setting(conn, key);
         if let Some(mode) = get("ui.mode").as_deref().and_then(Mode::from_key) {
-            self.mode = mode;
+            self.browsing.mode = mode;
         }
-        self.show_inspector = get("ui.inspector").is_none_or(|value| value == "1");
+        self.chrome.show_inspector = get("ui.inspector").is_none_or(|value| value == "1");
         for mode in Mode::ALL {
-            let view = &mut self.modes[mode.index()];
+            let view = &mut self.browsing.modes[mode.index()];
             let key = |name: &str| format!("ui.{}.{name}", mode.key());
             match get(&key("layout")).as_deref() {
                 Some("grid") => view.layout = ViewLayout::Grid,
@@ -232,23 +256,23 @@ impl BrowserApp {
         }
         self.inspector.viewport.auto_rotate = get("model.turntable").is_some_and(|value| value == "1");
         self.inspector.viewport.wireframe = get("model.wireframe").is_some_and(|value| value == "1");
-        self.keymap = Keymap::load(get);
-        self.memory_mb = get(SETTING_MEMORY)
+        self.preferences.keymap = Keymap::load(get);
+        self.preferences.memory_mb = get(SETTING_MEMORY)
             .and_then(|value| value.parse::<u64>().ok())
             .map_or(memory::DEFAULT_MB, |mb| mb.clamp(memory::MIN_MB, memory::MAX_MB));
     }
 
     /// Everything the settings hold back to how it started, after they were cleared.
     fn reset_settings(&mut self) {
-        self.mode = Mode::All;
-        self.modes = Mode::ALL.map(ModeView::new);
-        self.show_inspector = true;
+        self.browsing.mode = Mode::All;
+        self.browsing.modes = Mode::ALL.map(ModeView::new);
+        self.chrome.show_inspector = true;
         self.sound.volume = 0.8;
         self.inspector.image.backdrop = ImageView::default().backdrop;
         // The rest have their defaults where nothing is saved.
         self.load_settings();
         self.apply_memory();
-        self.view_dirty = true;
+        self.browsing.view_dirty = true;
         // Cleared settings aren't a first install: no "What's new" next time.
         if let (Some(conn), Ok(current)) = (&self.conn, semver::Version::parse(&self.updates.version()))
             && let Err(err) = db::set_setting(conn, SETTING_WHATS_NEW, &current.to_string())
@@ -261,8 +285,8 @@ impl BrowserApp {
         let Some(conn) = &self.conn else { return };
         let flag = |on: bool| if on { "1" } else { "0" };
         let mut settings = vec![
-            ("ui.mode".to_owned(), self.mode.key().to_owned()),
-            ("ui.inspector".to_owned(), flag(self.show_inspector).to_owned()),
+            ("ui.mode".to_owned(), self.browsing.mode.key().to_owned()),
+            ("ui.inspector".to_owned(), flag(self.chrome.show_inspector).to_owned()),
             ("sound.autoplay".to_owned(), flag(self.sound.autoplay).to_owned()),
             ("sound.loop".to_owned(), flag(self.sound.looping).to_owned()),
             ("sound.volume".to_owned(), format!("{:.3}", self.sound.volume)),
@@ -271,7 +295,7 @@ impl BrowserApp {
             ("model.wireframe".to_owned(), flag(self.inspector.viewport.wireframe).to_owned()),
         ];
         for mode in Mode::ALL {
-            let view = &self.modes[mode.index()];
+            let view = &self.browsing.modes[mode.index()];
             let key = |name: &str| format!("ui.{}.{name}", mode.key());
             let layout = match view.layout {
                 ViewLayout::Grid => "grid",
@@ -284,10 +308,10 @@ impl BrowserApp {
             settings.push((key("group_sort"), view.group_sort.key().to_owned()));
             settings.push((key("group_descending"), flag(view.group_descending).to_owned()));
         }
-        settings.push((SETTING_MEMORY.to_owned(), self.memory_mb.to_string()));
+        settings.push((SETTING_MEMORY.to_owned(), self.preferences.memory_mb.to_string()));
         // Shortcuts are saved only where they differ from the defaults.
         let mut defaults = Vec::new();
-        for (key, value) in self.keymap.settings() {
+        for (key, value) in self.preferences.keymap.settings() {
             match value {
                 Some(value) => settings.push((key, value)),
                 None => defaults.push(key),

@@ -28,114 +28,64 @@ mod view;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, Sender};
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use rusqlite::Connection;
 
-use crate::groups::{Groups, Membership};
+use crate::groups::Groups;
 use crate::library::Library;
-use crate::memory;
-use crate::rescan::ScanTotals;
-use crate::storage::Measurement;
 use crate::thumbs::ThumbService;
 use crate::ui::folders::FolderTree;
 use crate::ui::inspector::Inspector;
-use crate::ui::keymap::{self, Keymap};
-use crate::ui::mode::{Mode, ModeView};
-use crate::ui::organize::{self, GroupEdit};
+use crate::ui::keymap::{self};
+use crate::ui::organize::{self};
 use crate::ui::previews::Previews;
-use crate::ui::settings::Settings;
 use crate::ui::sound::Sound;
 use crate::ui::theme;
-use crate::ui::whats_new::WhatsNew;
 use crate::updates::Updates;
 use crate::watch::Watch;
 use crate::{db, diag, paths, work};
-use deleting::{DeleteRequest, Deleting};
-use library::ScanDone;
-use settings::Clearing;
+use deleting::Deletion;
+use library::Folders;
+use organizing::Organizing;
+use settings::Preferences;
+use view::Browsing;
 
 pub use crate::ui::format::{format_size, format_time, grouped};
 pub use screenshots::ScreenshotView;
 
-#[expect(clippy::struct_excessive_bools, reason = "refactor: bools that are states become enums")]
 pub struct BrowserApp {
     ctx: egui::Context,
     db_path: PathBuf,
     conn: Option<Connection>,
     /// The user data file, for the library's folders.
     user_conn: Option<Connection>,
-    thumbs: ThumbService,
     render_state: Option<RenderState>,
-    /// The folders the library is made of, in the order they were added.
-    roots: Vec<PathBuf>,
     /// `None` when there are no folders.
     library: Option<Library>,
-    /// Counts the libraries put in, so a scan can tell whether the one it started from is current.
-    library_version: u64,
-    index_note: Option<String>,
-    scan_tx: Sender<ScanDone>,
-    scan_rx: Receiver<ScanDone>,
-    /// Scans running.
-    scans: usize,
-    /// Told by the OS when files change in the library's folders, to rescan them.
-    watch: Watch,
-    scan_started: Instant,
-    last_scan: Option<ScanTotals>,
+    folders: Folders,
+    browsing: Browsing,
+    organizing: Organizing,
+    deletion: Deletion,
+    preferences: Preferences,
+    chrome: Chrome,
 
-    mode: Mode,
-    modes: [ModeView; 4],
-    /// Indices into `library.entries()` shown for the mode, folder and search, in display order.
-    view: Vec<u32>,
-    view_dirty: bool,
-    selected_dir: u32,
-    query: String,
-    focus_search: bool,
-    show_inspector: bool,
-    folders: FolderTree,
-
+    thumbs: ThumbService,
     previews: Previews,
     inspector: Inspector,
     sound: Sound,
     updates: Updates,
-    /// The settings window, and what it sets.
-    settings: Settings,
-    keymap: Keymap,
-    memory_mb: u64,
-    whats_new: Option<WhatsNew>,
-    clearing: Option<Clearing>,
-    /// The Storage page's measure of the files.
-    storage: Measurement,
+}
 
-    /// Favorites, collections and categories, and where their members are in the library.
-    groups: Groups,
-    membership: Membership,
-    membership_dirty: bool,
-    /// Browsing one of them instead of the folder.
-    group: Option<i64>,
-    /// A group being named in the sidebar.
-    edit: Option<GroupEdit>,
-    /// A group waiting for "Delete?" to be confirmed.
-    confirm_delete: Option<i64>,
-    /// Files or a folder waiting for "Delete?" to be confirmed, and a deletion under way.
-    confirm_files: Option<DeleteRequest>,
-    deleting: Option<Deleting>,
+/// The window's own state: whether the pane is shown, the search box, the toast, the folder tree.
+pub(super) struct Chrome {
+    show_inspector: bool,
+    focus_search: bool,
     toast: Option<(String, Instant)>,
-    /// The membership changed by the user's hand: an asset that leaves the group being browsed
-    /// hands the focus on to the next one.
-    follow_focus: bool,
-
-    /// Assets per row and rows per screen in the current view, for the keyboard.
-    columns: usize,
-    page_rows: usize,
-    /// The current view's scroll offset and height, last frame.
-    scroll: (f32, f32),
-    scroll_to_focus: bool,
+    folder_tree: FolderTree,
 }
 
 impl BrowserApp {
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub fn new(cc: &eframe::CreationContext<'_>, start_root: Option<PathBuf>) -> Self {
         theme::apply(&cc.egui_ctx);
         theme::color_title_bar(&cc.egui_ctx, cc);
@@ -152,7 +102,6 @@ impl BrowserApp {
                 diag::report(&format!("The library's folders can't be saved ({})", user_path.display()), err)
             })
             .ok();
-        let (scan_tx, scan_rx) = crossbeam_channel::unbounded();
         let updates = {
             let ctx = cc.egui_ctx.clone();
             Updates::start(std::sync::Arc::new(move || ctx.request_repaint()))
@@ -167,51 +116,24 @@ impl BrowserApp {
             db_path,
             conn,
             user_conn,
-            thumbs,
             render_state: cc.wgpu_render_state.clone(),
-            roots: Vec::new(),
             library: None,
-            library_version: 0,
-            index_note: None,
-            scan_tx,
-            scan_rx,
-            scans: 0,
-            watch,
-            scan_started: Instant::now(),
-            last_scan: None,
-            mode: Mode::All,
-            modes: Mode::ALL.map(ModeView::new),
-            view: Vec::new(),
-            view_dirty: false,
-            selected_dir: 0,
-            query: String::new(),
-            focus_search: false,
-            show_inspector: true,
-            folders: FolderTree::default(),
+            folders: Folders::new(watch),
+            browsing: Browsing::default(),
+            organizing: Organizing::new(Groups::open(&paths::user_data_file())),
+            deletion: Deletion::default(),
+            preferences: Preferences::default(),
+            chrome: Chrome {
+                show_inspector: true,
+                focus_search: false,
+                toast: None,
+                folder_tree: FolderTree::default(),
+            },
+            thumbs,
             previews: Previews::new(&cc.egui_ctx),
             inspector: Inspector::new(&cc.egui_ctx, &paths::user_data_file()),
             sound: Sound::start(&cc.egui_ctx),
             updates,
-            settings: Settings::default(),
-            keymap: Keymap::default(),
-            memory_mb: memory::DEFAULT_MB,
-            whats_new: None,
-            clearing: None,
-            storage: Measurement::default(),
-            groups: Groups::open(&paths::user_data_file()),
-            membership: Membership::default(),
-            membership_dirty: true,
-            group: None,
-            edit: None,
-            confirm_delete: None,
-            confirm_files: None,
-            deleting: None,
-            toast: None,
-            follow_focus: false,
-            columns: 1,
-            page_rows: 1,
-            scroll: (0.0, 0.0),
-            scroll_to_focus: false,
         };
         app.load_settings();
         app.apply_memory();
@@ -225,7 +147,7 @@ impl eframe::App for BrowserApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         // For the tooltips that name a shortcut.
-        keymap::publish(&ctx, &self.keymap);
+        keymap::publish(&ctx, &self.preferences.keymap);
         self.previews.begin_frame();
         self.poll_scans();
         self.poll_deleting();
@@ -236,19 +158,19 @@ impl eframe::App for BrowserApp {
         self.previews.drain(&self.thumbs, &ctx);
         self.inspector.poll(&ctx);
         self.refresh_membership();
-        if self.view_dirty {
+        if self.browsing.view_dirty {
             self.rebuild_view();
         }
         self.handle_keys(&ctx);
         self.header(ui);
         self.status_bar(ui);
-        if !self.show_inspector {
+        if !self.chrome.show_inspector {
             self.player_bar(ui);
         }
         self.folder_panel(ui);
         self.inspector_panel(ui);
         self.refresh_membership();
-        if self.view_dirty {
+        if self.browsing.view_dirty {
             self.rebuild_view();
         }
         self.central(ui);
@@ -259,10 +181,10 @@ impl eframe::App for BrowserApp {
         self.delete_dialog(&ctx);
         self.delete_files_dialog(&ctx);
         self.settings_window(&ctx);
-        if let Some(whats_new) = &mut self.whats_new
+        if let Some(whats_new) = &mut self.preferences.whats_new
             && !whats_new.show(&ctx)
         {
-            self.whats_new = None;
+            self.preferences.whats_new = None;
         }
         self.draw_toast(&ctx);
         organize::drag_indicator(&ctx);

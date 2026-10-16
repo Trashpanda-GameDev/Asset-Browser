@@ -53,10 +53,17 @@ pub(super) struct Deleting {
     after: AfterDelete,
 }
 
+/// Files or a folder waiting for "Delete?" to be confirmed, and a deletion under way.
+#[derive(Default)]
+pub(super) struct Deletion {
+    pub(super) confirm_files: Option<DeleteRequest>,
+    pub(super) deleting: Option<Deleting>,
+}
+
 impl BrowserApp {
     /// "Delete these?" for the selection: the Delete key, or the asset menu.
     pub(super) fn ask_to_delete_selection(&mut self) {
-        if self.deleting.is_some() {
+        if self.deletion.deleting.is_some() {
             self.notify("Still deleting the last ones…".to_owned());
             return;
         }
@@ -87,21 +94,21 @@ impl BrowserApp {
         // The asset after them takes the selection afterwards, or else the one before.
         let chosen: HashSet<u32> = items.iter().copied().collect();
         let focus = self.mode_view().selection.focus;
-        let at = focus.and_then(|focus| self.view.iter().position(|&index| index == focus)).unwrap_or(0);
-        let next = self.view[at..]
+        let at = focus.and_then(|focus| self.browsing.view.iter().position(|&index| index == focus)).unwrap_or(0);
+        let next = self.browsing.view[at..]
             .iter()
-            .chain(self.view[..at].iter().rev())
+            .chain(self.browsing.view[..at].iter().rev())
             .find(|index| !chosen.contains(index))
             .map(|&index| entry(index).key);
         let what = match names.as_slice() {
             [name] if items.len() == 1 => format!("\u{201c}{name}\u{201d}"),
             _ => plural(items.len(), "file"),
         };
-        self.confirm_files = Some(DeleteRequest {
+        self.deletion.confirm_files = Some(DeleteRequest {
             title: format!("Delete {what}?"),
             details,
             permanent: !paths.iter().all(|path| platform::has_trash(path)),
-            group: self.group.filter(|&id| id != UNCATEGORIZED),
+            group: self.browsing.group.filter(|&id| id != UNCATEGORIZED),
             after: AfterDelete { next, ..AfterDelete::default() },
             paths,
             what,
@@ -111,7 +118,7 @@ impl BrowserApp {
     /// "Delete this folder?" from its menu in the tree. The library's own folders are only ever
     /// taken out of the library (`remove_root`), never deleted from here.
     pub(super) fn ask_to_delete_folder(&mut self, dir: u32) {
-        if self.deleting.is_some() {
+        if self.deletion.deleting.is_some() {
             self.notify("Still deleting the last ones…".to_owned());
             return;
         }
@@ -125,7 +132,7 @@ impl BrowserApp {
         let parent =
             node.parent.and_then(|parent| library.dirs().get(parent as usize)).map(|parent| parent.key.clone());
         let what = format!("the folder \u{201c}{}\u{201d}", node.name);
-        self.confirm_files = Some(DeleteRequest {
+        self.deletion.confirm_files = Some(DeleteRequest {
             title: format!("Delete {what}?"),
             details: format!(
                 "Everything in it goes with it: {} and any other files.",
@@ -147,9 +154,10 @@ impl BrowserApp {
             TakeOut(i64),
             Cancel,
         }
-        let Some(request) = &self.confirm_files else { return };
+        let Some(request) = &self.deletion.confirm_files else { return };
         let bin = platform::trash_name();
-        let group = request.group.and_then(|id| self.groups.get(id)).map(|group| (group.id, group.name.clone()));
+        let group =
+            request.group.and_then(|id| self.organizing.groups.get(id)).map(|group| (group.id, group.name.clone()));
         let mut choice = None;
         let modal = egui::Modal::new(egui::Id::new("delete-files")).show(ctx, |ui| {
             ui.set_width(420.0);
@@ -190,7 +198,7 @@ impl BrowserApp {
             choice = Some(Choice::Cancel);
         }
         let Some(choice) = choice else { return };
-        let Some(request) = self.confirm_files.take() else { return };
+        let Some(request) = self.deletion.confirm_files.take() else { return };
         match choice {
             Choice::Delete => self.start_deleting(request),
             Choice::TakeOut(id) => self.run_group_command(GroupCommand::Remove(id, Targets::Paths(request.paths))),
@@ -210,17 +218,18 @@ impl BrowserApp {
         }
         let ctx = self.ctx.clone();
         let rx = deletion::start(request.paths, move || ctx.request_repaint());
-        self.deleting = Some(Deleting { rx, what: request.what, permanent: request.permanent, after: request.after });
+        self.deletion.deleting =
+            Some(Deleting { rx, what: request.what, permanent: request.permanent, after: request.after });
     }
 
     /// Takes in a finished deletion: drops what went from the library, moves to what's next, and
     /// says how it went.
     pub(super) fn poll_deleting(&mut self) {
-        let Some(job) = self.deleting.take() else { return };
+        let Some(job) = self.deletion.deleting.take() else { return };
         let deleted = match job.rx.try_recv() {
             Ok(deleted) => deleted,
             Err(crossbeam_channel::TryRecvError::Empty) => {
-                self.deleting = Some(job);
+                self.deletion.deleting = Some(job);
                 return;
             }
             // The thread couldn't start (that's reported) or died.
@@ -232,8 +241,9 @@ impl BrowserApp {
         if !deleted.gone.is_empty() {
             // Browsing the deleted folder, or one inside it: its parent is shown instead.
             let browsing_it = job.after.folder.as_ref().is_some_and(|folder| {
-                let shown = self.library.as_ref().and_then(|library| library.dirs().get(self.selected_dir as usize));
-                self.group.is_none()
+                let shown =
+                    self.library.as_ref().and_then(|library| library.dirs().get(self.browsing.selected_dir as usize));
+                self.browsing.group.is_none()
                     && shown.is_some_and(|dir| dir.key == *folder || dir.key.starts_with(&format!("{folder}/")))
             });
             self.forget_paths(&deleted.gone);
@@ -245,7 +255,7 @@ impl BrowserApp {
             // The asset after the deleted ones takes the selection, as in a file manager. The view
             // is rebuilt first: it held indices into the old library.
             self.refresh_membership();
-            if self.view_dirty {
+            if self.browsing.view_dirty {
                 self.rebuild_view();
             }
             let next = job.after.next.and_then(|key| {
@@ -253,10 +263,10 @@ impl BrowserApp {
                 library.entries().iter().position(|entry| entry.key == key).map(|index| index as u32)
             });
             if self.mode_view().selection.is_empty()
-                && let Some(index) = next.filter(|index| self.view.contains(index))
+                && let Some(index) = next.filter(|index| self.browsing.view.contains(index))
             {
                 self.mode_view_mut().selection.only(index);
-                self.scroll_to_focus = true;
+                self.browsing.scroll_to_focus = true;
                 self.focused(index);
             }
         }
