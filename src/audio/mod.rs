@@ -33,6 +33,13 @@ pub use waveform::{Waveform, waveform};
 /// Decoded audio kept ready ahead of the playhead: rides out a slow disk read without a gap.
 const BUFFER_SECONDS: f32 = 2.0;
 
+/// How samples come: frames a second, and samples per frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Format {
+    rate: u32,
+    channels: usize,
+}
+
 /// Where a sound's bytes come from.
 pub enum Source {
     File(PathBuf),
@@ -117,7 +124,7 @@ impl Player {
         let (commands, receiver) = crossbeam_channel::unbounded();
         let decoder_shared = shared.clone();
         work::spawn("audio-decoder", move || {
-            decoder_loop(&decoder_shared, producer, &receiver, rate, channels, &*on_change);
+            decoder_loop(&decoder_shared, producer, &receiver, Format { rate, channels }, &*on_change);
         })
         .ok_or("the sound decoder couldn't start")?;
         Ok(Self { shared, commands, device_rate: rate, device_name, _stream: stream })

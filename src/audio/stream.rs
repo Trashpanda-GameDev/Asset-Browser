@@ -10,7 +10,7 @@ use symphonia::core::io::{MediaSource, MediaSourceStream, MediaSourceStreamOptio
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::{Time, TimeBase};
 
-use super::Source;
+use super::{Format, Source};
 
 /// One sound being decoded, packet by packet.
 pub(super) struct SoundStream {
@@ -48,9 +48,8 @@ impl SoundStream {
         Ok(Self { format, decoder, track_id, time_base, duration, samples: Vec::new() })
     }
 
-    /// Decodes the next packet into `samples`. Returns its (sample rate, channels), or `None`
-    /// at the end.
-    pub(super) fn next(&mut self) -> Result<Option<(u32, usize)>, String> {
+    /// Decodes the next packet into `samples`. Returns its format, or `None` at the end.
+    pub(super) fn next(&mut self) -> Result<Option<Format>, String> {
         loop {
             let packet = match self.format.next_packet() {
                 Ok(Some(packet)) => packet,
@@ -67,7 +66,7 @@ impl SoundStream {
                     if decoded.frames() == 0 {
                         continue;
                     }
-                    let spec = (decoded.spec().rate(), decoded.spec().channels().count());
+                    let spec = Format { rate: decoded.spec().rate(), channels: decoded.spec().channels().count() };
                     decoded.copy_to_vec_interleaved(&mut self.samples);
                     return Ok(Some(spec));
                 }

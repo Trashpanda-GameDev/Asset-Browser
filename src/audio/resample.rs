@@ -1,5 +1,7 @@
 //! Decoded audio to the device's channels and sample rate.
 
+use super::Format;
+
 /// Converts decoded audio to the device's channel count and sample rate. Linear interpolation:
 /// plenty for auditioning, and cheap enough to never hold up playback.
 #[derive(Default)]
@@ -12,16 +14,10 @@ pub(super) struct Resampler {
 }
 
 impl Resampler {
-    #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
-    pub(super) fn process(
-        &mut self,
-        input: &[f32],
-        in_channels: usize,
-        in_rate: u32,
-        out_channels: usize,
-        out_rate: u32,
-        out: &mut Vec<f32>,
-    ) {
+    /// Converts `input`, in `from`'s format, to `to`'s, into `out`.
+    pub(super) fn process(&mut self, input: &[f32], from: Format, to: Format, out: &mut Vec<f32>) {
+        let (in_channels, in_rate) = (from.channels, from.rate);
+        let (out_channels, out_rate) = (to.channels, to.rate);
         out.clear();
         if in_channels == 0 {
             return;

@@ -3,8 +3,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use super::Source;
 use super::stream::SoundStream;
+use super::{Format, Source};
 
 /// Points stored per waveform. Enough for a wide player; tiles use fewer.
 const WAVEFORM_POINTS: usize = 512;
@@ -31,7 +31,7 @@ pub fn waveform(path: &Path) -> Result<Waveform, String> {
     let mut current = [f32::MAX, f32::MIN];
     let (mut in_block, mut frames) = (0usize, 0u64);
     let (mut sample_rate, mut channels) = (0u32, 0usize);
-    while let Some((rate, packet_channels)) = stream.next()? {
+    while let Some(Format { rate, channels: packet_channels }) = stream.next()? {
         (sample_rate, channels) = (rate, packet_channels);
         for frame in stream.samples.chunks_exact(packet_channels.max(1)) {
             for &sample in frame {

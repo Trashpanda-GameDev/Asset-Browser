@@ -8,135 +8,199 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, TryRecvError};
 
 use super::resample::Resampler;
 use super::stream::SoundStream;
-use super::{Command, Info, Shared};
+use super::{Command, Format, Info, Shared, Source};
 use crate::{diag, work};
 
-#[expect(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    reason = "refactor: take fewer, grouped arguments; split into named steps"
-)]
+/// Runs the decoder thread until the player is dropped.
 pub(super) fn decoder_loop(
     shared: &Shared,
-    mut buffer: rtrb::Producer<f32>,
+    buffer: rtrb::Producer<f32>,
     commands: &Receiver<Command>,
-    rate: u32,
-    channels: usize,
+    device: Format,
     on_change: &(dyn Fn() + Send + Sync),
 ) {
-    let mut current: Option<(SoundStream, Resampler)> = None;
-    let mut ended = false;
-    let mut pending: Vec<f32> = Vec::new();
-    let mut pending_at = 0;
-    let mut awaiting_first: Option<Instant> = None;
-    loop {
-        // Sleep until told something when there's nothing to decode; while the buffer is full,
-        // wake every few ms to top it up; otherwise only check for commands in passing.
-        let command = if current.is_none() || ended {
-            match commands.recv() {
-                Ok(command) => Some(command),
-                Err(_) => return,
+    Decoder::new(shared, buffer, device, on_change).run(commands);
+}
+
+/// What the decoder thread holds between packets.
+struct Decoder<'a> {
+    shared: &'a Shared,
+    buffer: rtrb::Producer<f32>,
+    /// What everything is converted to: the device's rate and channels.
+    device: Format,
+    /// Runs when what `Player::now` reports changes other than by the playhead moving.
+    on_change: &'a (dyn Fn() + Send + Sync),
+    /// The sound being decoded, and its conversion to the device.
+    current: Option<(SoundStream, Resampler)>,
+    /// Decoded to its end (and not looping): nothing to do until the next command.
+    ended: bool,
+    /// Converted samples that didn't fit in the buffer yet, from `pending_at` on.
+    pending: Vec<f32>,
+    pending_at: usize,
+    /// When the sound was asked for, until its first audio is in the buffer.
+    awaiting_first: Option<Instant>,
+}
+
+/// What the decoder does next.
+enum Next {
+    Command(Command),
+    /// No command: carry on with the sound.
+    Nothing,
+    /// The player was dropped.
+    PlayerGone,
+}
+
+impl<'a> Decoder<'a> {
+    fn new(
+        shared: &'a Shared,
+        buffer: rtrb::Producer<f32>,
+        device: Format,
+        on_change: &'a (dyn Fn() + Send + Sync),
+    ) -> Self {
+        Self {
+            shared,
+            buffer,
+            device,
+            on_change,
+            current: None,
+            ended: false,
+            pending: Vec::new(),
+            pending_at: 0,
+            awaiting_first: None,
+        }
+    }
+
+    fn run(mut self, commands: &Receiver<Command>) {
+        loop {
+            match self.next(commands) {
+                Next::Command(command) => self.obey(command),
+                Next::Nothing if self.has_pending() => self.push_pending(),
+                Next::Nothing => self.decode_packet(),
+                Next::PlayerGone => return,
             }
-        } else if pending_at < pending.len() && buffer.slots() == 0 {
+        }
+    }
+
+    /// Sleeps until told something when there's nothing to decode; while the buffer is full,
+    /// wakes every few ms to top it up; otherwise only checks for a command in passing.
+    fn next(&self, commands: &Receiver<Command>) -> Next {
+        if self.current.is_none() || self.ended {
+            commands.recv().map_or(Next::PlayerGone, Next::Command)
+        } else if self.has_pending() && self.buffer.slots() == 0 {
             match commands.recv_timeout(Duration::from_millis(5)) {
-                Ok(command) => Some(command),
-                Err(RecvTimeoutError::Timeout) => None,
-                Err(RecvTimeoutError::Disconnected) => return,
+                Ok(command) => Next::Command(command),
+                Err(RecvTimeoutError::Timeout) => Next::Nothing,
+                Err(RecvTimeoutError::Disconnected) => Next::PlayerGone,
             }
         } else {
             match commands.try_recv() {
-                Ok(command) => Some(command),
-                Err(TryRecvError::Empty) => None,
-                Err(TryRecvError::Disconnected) => return,
+                Ok(command) => Next::Command(command),
+                Err(TryRecvError::Empty) => Next::Nothing,
+                Err(TryRecvError::Disconnected) => Next::PlayerGone,
             }
-        };
-
-        if let Some(command) = command {
-            flush(shared, &buffer);
-            pending.clear();
-            pending_at = 0;
-            ended = false;
-            shared.decoder_done.store(false, Ordering::Release);
-            shared.finished.store(false, Ordering::Release);
-            match command {
-                Command::Play { key, source, extension, requested } => {
-                    shared.paused.store(false, Ordering::Relaxed);
-                    let mut info = Info { key: Some(key), ..Info::default() };
-                    match SoundStream::open(source, &extension) {
-                        Ok(stream) => {
-                            info.duration = stream.duration;
-                            current = Some((stream, Resampler::default()));
-                            awaiting_first = Some(requested);
-                        }
-                        Err(err) => {
-                            // Shown under the player; logged too, like every error the window shows.
-                            diag::note("Playing a sound", &err);
-                            info.error = Some(err);
-                            current = None;
-                            shared.finished.store(true, Ordering::Release);
-                        }
-                    }
-                    shared.played_frames.store(0, Ordering::Relaxed);
-                    *work::lock(&shared.info) = info;
-                }
-                Command::Seek(seconds) => {
-                    if let Some((stream, resampler)) = &mut current {
-                        let result = stream.seek(seconds);
-                        *resampler = Resampler::default();
-                        let mut info = work::lock(&shared.info);
-                        match result {
-                            Ok(at) => info.start = at,
-                            Err(err) => {
-                                diag::note("Seeking in a sound", &err);
-                                info.error = Some(err);
-                            }
-                        }
-                        shared.played_frames.store(0, Ordering::Relaxed);
-                    }
-                }
-                Command::Stop => {
-                    current = None;
-                    shared.played_frames.store(0, Ordering::Relaxed);
-                    *work::lock(&shared.info) = Info::default();
-                }
-            }
-            on_change();
-            continue;
         }
+    }
 
-        let Some((stream, resampler)) = current.as_mut() else { continue };
-        if pending_at < pending.len() {
-            let (pushed, _) = buffer.push_partial_slice(&pending[pending_at..]);
-            pending_at += pushed.len();
-            if !pushed.is_empty()
-                && let Some(requested) = awaiting_first.take()
-            {
-                work::lock(&shared.info).ready_ms = Some(requested.elapsed().as_secs_f32() * 1000.0);
-                on_change();
-            }
-            continue;
+    /// Drops what's buffered, then does what the player asked.
+    fn obey(&mut self, command: Command) {
+        flush(self.shared, &self.buffer);
+        self.pending.clear();
+        self.pending_at = 0;
+        self.ended = false;
+        self.shared.decoder_done.store(false, Ordering::Release);
+        self.shared.finished.store(false, Ordering::Release);
+        match command {
+            Command::Play { key, source, extension, requested } => self.play(key, source, &extension, requested),
+            Command::Seek(seconds) => self.seek(seconds),
+            Command::Stop => self.stop(),
         }
+        (self.on_change)();
+    }
+
+    fn play(&mut self, key: i64, source: Source, extension: &str, requested: Instant) {
+        self.shared.paused.store(false, Ordering::Relaxed);
+        let mut info = Info { key: Some(key), ..Info::default() };
+        match SoundStream::open(source, extension) {
+            Ok(stream) => {
+                info.duration = stream.duration;
+                self.current = Some((stream, Resampler::default()));
+                self.awaiting_first = Some(requested);
+            }
+            Err(err) => {
+                // Shown under the player; logged too, like every error the window shows.
+                diag::note("Playing a sound", &err);
+                info.error = Some(err);
+                self.current = None;
+                self.shared.finished.store(true, Ordering::Release);
+            }
+        }
+        self.shared.played_frames.store(0, Ordering::Relaxed);
+        *work::lock(&self.shared.info) = info;
+    }
+
+    fn seek(&mut self, seconds: f64) {
+        let Some((stream, resampler)) = &mut self.current else { return };
+        let result = stream.seek(seconds);
+        *resampler = Resampler::default();
+        let mut info = work::lock(&self.shared.info);
+        match result {
+            Ok(at) => info.start = at,
+            Err(err) => {
+                diag::note("Seeking in a sound", &err);
+                info.error = Some(err);
+            }
+        }
+        self.shared.played_frames.store(0, Ordering::Relaxed);
+    }
+
+    fn stop(&mut self) {
+        self.current = None;
+        self.shared.played_frames.store(0, Ordering::Relaxed);
+        *work::lock(&self.shared.info) = Info::default();
+    }
+
+    fn has_pending(&self) -> bool {
+        self.pending_at < self.pending.len()
+    }
+
+    /// Moves what fits of the converted samples into the buffer. The first time for a sound, says
+    /// how long it took to be ready.
+    fn push_pending(&mut self) {
+        let (pushed, _) = self.buffer.push_partial_slice(&self.pending[self.pending_at..]);
+        self.pending_at += pushed.len();
+        if !pushed.is_empty()
+            && let Some(requested) = self.awaiting_first.take()
+        {
+            work::lock(&self.shared.info).ready_ms = Some(requested.elapsed().as_secs_f32() * 1000.0);
+            (self.on_change)();
+        }
+    }
+
+    /// Decodes and converts the next packet; at the end, starts over when looping, or is done.
+    fn decode_packet(&mut self) {
+        let Some((stream, resampler)) = self.current.as_mut() else { return };
         match stream.next() {
-            Ok(Some((source_rate, source_channels))) => {
-                resampler.process(&stream.samples, source_channels, source_rate, channels, rate, &mut pending);
-                pending_at = 0;
+            Ok(Some(source)) => {
+                resampler.process(&stream.samples, source, self.device, &mut self.pending);
+                self.pending_at = 0;
             }
-            Ok(None) if shared.looping.load(Ordering::Relaxed) && stream.seek(0.0).is_ok() => {
+            Ok(None) if self.shared.looping.load(Ordering::Relaxed) && stream.seek(0.0).is_ok() => {
                 // Carry on from the start without flushing, so the loop has no gap.
                 *resampler = Resampler::default();
             }
-            Ok(None) => {
-                ended = true;
-                shared.decoder_done.store(true, Ordering::Release);
-            }
+            Ok(None) => self.end(),
             Err(err) => {
                 diag::note("Playing a sound", &err);
-                work::lock(&shared.info).error = Some(err);
-                ended = true;
-                shared.decoder_done.store(true, Ordering::Release);
-                on_change();
+                work::lock(&self.shared.info).error = Some(err);
+                self.end();
+                (self.on_change)();
             }
         }
+    }
+
+    fn end(&mut self) {
+        self.ended = true;
+        self.shared.decoder_done.store(true, Ordering::Release);
     }
 }
 
@@ -213,7 +277,7 @@ mod tests {
         let thread = {
             let (shared, changes) = (shared.clone(), changes.clone());
             std::thread::spawn(move || {
-                decoder_loop(&shared, producer, &receiver, DEVICE_RATE, 2, &move || {
+                decoder_loop(&shared, producer, &receiver, Format { rate: DEVICE_RATE, channels: 2 }, &move || {
                     changes.fetch_add(1, Ordering::Relaxed);
                 });
             })
