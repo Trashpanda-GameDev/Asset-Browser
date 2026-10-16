@@ -161,3 +161,138 @@ fn flush(shared: &Shared, buffer: &rtrb::Producer<f32>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    use crossbeam_channel::Sender;
+
+    use super::*;
+    use crate::audio::Source;
+
+    const DEVICE_RATE: u32 = 48_000;
+
+    /// A mono 16-bit WAV: `frames` frames of a slow ramp at `rate`.
+    fn wav(rate: u32, frames: u32) -> Arc<[u8]> {
+        let data: Vec<u8> = (0..frames).flat_map(|i| ((i % 1000) as i16 * 20).to_le_bytes()).collect();
+        let mut out = Vec::new();
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"WAVEfmt ");
+        out.extend_from_slice(&16u32.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&rate.to_le_bytes());
+        out.extend_from_slice(&(rate * 2).to_le_bytes());
+        out.extend_from_slice(&2u16.to_le_bytes());
+        out.extend_from_slice(&16u16.to_le_bytes());
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&data);
+        out.into()
+    }
+
+    struct Running {
+        shared: Arc<Shared>,
+        commands: Sender<Command>,
+        buffer: rtrb::Consumer<f32>,
+        changes: Arc<AtomicUsize>,
+        thread: std::thread::JoinHandle<()>,
+    }
+
+    /// The decoder on its own thread, feeding a stereo buffer with room for 2 s, with no device
+    /// reading it.
+    fn start() -> Running {
+        let shared = Arc::new(Shared::default());
+        let (producer, buffer) = rtrb::RingBuffer::new(DEVICE_RATE as usize * 2 * 2);
+        let (commands, receiver) = crossbeam_channel::unbounded();
+        let changes = Arc::new(AtomicUsize::new(0));
+        let thread = {
+            let (shared, changes) = (shared.clone(), changes.clone());
+            std::thread::spawn(move || {
+                decoder_loop(&shared, producer, &receiver, DEVICE_RATE, 2, &move || {
+                    changes.fetch_add(1, Ordering::Relaxed);
+                });
+            })
+        };
+        Running { shared, commands, buffer, changes, thread }
+    }
+
+    fn wait_for(what: &str, done: impl Fn() -> bool) {
+        let until = Instant::now() + Duration::from_secs(10);
+        while !done() {
+            assert!(Instant::now() < until, "waited too long for {what}");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn play(running: &Running, key: i64) {
+        let source = Source::Memory(wav(24_000, 2_400));
+        let requested = Instant::now();
+        running.commands.send(Command::Play { key, source, extension: "wav".to_owned(), requested }).unwrap();
+    }
+
+    #[test]
+    fn a_sound_is_decoded_into_the_buffer_and_its_end_is_told() {
+        let mut running = start();
+        play(&running, 7);
+        wait_for("the end", || running.shared.decoder_done.load(Ordering::Acquire));
+        // 0.1 s of mono at 24 kHz is 0.1 s of stereo at 48 kHz, but for the last frame, which
+        // the interpolation has no next frame for.
+        let samples = running.buffer.slots();
+        assert!((9_500..=9_600).contains(&samples), "{samples} samples");
+        let first = running.buffer.read_chunk(4).unwrap();
+        let (left, right) = (first.as_slices().0[0], first.as_slices().0[1]);
+        assert!(left.abs() < 1e-3 && (left - right).abs() < 1e-6, "mono goes to both speakers");
+        first.commit_all();
+        let info = work::lock(&running.shared.info).clone();
+        assert_eq!(info.key, Some(7));
+        assert!(info.duration.is_some_and(|duration| (duration - 0.1).abs() < 1e-6), "{:?}", info.duration);
+        assert!(info.ready_ms.is_some() && info.error.is_none());
+        assert!(running.changes.load(Ordering::Relaxed) >= 2, "told on starting and once audio was ready");
+        assert!(!running.shared.finished.load(Ordering::Acquire), "finished is the device's to say");
+
+        drop(running.commands);
+        running.thread.join().unwrap();
+    }
+
+    #[test]
+    fn seeking_starts_again_from_there() {
+        let mut running = start();
+        play(&running, 1);
+        wait_for("the end", || running.shared.decoder_done.load(Ordering::Acquire));
+        // Played, as a device would have, so the seek has nothing buffered to drop.
+        let played = running.buffer.slots();
+        running.buffer.read_chunk(played).unwrap().commit_all();
+        running.commands.send(Command::Seek(0.05)).unwrap();
+        wait_for("the seek", || {
+            work::lock(&running.shared.info).start > 0.0 && running.shared.decoder_done.load(Ordering::Acquire)
+        });
+        // It lands on the start of the packet that holds 0.05 s (WAV packets are 1,152 frames).
+        let start = work::lock(&running.shared.info).start;
+        assert!((0.04..=0.05).contains(&start), "at or just before: {start}");
+        // From there to the end: 1,248 of the 2,400 frames, twice over at 48 kHz, in stereo.
+        let samples = running.buffer.slots();
+        assert!((4_900..=5_050).contains(&samples), "{samples} samples");
+        assert_eq!(running.shared.played_frames.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn stopping_forgets_the_sound_and_a_bad_file_is_an_error() {
+        let running = start();
+        play(&running, 3);
+        wait_for("the end", || running.shared.decoder_done.load(Ordering::Acquire));
+        running.commands.send(Command::Stop).unwrap();
+        wait_for("the stop", || work::lock(&running.shared.info).key.is_none());
+
+        let source = Source::Memory(Arc::from(&b"not a sound"[..]));
+        let requested = Instant::now();
+        running.commands.send(Command::Play { key: 4, source, extension: "wav".to_owned(), requested }).unwrap();
+        wait_for("the error", || work::lock(&running.shared.info).error.is_some());
+        assert_eq!(work::lock(&running.shared.info).key, Some(4));
+        assert!(running.shared.finished.load(Ordering::Acquire), "nothing will play, so it's over");
+    }
+}
