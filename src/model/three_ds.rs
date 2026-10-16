@@ -147,117 +147,22 @@ struct Reader<'a> {
 }
 
 impl Reader<'_> {
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn add_mesh(&mut self, data: &[u8]) {
-        let mut points: Vec<[f32; 3]> = Vec::new();
-        let mut uvs: Vec<[f32; 2]> = Vec::new();
-        let mut faces: Vec<[u32; 3]> = Vec::new();
-        let mut groups: Vec<(String, Vec<u16>)> = Vec::new();
-        let mut smoothing: Vec<u32> = Vec::new();
-        let mut mirrored = false;
-        for chunk in chunks(data) {
-            let data = chunk.data;
-            let count = u16_at(data, 0).unwrap_or(0) as usize;
-            match chunk.id {
-                POINTS => {
-                    points = (0..count)
-                        .map_while(|i| {
-                            Some([f32_at(data, 2 + i * 12)?, f32_at(data, 6 + i * 12)?, f32_at(data, 10 + i * 12)?])
-                        })
-                        .collect();
-                }
-                UVS => {
-                    uvs = (0..count)
-                        .map_while(|i| Some(flip_v([f32_at(data, 2 + i * 8)?, f32_at(data, 6 + i * 8)?])))
-                        .collect();
-                }
-                FACES => {
-                    faces = (0..count)
-                        .map_while(|i| {
-                            let at = 2 + i * 8;
-                            Some([u16_at(data, at)? as u32, u16_at(data, at + 2)? as u32, u16_at(data, at + 4)? as u32])
-                        })
-                        .collect();
-                    let rest = data.get(2 + count * 8..).unwrap_or(&[]);
-                    for sub in chunks(rest) {
-                        match sub.id {
-                            FACE_MATERIAL => {
-                                let (name, list) = cstring(sub.data);
-                                let n = u16_at(list, 0).unwrap_or(0) as usize;
-                                let faces = (0..n).map_while(|i| u16_at(list, 2 + i * 2)).collect();
-                                groups.push((name, faces));
-                            }
-                            SMOOTHING => {
-                                smoothing =
-                                    sub.data.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect();
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                MATRIX => {
-                    // Rows: the X, Y and Z axes, then the origin.
-                    let m: Vec<f32> = (0..9).map_while(|i| f32_at(data, i * 4)).collect();
-                    if let [x0, x1, x2, y0, y1, y2, z0, z1, z2] = m[..] {
-                        mirrored = dot([x0, x1, x2], cross([y0, y1, y2], [z0, z1, z2])) < 0.0;
-                    }
-                }
-                _ => {}
-            }
-        }
-        faces.retain(|face| face.iter().all(|&index| (index as usize) < points.len()));
-        if faces.is_empty() {
+        let mesh = Mesh::read(data);
+        if mesh.faces.is_empty() {
             return;
         }
-        self.points += points.len() as u64;
-
-        // Faces in material order, each group's faces once; faces in no group last.
-        let mut order: Vec<(Option<usize>, u32)> = Vec::with_capacity(faces.len());
-        let mut placed = vec![false; faces.len()];
-        for (group, (_, list)) in groups.iter().enumerate() {
-            for &face in list {
-                if let Some(seen @ false) = placed.get_mut(face as usize).map(|p| *p) {
-                    let _ = seen;
-                    placed[face as usize] = true;
-                    order.push((Some(group), face as u32));
-                }
-            }
-        }
-        order.extend((0..faces.len() as u32).filter(|&face| !placed[face as usize]).map(|face| (None, face)));
-
-        let vertices: Vec<Vertex> = points
-            .iter()
-            .enumerate()
-            .map(|(i, &p)| Vertex {
-                position: z_up_to_y_up(p),
-                normal: [0.0; 3],
-                uv: uvs.get(i).copied().unwrap_or([0.0; 2]),
-                color: [1.0; 4],
-            })
-            .collect();
-        let mut indices = Vec::with_capacity(order.len() * 3);
-        let mut face_groups = Vec::with_capacity(order.len());
-        for &(_, face) in &order {
-            indices.extend(faces[face as usize]);
-            face_groups.push(smoothing.get(face as usize).copied().unwrap_or(0));
-        }
-        // An object mirrored in the editor keeps its faces' winding from before the mirror.
-        if mirrored {
-            geometry::flip_winding(&mut indices);
-        }
-        let smoothing =
-            if smoothing.len() >= faces.len() { Smoothing::Groups(&face_groups) } else { geometry::DEFAULT_CREASE };
-        let (vertices, indices) = geometry::smooth_normals(&vertices, &indices, smoothing);
-
+        self.points += mesh.points.len() as u64;
+        let order = mesh.face_order();
+        let (vertices, indices) = mesh.triangles(&order);
         let base = self.builder.add_vertices(&vertices);
         let mut start = 0;
-        while start < order.len() {
-            let group = order[start].0;
-            let end = start + order[start..].iter().take_while(|(g, _)| *g == group).count();
-            let material = match group {
-                Some(group) => self.material(&groups[group].0),
+        for run in order.chunk_by(|a, b| a.0 == b.0) {
+            let material = match run[0].0 {
+                Some(group) => self.material(&mesh.groups[group].0),
                 None => self.builder.default_material(false),
             };
+            let end = start + run.len();
             self.builder.add_triangles(material, base, &indices[start * 3..end * 3]);
             start = end;
         }
@@ -282,6 +187,131 @@ impl Reader<'_> {
         };
         self.materials.insert(name.to_owned(), index);
         index
+    }
+}
+
+/// A triangle mesh chunk's contents.
+#[derive(Default)]
+struct Mesh {
+    points: Vec<[f32; 3]>,
+    /// One per point.
+    uvs: Vec<[f32; 2]>,
+    faces: Vec<[u32; 3]>,
+    /// Each material's name and the faces drawn with it.
+    groups: Vec<(String, Vec<u16>)>,
+    /// Each face's smoothing groups, a bit per group.
+    smoothing: Vec<u32>,
+    /// Mirrored in the editor, which leaves the faces' winding as it was before the mirror.
+    mirrored: bool,
+}
+
+impl Mesh {
+    /// The mesh as stored, without the faces that name a point it doesn't have.
+    fn read(data: &[u8]) -> Self {
+        let mut mesh = Mesh::default();
+        for chunk in chunks(data) {
+            let data = chunk.data;
+            let count = u16_at(data, 0).unwrap_or(0) as usize;
+            match chunk.id {
+                POINTS => {
+                    mesh.points = (0..count)
+                        .map_while(|i| {
+                            Some([f32_at(data, 2 + i * 12)?, f32_at(data, 6 + i * 12)?, f32_at(data, 10 + i * 12)?])
+                        })
+                        .collect();
+                }
+                UVS => {
+                    mesh.uvs = (0..count)
+                        .map_while(|i| Some(flip_v([f32_at(data, 2 + i * 8)?, f32_at(data, 6 + i * 8)?])))
+                        .collect();
+                }
+                FACES => mesh.read_faces(data, count),
+                MATRIX => {
+                    // Rows: the X, Y and Z axes, then the origin.
+                    let m: Vec<f32> = (0..9).map_while(|i| f32_at(data, i * 4)).collect();
+                    if let [x0, x1, x2, y0, y1, y2, z0, z1, z2] = m[..] {
+                        mesh.mirrored = dot([x0, x1, x2], cross([y0, y1, y2], [z0, z1, z2])) < 0.0;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let points = mesh.points.len();
+        mesh.faces.retain(|face| face.iter().all(|&index| (index as usize) < points));
+        mesh
+    }
+
+    /// The faces, then the chunks after them: the faces each material draws, and the faces'
+    /// smoothing groups.
+    fn read_faces(&mut self, data: &[u8], count: usize) {
+        self.faces = (0..count)
+            .map_while(|i| {
+                let at = 2 + i * 8;
+                Some([u16_at(data, at)? as u32, u16_at(data, at + 2)? as u32, u16_at(data, at + 4)? as u32])
+            })
+            .collect();
+        let rest = data.get(2 + count * 8..).unwrap_or(&[]);
+        for sub in chunks(rest) {
+            match sub.id {
+                FACE_MATERIAL => {
+                    let (name, list) = cstring(sub.data);
+                    let n = u16_at(list, 0).unwrap_or(0) as usize;
+                    let faces = (0..n).map_while(|i| u16_at(list, 2 + i * 2)).collect();
+                    self.groups.push((name, faces));
+                }
+                SMOOTHING => {
+                    self.smoothing = sub.data.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Every face once, in material order, with the group it's drawn with; faces in no group last.
+    fn face_order(&self) -> Vec<(Option<usize>, u32)> {
+        let mut order: Vec<(Option<usize>, u32)> = Vec::with_capacity(self.faces.len());
+        let mut placed = vec![false; self.faces.len()];
+        for (group, (_, list)) in self.groups.iter().enumerate() {
+            for &face in list {
+                if placed.get(face as usize) == Some(&false) {
+                    placed[face as usize] = true;
+                    order.push((Some(group), face as u32));
+                }
+            }
+        }
+        order.extend((0..self.faces.len() as u32).filter(|&face| !placed[face as usize]).map(|face| (None, face)));
+        order
+    }
+
+    /// The vertices, in our space and with normals from the smoothing groups, and the faces in
+    /// `order` as a triangle list.
+    fn triangles(&self, order: &[(Option<usize>, u32)]) -> (Vec<Vertex>, Vec<u32>) {
+        let vertices: Vec<Vertex> = self
+            .points
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| Vertex {
+                position: z_up_to_y_up(p),
+                normal: [0.0; 3],
+                uv: self.uvs.get(i).copied().unwrap_or([0.0; 2]),
+                color: [1.0; 4],
+            })
+            .collect();
+        let mut indices = Vec::with_capacity(order.len() * 3);
+        let mut face_groups = Vec::with_capacity(order.len());
+        for &(_, face) in order {
+            indices.extend(self.faces[face as usize]);
+            face_groups.push(self.smoothing.get(face as usize).copied().unwrap_or(0));
+        }
+        if self.mirrored {
+            geometry::flip_winding(&mut indices);
+        }
+        let smoothing = if self.smoothing.len() >= self.faces.len() {
+            Smoothing::Groups(&face_groups)
+        } else {
+            geometry::DEFAULT_CREASE
+        };
+        geometry::smooth_normals(&vertices, &indices, smoothing)
     }
 }
 
