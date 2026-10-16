@@ -1,4 +1,5 @@
-//! Geometry helpers the loaders share: node transforms, and normals for files that have none.
+//! Geometry helpers the loaders share: node transforms, winding, polygons cut into triangles, and
+//! normals for files that have none.
 
 use std::collections::HashMap;
 
@@ -55,6 +56,26 @@ impl NormalMatrix {
 pub(super) fn determinant(m: &Mat4) -> f32 {
     let c = |col: usize| [m[col][0], m[col][1], m[col][2]];
     dot(c(0), cross(c(1), c(2)))
+}
+
+/// Reverses every triangle's winding. A mirroring transform reverses it (see `determinant`), and
+/// reversing it back keeps front faces counter-clockwise.
+pub(super) fn flip_winding(indices: &mut [u32]) {
+    for triangle in indices.as_chunks_mut::<3>().0 {
+        triangle.swap(1, 2);
+    }
+}
+
+/// A convex polygon of `corners` corners cut into a fan from its first: each triangle as three of
+/// the polygon's corners. Fewer than three corners make none.
+pub(super) fn fan(corners: usize) -> impl Iterator<Item = [usize; 3]> {
+    (1..corners.saturating_sub(1)).map(|k| [0, k, k + 1])
+}
+
+/// A triangle strip of `corners` corners as separate triangles, each as three of the strip's
+/// corners. Every other one is turned back, so they all wind the same way.
+pub(super) fn strip(corners: usize) -> impl Iterator<Item = [usize; 3]> {
+    (0..corners.saturating_sub(2)).map(|i| if i % 2 == 0 { [i, i + 1, i + 2] } else { [i + 1, i, i + 2] })
 }
 
 /// Which faces around a shared position get one smooth normal.
@@ -163,6 +184,18 @@ pub(super) fn flat_normals(vertices: &[Vertex], indices: &[u32]) -> (Vec<Vertex>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fans_strips_and_winding() {
+        assert_eq!(fan(5).collect::<Vec<_>>(), [[0, 1, 2], [0, 2, 3], [0, 3, 4]]);
+        assert_eq!(strip(5).collect::<Vec<_>>(), [[0, 1, 2], [2, 1, 3], [2, 3, 4]]);
+        for corners in 0..3 {
+            assert_eq!((fan(corners).count(), strip(corners).count()), (0, 0), "{corners} corners");
+        }
+        let mut indices = [0, 1, 2, 3, 4, 5];
+        flip_winding(&mut indices);
+        assert_eq!(indices, [0, 2, 1, 3, 5, 4]);
+    }
 
     fn vertex(position: [f32; 3]) -> Vertex {
         Vertex { position, normal: [0.0; 3], uv: [0.0; 2], color: [1.0; 4] }

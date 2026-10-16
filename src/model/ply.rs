@@ -13,7 +13,7 @@ use super::builder::Builder;
 use super::geometry::{self, DEFAULT_CREASE};
 use super::textures::{self, Alpha};
 use super::vector;
-use super::{LoadOptions, Model, ModelError, Vertex, z_up_to_y_up};
+use super::{LoadOptions, Model, ModelError, Vertex, flip_v, z_up_to_y_up};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Encoding {
@@ -233,7 +233,7 @@ pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<
                     vertices.push(Vertex {
                         position: z_up_to_y_up(position.map(get)),
                         normal: if has_normals { vector::normalize(z_up_to_y_up(normal.map(get))) } else { [0.0; 3] },
-                        uv: [uv[0], 1.0 - uv[1]],
+                        uv: flip_v(uv),
                         color,
                     });
                 }
@@ -270,10 +270,10 @@ pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<
                     if face.len() >= 3 {
                         points_only = false;
                     }
-                    let uv_of = |k: usize| (uvs.len() == face.len() * 2).then(|| [uvs[k * 2], 1.0 - uvs[k * 2 + 1]]);
+                    let uv_of = |k: usize| (uvs.len() == face.len() * 2).then(|| flip_v([uvs[k * 2], uvs[k * 2 + 1]]));
                     // A fan: faces are convex polygons in practice.
-                    for k in 1..face.len().saturating_sub(1) {
-                        corners.extend([(face[0], uv_of(0)), (face[k], uv_of(k)), (face[k + 1], uv_of(k + 1))]);
+                    for triangle in geometry::fan(face.len()) {
+                        corners.extend(triangle.map(|k| (face[k], uv_of(k))));
                     }
                 }
             }

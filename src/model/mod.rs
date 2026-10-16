@@ -275,6 +275,12 @@ fn z_up_to_y_up(p: [f32; 3]) -> [f32; 3] {
     [p[0], p[2], -p[1]]
 }
 
+/// Most formats count v up from the bottom of the picture; ours counts down from the top (glTF's
+/// convention).
+fn flip_v([u, v]: [f32; 2]) -> [f32; 2] {
+    [u, 1.0 - v]
+}
+
 /// File references in glTF and Collada are URIs, which escape spaces and more as %XX.
 fn percent_decode(uri: &str) -> String {
     let bytes = uri.as_bytes();

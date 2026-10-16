@@ -14,7 +14,7 @@ use super::builder::{Builder, Slot};
 use super::geometry::{self, Smoothing};
 use super::textures::{self, Alpha};
 use super::vector::{cross, dot};
-use super::{LoadOptions, Model, ModelError, Vertex, srgb_to_linear, z_up_to_y_up};
+use super::{LoadOptions, Model, ModelError, Vertex, flip_v, srgb_to_linear, z_up_to_y_up};
 
 const MAIN: u16 = 0x4D4D;
 const EDITOR: u16 = 0x3D3D;
@@ -175,9 +175,8 @@ impl Reader<'_> {
                         .collect();
                 }
                 UVS => {
-                    // v counts up from the bottom of the picture.
                     uvs = (0..count)
-                        .map_while(|i| Some([f32_at(data, 2 + i * 8)?, 1.0 - f32_at(data, 6 + i * 8)?]))
+                        .map_while(|i| Some(flip_v([f32_at(data, 2 + i * 8)?, f32_at(data, 6 + i * 8)?])))
                         .collect();
                 }
                 FACES => {
@@ -247,10 +246,12 @@ impl Reader<'_> {
         let mut indices = Vec::with_capacity(order.len() * 3);
         let mut face_groups = Vec::with_capacity(order.len());
         for &(_, face) in &order {
-            let [a, b, c] = faces[face as usize];
-            // An object mirrored in the editor keeps its faces' winding from before the mirror.
-            indices.extend(if mirrored { [a, c, b] } else { [a, b, c] });
+            indices.extend(faces[face as usize]);
             face_groups.push(smoothing.get(face as usize).copied().unwrap_or(0));
+        }
+        // An object mirrored in the editor keeps its faces' winding from before the mirror.
+        if mirrored {
+            geometry::flip_winding(&mut indices);
         }
         let smoothing =
             if smoothing.len() >= faces.len() { Smoothing::Groups(&face_groups) } else { geometry::DEFAULT_CREASE };

@@ -7,7 +7,7 @@ use std::path::Path;
 use super::builder::{Builder, Slot};
 use super::textures::{self, Alpha};
 use super::vector::normalize;
-use super::{LoadOptions, Model, ModelError, Vertex, srgb_to_linear};
+use super::{LoadOptions, Model, ModelError, Vertex, flip_v, srgb_to_linear};
 
 /// ufbx's working memory per file. Only there to stop a corrupt file from exhausting memory: the
 /// largest model in the test library (6 MB) needs a small fraction of it.
@@ -338,8 +338,7 @@ impl Source<'_> {
         };
         let uv = if mesh.vertex_uv.exists {
             let uv = mesh.vertex_uv[corner];
-            // FBX and OBJ count v up from the bottom of the picture.
-            [uv.x as f32, 1.0 - uv.y as f32]
+            flip_v([uv.x as f32, uv.y as f32])
         } else {
             [0.0; 2]
         };

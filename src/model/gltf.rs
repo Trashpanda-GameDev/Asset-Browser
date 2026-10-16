@@ -201,13 +201,11 @@ impl<'a> Reader<'a> {
             };
             let mut triangles = triangle_list(primitive.mode(), &indices);
             triangles.retain(|triangle| triangle.iter().all(|&index| index < count));
-            if skin.is_none() && geometry::determinant(world) < 0.0 {
-                // Mirrored: wind the other way so front faces stay counter-clockwise.
-                for triangle in &mut triangles {
-                    triangle.swap(1, 2);
-                }
-            }
             let mut indices: Vec<u32> = triangles.into_iter().flatten().collect();
+            // Skinned vertices are placed by their joints, not by this node.
+            if skin.is_none() && geometry::determinant(world) < 0.0 {
+                geometry::flip_winding(&mut indices);
+            }
             let mut vertices = vertices;
             if !self.has_normals(&primitive) {
                 // The spec asks for flat shading when normals are missing.
@@ -425,19 +423,12 @@ fn blend_joints(joints: &[Mat4], indices: [u16; 4], weights: [f32; 4]) -> Option
     Some(out)
 }
 
-/// Strips and fans as a plain triangle list. Strips alternate their winding, so every other
-/// triangle is turned back.
+/// Strips and fans as a plain triangle list.
 fn triangle_list(mode: Mode, indices: &[u32]) -> Vec<[u32; 3]> {
+    let corners = |triangle: [usize; 3]| triangle.map(|k| indices[k]);
     match mode {
-        Mode::TriangleStrip => indices
-            .windows(3)
-            .enumerate()
-            .map(|(i, w)| if i % 2 == 0 { [w[0], w[1], w[2]] } else { [w[1], w[0], w[2]] })
-            .collect(),
-        Mode::TriangleFan => match indices.split_first() {
-            Some((&center, rest)) => rest.windows(2).map(|w| [center, w[0], w[1]]).collect(),
-            None => Vec::new(),
-        },
+        Mode::TriangleStrip => geometry::strip(indices.len()).map(corners).collect(),
+        Mode::TriangleFan => geometry::fan(indices.len()).map(corners).collect(),
         _ => indices.as_chunks::<3>().0.to_vec(),
     }
 }

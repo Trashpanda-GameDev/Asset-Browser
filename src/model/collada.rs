@@ -17,7 +17,7 @@ use super::builder::{Builder, Slot};
 use super::geometry::{self, DEFAULT_CREASE, IDENTITY, Mat4, NormalMatrix};
 use super::textures::{self, Alpha};
 use super::vector::normalize;
-use super::{LoadOptions, Model, ModelError, Vertex, srgb_to_linear};
+use super::{LoadOptions, Model, ModelError, Vertex, flip_v, srgb_to_linear};
 
 pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
     let (text, dir) = (String::from_utf8_lossy(bytes), super::folder(file));
@@ -254,9 +254,7 @@ impl<'a, 'input> Reader<'a, 'input> {
                 })
                 .collect();
             if mirrored {
-                for triangle in indices.as_chunks_mut::<3>().0 {
-                    triangle.swap(1, 2);
-                }
+                geometry::flip_winding(&mut indices);
             }
             if !has_normals {
                 (vertices, indices) = geometry::smooth_normals(&vertices, &indices, DEFAULT_CREASE);
@@ -281,7 +279,7 @@ impl<'a, 'input> Reader<'a, 'input> {
 
     /// The primitive's corners as vertices (merged where all their indices match) and triangles,
     /// in the geometry's own space; and whether normals came with it.
-    #[expect(clippy::cognitive_complexity, clippy::too_many_lines, reason = "refactor: split into named steps")]
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn read_primitive(&mut self, primitive: Node<'a, 'input>) -> Option<(Vec<Vertex>, Vec<u32>, bool)> {
         // Inputs of the primitive; VERTEX expands into the `vertices` element's inputs.
         let mut inputs: Vec<Input> = Vec::new();
@@ -344,8 +342,7 @@ impl<'a, 'input> Reader<'a, 'input> {
             Some(Vertex {
                 position: positions.get::<3>(at(position_offset)?)?,
                 normal: attribute3(&normals).unwrap_or([0.0; 3]),
-                // v counts up from the bottom of the picture.
-                uv: uv.map_or([0.0; 2], |[u, v]| [u, 1.0 - v]),
+                uv: uv.map_or([0.0; 2], flip_v),
                 color: color.unwrap_or([1.0; 4]),
             })
         };
@@ -370,15 +367,12 @@ impl<'a, 'input> Reader<'a, 'input> {
             if ids.len() != polygon.len() / stride {
                 continue;
             }
+            let corners = |triangle: [usize; 3]| triangle.map(|k| ids[k]);
             if kind == "tristrips" {
-                for (i, w) in ids.windows(3).enumerate() {
-                    indices.extend(if i % 2 == 0 { [w[0], w[1], w[2]] } else { [w[1], w[0], w[2]] });
-                }
+                indices.extend(geometry::strip(ids.len()).flat_map(corners));
             } else {
                 // Fans, and polygons cut into fans: convex in practice.
-                for k in 1..ids.len().saturating_sub(1) {
-                    indices.extend([ids[0], ids[k], ids[k + 1]]);
-                }
+                indices.extend(geometry::fan(ids.len()).flat_map(corners));
             }
         }
         self.source_vertices += (positions.values.len() / positions.stride) as u64;
