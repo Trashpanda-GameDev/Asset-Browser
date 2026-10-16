@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use eframe::egui::{self, Align, Layout, RichText};
+use eframe::egui;
 use egui_phosphor::regular as icon;
 
 use crate::asset::AssetKind;
@@ -13,7 +13,7 @@ use crate::library::Library;
 use crate::sheets::{Saved, SheetStore};
 use crate::ui::format::plural;
 use crate::ui::organize::{GroupCommand, GroupEdit, Targets};
-use crate::ui::{theme, widgets};
+use crate::ui::question::{self, Answer, Answered, Question};
 
 use super::BrowserApp;
 
@@ -194,37 +194,21 @@ impl BrowserApp {
             return;
         };
         let (name, noun, count) = (group.name.clone(), group.kind.noun(), group.members.len());
-        let mut decision = None;
-        let modal = egui::Modal::new(egui::Id::new("delete-group")).show(ctx, |ui| {
-            ui.set_width(340.0);
-            ui.label(
-                RichText::new(format!("Delete the {noun} \u{201c}{name}\u{201d}?"))
-                    .font(egui::FontId::new(15.0, theme::semibold())),
-            );
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(format!(
-                    "{} will stay where {} now.",
-                    plural(count, "file"),
-                    if count == 1 { "it is" } else { "they are" }
-                ))
-                .color(theme::TEXT_WEAK),
-            );
-            ui.add_space(12.0);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if widgets::button(ui, icon::TRASH, "Delete").clicked() {
-                    decision = Some(true);
-                }
-                if widgets::button(ui, "", "Cancel").clicked() {
-                    decision = Some(false);
-                }
-            });
-        });
-        if modal.should_close() && decision.is_none() {
-            decision = Some(false);
-        }
-        match decision {
-            Some(true) => {
+        let title = format!("Delete the {noun} \u{201c}{name}\u{201d}?");
+        let where_ = if count == 1 { "it is" } else { "they are" };
+        let details = format!("{} will stay where {where_} now.", plural(count, "file"));
+        let asked = Question {
+            id: "delete-group",
+            width: 340.0,
+            title: &title,
+            details: &details,
+            note: None,
+            confirm: Answer { glyph: icon::TRASH, label: "Delete", tooltip: None },
+            other: None,
+            enter_confirms: false,
+        };
+        match question::ask(ctx, &asked) {
+            Some(Answered::Confirm) => {
                 if self.organizing.groups.delete(id) {
                     self.organizing.membership_dirty = true;
                     if self.browsing.group == Some(id) {
@@ -234,7 +218,7 @@ impl BrowserApp {
                 }
                 self.organizing.confirm_delete = None;
             }
-            Some(false) => self.organizing.confirm_delete = None,
+            Some(Answered::Cancel | Answered::Other) => self.organizing.confirm_delete = None,
             None => {}
         }
     }

@@ -81,7 +81,7 @@ impl ImageView {
 
         // Scroll to zoom around the pointer; the picture point under it stays put.
         if let Some(pointer) = response.hover_pos() {
-            let scroll = ui.input_mut(|input| std::mem::take(&mut input.smooth_scroll_delta.y));
+            let scroll = widgets::take_scroll(ui);
             if scroll != 0.0 {
                 let new_scale = (scale * (scroll * 0.0025).exp()).clamp(fit.min(1.0) * 0.5, 64.0);
                 let under = self.picture_point(rect, pointer, scale, w, h);

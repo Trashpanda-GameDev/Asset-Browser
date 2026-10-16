@@ -145,7 +145,7 @@ impl Viewport {
             interacting = true;
         }
         if response.hovered() {
-            let scroll = ui.input_mut(|input| std::mem::take(&mut input.smooth_scroll_delta.y));
+            let scroll = widgets::take_scroll(ui);
             if scroll != 0.0 {
                 self.orbit.zoom = (self.orbit.zoom * (-scroll * 0.0015).exp()).clamp(0.05, 20.0);
             }

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
 use eframe::egui::{
-    self, Align, Color32, CornerRadius, FontId, Frame, Id, Layout, Margin, Rect, RichText, Sense, Ui, UiBuilder, Vec2,
+    self, Align, Color32, CornerRadius, FontId, Frame, Layout, Margin, Rect, RichText, Sense, Ui, UiBuilder, Vec2,
     pos2, vec2,
 };
 use egui_phosphor::regular as icon;
@@ -144,12 +144,7 @@ impl Settings {
             commands.push(self.change_shortcut(ctx, args.keymap, action, Some(shortcut)));
             self.capturing = None;
         }
-        let frame = Frame::new()
-            .fill(theme::PANEL)
-            .stroke(egui::Stroke::new(1.0, theme::BORDER))
-            .corner_radius(theme::CARD_RADIUS)
-            .inner_margin(Margin::same(0));
-        let modal = egui::Modal::new(Id::new("settings")).frame(frame).backdrop_color(Color32::from_black_alpha(150));
+        let modal = widgets::modal_window("settings", 0);
         let response = modal.show(ctx, |ui| {
             // A fixed size, split into the list of pages and the page, each laid out top to bottom.
             let (rect, _) = ui.allocate_exact_size(SIZE, Sense::hover());

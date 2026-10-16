@@ -13,6 +13,7 @@ pub mod keymap;
 pub mod mode;
 pub mod organize;
 pub mod previews;
+pub mod question;
 pub mod settings;
 pub mod sheet_view;
 pub mod sound;

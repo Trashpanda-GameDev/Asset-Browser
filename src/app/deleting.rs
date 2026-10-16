@@ -5,17 +5,17 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crossbeam_channel::Receiver;
-use eframe::egui::{self, Align, Key, Layout, Modifiers, RichText};
+use eframe::egui::{self, RichText};
 use egui_phosphor::regular as icon;
 
 use crate::deletion::{self, Deleted};
 use crate::groups::UNCATEGORIZED;
 use crate::library;
 use crate::scan::ScannedFile;
-use crate::ui::format::grouped;
-use crate::ui::format::plural;
+use crate::ui::format::{grouped, plural};
 use crate::ui::organize::{GroupCommand, Targets};
-use crate::ui::{theme, widgets};
+use crate::ui::question::{self, Answer, Answered, Question};
+use crate::ui::theme;
 use crate::{diag, platform};
 
 use super::BrowserApp;
@@ -149,61 +149,46 @@ impl BrowserApp {
 
     /// "Delete?", saying where things go. Enter deletes when it can be undone; Esc cancels.
     pub(super) fn delete_files_dialog(&mut self, ctx: &egui::Context) {
-        enum Choice {
-            Delete,
-            /// Take the files out of the group being browsed instead.
-            TakeOut(i64),
-            Cancel,
-        }
         let Some(request) = &self.deletion.confirm_files else { return };
         let bin = platform::trash_name();
-        let group =
-            request.group.and_then(|id| self.organizing.groups.get(id)).map(|group| (group.id, group.name.clone()));
-        let mut choice = None;
-        let modal = egui::Modal::new(egui::Id::new("delete-files")).show(ctx, |ui| {
-            ui.set_width(420.0);
-            ui.label(RichText::new(&request.title).font(egui::FontId::new(15.0, theme::semibold())));
-            ui.add_space(4.0);
-            ui.add(egui::Label::new(RichText::new(&request.details).color(theme::TEXT_WEAK)).wrap());
-            ui.add_space(6.0);
-            let note = if request.permanent {
-                RichText::new(format!("{}  This drive has no {bin}, so this can't be undone.", icon::WARNING))
-                    .color(theme::ERROR)
-            } else {
-                RichText::new(format!("Deleted files and folders go to the {bin}, so they can be put back."))
-                    .color(theme::TEXT_FAINT)
-            };
-            ui.add(egui::Label::new(note.size(12.5)).wrap());
-            ui.add_space(12.0);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let label = if request.permanent { "Delete for good" } else { "Delete" };
-                if widgets::button(ui, icon::TRASH, label).clicked() {
-                    choice = Some(Choice::Delete);
-                }
-                if widgets::button(ui, "", "Cancel").clicked() {
-                    choice = Some(Choice::Cancel);
-                }
-                if let Some((id, name)) = &group {
-                    let take_out = widgets::button(ui, icon::MINUS_CIRCLE, &format!("Only take out of {name}"));
-                    if take_out.on_hover_text("The files stay where they are").clicked() {
-                        choice = Some(Choice::TakeOut(*id));
-                    }
-                }
-            });
-        });
-        let enter = !request.permanent && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter));
-        if choice.is_none() && enter {
-            choice = Some(Choice::Delete);
-        }
-        if choice.is_none() && modal.should_close() {
-            choice = Some(Choice::Cancel);
-        }
-        let Some(choice) = choice else { return };
+        let note = if request.permanent {
+            RichText::new(format!("{}  This drive has no {bin}, so this can't be undone.", icon::WARNING))
+                .color(theme::ERROR)
+        } else {
+            RichText::new(format!("Deleted files and folders go to the {bin}, so they can be put back."))
+                .color(theme::TEXT_FAINT)
+        };
+        // Browsing a group, the files can be taken out of it instead.
+        let take_out = request
+            .group
+            .and_then(|id| self.organizing.groups.get(id))
+            .map(|group| (group.id, format!("Only take out of {}", group.name)));
+        let asked = Question {
+            id: "delete-files",
+            width: 420.0,
+            title: &request.title,
+            details: &request.details,
+            note: Some(note.size(12.5)),
+            confirm: Answer {
+                glyph: icon::TRASH,
+                label: if request.permanent { "Delete for good" } else { "Delete" },
+                tooltip: None,
+            },
+            other: take_out.as_ref().map(|(_, label)| Answer {
+                glyph: icon::MINUS_CIRCLE,
+                label,
+                tooltip: Some("The files stay where they are"),
+            }),
+            enter_confirms: !request.permanent,
+        };
+        let Some(answered) = question::ask(ctx, &asked) else { return };
         let Some(request) = self.deletion.confirm_files.take() else { return };
-        match choice {
-            Choice::Delete => self.start_deleting(request),
-            Choice::TakeOut(id) => self.run_group_command(GroupCommand::Remove(id, Targets::Paths(request.paths))),
-            Choice::Cancel => {}
+        match (answered, take_out) {
+            (Answered::Confirm, _) => self.start_deleting(request),
+            (Answered::Other, Some((id, _))) => {
+                self.run_group_command(GroupCommand::Remove(id, Targets::Paths(request.paths)));
+            }
+            (Answered::Other | Answered::Cancel, _) => {}
         }
     }
 

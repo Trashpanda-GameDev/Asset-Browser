@@ -264,6 +264,23 @@ pub fn property(ui: &mut Ui, name: &str, value: impl Into<egui::WidgetText>) -> 
     .inner
 }
 
+/// A window over the app that dims what's behind it, such as the settings: `margin` inside its
+/// border.
+pub fn modal_window(id: &str, margin: i8) -> egui::Modal {
+    let frame = Frame::new()
+        .fill(theme::PANEL)
+        .stroke(Stroke::new(1.0, theme::BORDER))
+        .corner_radius(theme::CARD_RADIUS)
+        .inner_margin(egui::Margin::same(margin));
+    egui::Modal::new(Id::new(id)).frame(frame).backdrop_color(Color32::from_black_alpha(150))
+}
+
+/// Takes this frame's scrolling out of the input, for a view that zooms when scrolled over: the
+/// scroll area around it reads what's left at the end of the frame, so it doesn't scroll too.
+pub fn take_scroll(ui: &Ui) -> f32 {
+    ui.input_mut(|input| std::mem::take(&mut input.smooth_scroll_delta.y))
+}
+
 /// A row of the sidebar to click, the width of it: highlighted when `selected`, and while the
 /// pointer is over it.
 pub fn sidebar_row(ui: &mut Ui, selected: bool) -> (Rect, Response) {

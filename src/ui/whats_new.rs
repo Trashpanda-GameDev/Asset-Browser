@@ -1,9 +1,7 @@
 //! "What's new": the changelog's notes, shown once after an update for the versions since the
 //! last one seen, or for every version from the settings.
 
-use eframe::egui::{
-    self, Align, Color32, FontId, Frame, Id, Layout, Margin, RichText, Sense, Ui, UiBuilder, text::LayoutJob, vec2,
-};
+use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Sense, Ui, UiBuilder, text::LayoutJob, vec2};
 use semver::Version;
 
 use crate::changelog::{self, Block, Release};
@@ -31,12 +29,7 @@ impl WhatsNew {
     /// Draws it; false once it's closed.
     pub fn show(&mut self, ctx: &egui::Context) -> bool {
         let mut open = true;
-        let frame = Frame::new()
-            .fill(theme::PANEL)
-            .stroke(egui::Stroke::new(1.0, theme::BORDER))
-            .corner_radius(theme::CARD_RADIUS)
-            .inner_margin(Margin::same(20));
-        let modal = egui::Modal::new(Id::new("whats-new")).frame(frame).backdrop_color(Color32::from_black_alpha(150));
+        let modal = widgets::modal_window("whats-new", 20);
         let response = modal.show(ctx, |ui| {
             // A fixed width, so the notes wrap to it, laid out top to bottom.
             let (rect, _) = ui.allocate_exact_size(vec2(540.0, 500.0), Sense::hover());
