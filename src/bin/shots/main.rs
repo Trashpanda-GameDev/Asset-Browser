@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use asset_browser::app::{BrowserApp, ScreenshotView};
+use asset_browser::app::{BrowserApp, ScreenshotView, setting_keys};
 use asset_browser::library::SortBy;
 use asset_browser::ui::mode::{Layout, Mode};
 use asset_browser::ui::settings::Page;
@@ -310,7 +310,7 @@ fn main() -> eframe::Result {
         // As if Auto-play had been turned off and the turntable on: no sound plays by itself while
         // the clips move through them, and the models turn.
         let settings = db::open_cache(&paths::cache_file())
-            .and_then(|conn| db::set_settings(&conn, &[("sound.autoplay", "0"), ("model.turntable", "1")]));
+            .and_then(|conn| db::set_settings(&conn, &[(setting_keys::AUTOPLAY, "0"), (setting_keys::TURNTABLE, "1")]));
         if let Err(err) = settings {
             eprintln!("couldn't set the demo's settings: {err}");
         }

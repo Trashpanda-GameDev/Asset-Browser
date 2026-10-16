@@ -16,10 +16,7 @@ use crate::watch::Watch;
 use crate::{db, diag, folder_index, platform, work};
 
 use super::BrowserApp;
-
-/// The one folder that was open, from before the library could have several: it becomes the
-/// library's first folder.
-const SETTING_LAST_ROOT: &str = "last_root";
+use super::setting_keys;
 
 /// A scan of some of the library's folders, with the library built with what it found.
 pub(super) struct ScanDone {
@@ -116,7 +113,7 @@ impl BrowserApp {
             // Saved in its new place, it mustn't come back after being taken out.
             Ok(()) => {
                 if let Some(conn) = &self.conn
-                    && let Err(err) = db::remove_setting(conn, SETTING_LAST_ROOT)
+                    && let Err(err) = db::remove_setting(conn, setting_keys::LAST_ROOT)
                 {
                     diag::note("Forgetting the folder opened last", err);
                 }
@@ -127,7 +124,7 @@ impl BrowserApp {
     }
 
     fn legacy_root(&self) -> Option<PathBuf> {
-        self.conn.as_ref().and_then(|conn| db::get_setting(conn, SETTING_LAST_ROOT)).map(PathBuf::from)
+        self.conn.as_ref().and_then(|conn| db::get_setting(conn, setting_keys::LAST_ROOT)).map(PathBuf::from)
     }
 
     pub(super) fn save_roots(&self) {

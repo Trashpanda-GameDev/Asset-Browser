@@ -102,7 +102,8 @@ Not checked by a tool, but expected:
 - **A keyboard shortcut:** an `Action` in `src/ui/keymap.rs` with its id (it's saved, so it never changes), label, group
   and default; what it does goes in `window_keys` (the window's own) or `asset_keys` (the selected assets), in
   `src/app/actions.rs`.
-- **A setting:** `load_settings` and `save_settings` in `src/app/settings.rs`, under a key of its own.
+- **A setting:** its key in `src/app/setting_keys.rs` (it's stored, so it never changes, and the test there pins
+  it), read in `load_settings` and written in `save_settings` (`src/app/settings.rs`).
 - **A settings page:** a `Page` in `src/ui/settings/mod.rs`, and a file of its own beside it that draws it.
 - **Something for one mode:** see [adding to a mode](development.md#adding-to-a-mode).
 - **Slow work:** a service, as above.

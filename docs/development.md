@@ -168,4 +168,5 @@ What belongs to one kind of asset lives in a few known places, so a new tool for
 - Its options above the assets: `mode_options` in `src/ui/toolbar.rs`, and a `ToolbarCommand` for what they change.
 - Its part of the preview pane: `image_section`, `sound_section` or `model_section`, and the matching
   `*_properties`, in its own file in `src/ui/inspector/`.
-- Anything it should remember: `load_settings` and `save_settings` in `src/app/settings.rs`.
+- Anything it should remember: a key in `src/app/setting_keys.rs`, read and written in `load_settings` and
+  `save_settings` (`src/app/settings.rs`).

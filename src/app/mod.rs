@@ -19,6 +19,7 @@ mod library;
 mod organizing;
 mod panels;
 mod screenshots;
+pub mod setting_keys;
 mod settings;
 mod sidebar;
 mod toast;
