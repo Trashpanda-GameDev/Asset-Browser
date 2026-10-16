@@ -15,7 +15,7 @@ use crate::groups::{FAVORITES, Group, GroupKind, Groups, Membership, UNCATEGORIZ
 use super::format::grouped;
 use super::{theme, widgets};
 
-const ROW_HEIGHT: f32 = 26.0;
+const ROW_HEIGHT: f32 = widgets::SIDEBAR_ROW_HEIGHT;
 
 /// Assets being dragged: their paths, so a rescan mid-drag can't change what's dropped.
 pub struct DraggedAssets(pub Vec<PathBuf>);
@@ -243,14 +243,8 @@ struct Row<'a> {
 
 impl Row<'_> {
     fn show(self, ui: &mut Ui) -> Response {
-        let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
+        let (rect, response) = widgets::sidebar_row(ui, self.selected);
         let painter = ui.painter();
-        let row = rect.shrink2(vec2(4.0, 1.0));
-        if self.selected {
-            painter.rect_filled(row, theme::RADIUS, theme::ACCENT_SOFT);
-        } else if response.hovered() {
-            painter.rect_filled(row, theme::RADIUS, theme::CARD_HOVER);
-        }
         let y = rect.center().y;
         let x = rect.left() + 26.0;
         match self.glyph {
@@ -278,14 +272,13 @@ impl Row<'_> {
         let count = painter.layout_no_wrap(count, FontId::proportional(11.5), theme::TEXT_FAINT);
         let count_x = rect.right() - 12.0 - count.size().x;
         let color = if self.selected { theme::TEXT } else { theme::TEXT.gamma_multiply(0.88) };
-        let mut job = egui::text::LayoutJob::simple_singleline(self.name.to_owned(), FontId::proportional(13.0), color);
-        job.wrap = egui::text::TextWrapping {
-            max_width: (count_x - x - 22.0).max(10.0),
-            max_rows: 1,
-            break_anywhere: true,
-            overflow_character: Some('…'),
-        };
-        let name = painter.layout_job(job);
+        let name = widgets::elided(
+            painter,
+            self.name.to_owned(),
+            FontId::proportional(13.0),
+            color,
+            (count_x - x - 22.0).max(10.0),
+        );
         painter.galley(pos2(x + 14.0, y - name.size().y / 2.0), name, color);
         painter.galley(pos2(count_x, y - count.size().y / 2.0), count, theme::TEXT_FAINT);
         response

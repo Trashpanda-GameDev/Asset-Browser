@@ -15,9 +15,9 @@ use crate::asset::KindSet;
 use crate::library::{DirNode, Library};
 
 use super::format::grouped;
-use super::theme;
+use super::{theme, widgets};
 
-const ROW_HEIGHT: f32 = 26.0;
+const ROW_HEIGHT: f32 = widgets::SIDEBAR_ROW_HEIGHT;
 const INDENT: f32 = 14.0;
 
 /// What the user asked of a folder.
@@ -114,17 +114,10 @@ impl FolderTree {
             |ui, range| {
                 for row in &rows[range] {
                     let node = library.dir(row.dir);
-                    let (rect, response) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
                     let is_selected = row.dir == selected;
+                    let (rect, response) = widgets::sidebar_row(ui, is_selected);
                     let open = self.is_open(library, row.dir);
                     let painter = ui.painter();
-                    let row_rect = rect.shrink2(vec2(4.0, 1.0));
-                    if is_selected {
-                        painter.rect_filled(row_rect, theme::RADIUS, theme::ACCENT_SOFT);
-                    } else if response.hovered() {
-                        painter.rect_filled(row_rect, theme::RADIUS, theme::CARD_HOVER);
-                    }
                     let mut x = rect.left() + 10.0 + row.depth as f32 * INDENT;
                     let y = rect.center().y;
                     // The caret opens and closes; the rest of the row picks the folder.
@@ -171,18 +164,13 @@ impl FolderTree {
                     let count_galley = painter.layout_no_wrap(count, FontId::proportional(11.5), theme::TEXT_FAINT);
                     let count_x = rect.right() - 12.0 - count_galley.size().x;
                     let name_color = if is_selected { theme::TEXT } else { theme::TEXT.gamma_multiply(0.88) };
-                    let mut job = egui::text::LayoutJob::simple_singleline(
+                    let galley = widgets::elided(
+                        painter,
                         node.name.clone(),
                         FontId::proportional(13.0),
                         name_color,
+                        (count_x - x - 8.0).max(10.0),
                     );
-                    job.wrap = egui::text::TextWrapping {
-                        max_width: (count_x - x - 8.0).max(10.0),
-                        max_rows: 1,
-                        break_anywhere: true,
-                        overflow_character: Some('…'),
-                    };
-                    let galley = painter.layout_job(job);
                     painter.galley(pos2(x, y - galley.size().y / 2.0), galley, name_color);
                     painter.galley(pos2(count_x, y - count_galley.size().y / 2.0), count_galley, theme::TEXT_FAINT);
 
@@ -316,15 +304,13 @@ pub fn library_menu(ui: &mut Ui, library: &Library, kinds: KindSet) -> Option<Fo
         let count = grouped(library.dir(dir).total(kinds) as usize);
         let count = painter.layout_no_wrap(count, FontId::proportional(11.5), theme::TEXT_FAINT);
         let count_x = remove_rect.left() - 6.0 - count.size().x;
-        let mut job =
-            egui::text::LayoutJob::simple_singleline(root.name.clone(), FontId::proportional(13.0), theme::TEXT);
-        job.wrap = egui::text::TextWrapping {
-            max_width: (count_x - rect.left() - 44.0).max(10.0),
-            max_rows: 1,
-            break_anywhere: true,
-            overflow_character: Some('…'),
-        };
-        let name = painter.layout_job(job);
+        let name = widgets::elided(
+            painter,
+            root.name.clone(),
+            FontId::proportional(13.0),
+            theme::TEXT,
+            (count_x - rect.left() - 44.0).max(10.0),
+        );
         painter.galley(pos2(rect.left() + 34.0, y - name.size().y / 2.0), name, theme::TEXT);
         painter.galley(pos2(count_x, y - count.size().y / 2.0), count, theme::TEXT_FAINT);
         let x_color = if remove.hovered() { theme::TEXT } else { theme::TEXT_FAINT };

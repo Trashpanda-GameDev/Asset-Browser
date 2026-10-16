@@ -328,15 +328,7 @@ impl Tile<'_, '_> {
         }
 
         let color = if selected { theme::TEXT } else { theme::TEXT.gamma_multiply(0.86) };
-        let mut job =
-            egui::text::LayoutJob::simple_singleline(entry.name().to_owned(), FontId::proportional(12.5), color);
-        job.wrap = egui::text::TextWrapping {
-            max_width: rect.width(),
-            max_rows: 1,
-            break_anywhere: true,
-            overflow_character: Some('…'),
-        };
-        let galley = painter.layout_job(job);
+        let galley = widgets::elided(painter, entry.name().to_owned(), FontId::proportional(12.5), color, rect.width());
         let label_pos = pos2(rect.center().x - galley.size().x / 2.0, card.bottom() + 5.0);
         painter.galley(label_pos, galley, color);
 
@@ -708,18 +700,13 @@ impl ListRow<'_, '_> {
                     }
                     let color = if selected { theme::TEXT } else { theme::TEXT.gamma_multiply(0.9) };
                     let text_left = thumb.right() + 10.0;
-                    let mut job = egui::text::LayoutJob::simple_singleline(
+                    let galley = widgets::elided(
+                        painter,
                         entry.name().to_owned(),
                         FontId::proportional(13.0),
                         color,
+                        (cell.right() - text_left - 8.0).max(10.0),
                     );
-                    job.wrap = egui::text::TextWrapping {
-                        max_width: (cell.right() - text_left - 8.0).max(10.0),
-                        max_rows: 1,
-                        break_anywhere: true,
-                        overflow_character: Some('…'),
-                    };
-                    let galley = painter.layout_job(job);
                     painter.galley(pos2(text_left, cell.center().y - galley.size().y / 2.0), galley, color);
                 }
                 Column::Type => {
@@ -763,18 +750,13 @@ impl ListRow<'_, '_> {
                         .map_or_else(String::new, |info| grouped(info.triangles as usize)),
                 ),
                 Column::Folder => {
-                    let mut job = egui::text::LayoutJob::simple_singleline(
+                    let galley = widgets::elided(
+                        painter,
                         self.browse.library.folder_label(entry),
                         FontId::proportional(12.5),
                         theme::TEXT_FAINT,
+                        (cell.width() - 12.0).max(10.0),
                     );
-                    job.wrap = egui::text::TextWrapping {
-                        max_width: (cell.width() - 12.0).max(10.0),
-                        max_rows: 1,
-                        break_anywhere: true,
-                        overflow_character: Some('…'),
-                    };
-                    let galley = painter.layout_job(job);
                     painter.galley(
                         pos2(cell.left() + 4.0, cell.center().y - galley.size().y / 2.0),
                         galley,

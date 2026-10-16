@@ -1,15 +1,20 @@
 //! Small widgets drawn by hand, so every control shares one look: icon buttons, a segmented
 //! control, toggle chips, the search field, badges and property rows.
 
+use std::sync::Arc;
+
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, FontId, Frame, Id, Key, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui,
-    Vec2, pos2, vec2,
+    self, Align2, Color32, CornerRadius, FontId, Frame, Galley, Id, Key, Pos2, Rect, Response, Sense, Stroke,
+    StrokeKind, Ui, Vec2, pos2, vec2,
 };
 use egui_phosphor::regular as icon;
 
 use super::theme;
 
 const ICON_SIZE: f32 = 16.0;
+
+/// The sidebar's rows, folders and groups alike.
+pub const SIDEBAR_ROW_HEIGHT: f32 = 26.0;
 
 /// A square button showing one icon. `active` shows it switched on.
 pub fn icon_button(ui: &mut Ui, glyph: &str, tooltip: &str, active: bool) -> Response {
@@ -257,6 +262,27 @@ pub fn property(ui: &mut Ui, name: &str, value: impl Into<egui::WidgetText>) -> 
         ui.add(egui::Label::new(value.into()).wrap())
     })
     .inner
+}
+
+/// A row of the sidebar to click, the width of it: highlighted when `selected`, and while the
+/// pointer is over it.
+pub fn sidebar_row(ui: &mut Ui, selected: bool) -> (Rect, Response) {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), SIDEBAR_ROW_HEIGHT), Sense::click());
+    let row = rect.shrink2(vec2(4.0, 1.0));
+    if selected {
+        ui.painter().rect_filled(row, theme::RADIUS, theme::ACCENT_SOFT);
+    } else if response.hovered() {
+        ui.painter().rect_filled(row, theme::RADIUS, theme::CARD_HOVER);
+    }
+    (rect, response)
+}
+
+/// `text` laid out on one line, cut short with "…" where it's wider than `max_width`.
+pub fn elided(painter: &egui::Painter, text: String, font: FontId, color: Color32, max_width: f32) -> Arc<Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);
+    job.wrap =
+        egui::text::TextWrapping { max_width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    painter.layout_job(job)
 }
 
 /// A small coloured pill with text, e.g. a file type. Returns its rect.
