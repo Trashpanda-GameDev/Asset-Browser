@@ -12,6 +12,9 @@ use egui_phosphor::regular as icon;
 use super::theme;
 
 const ICON_SIZE: f32 = theme::size::LARGE;
+/// The segmented control's height, and the room between its edge and the segments.
+const SEGMENT_HEIGHT: f32 = 30.0;
+const SEGMENT_PAD: f32 = 3.0;
 
 /// The sidebar's rows, folders and groups alike.
 pub const SIDEBAR_ROW_HEIGHT: f32 = 26.0;
@@ -87,14 +90,48 @@ pub struct Segment<'a> {
 
 /// A row of mutually exclusive choices in one pill; the highlight slides to the chosen one.
 /// Returns the index clicked, if any.
-#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 pub fn segmented(ui: &mut Ui, id: Id, segments: &[Segment<'_>], selected: usize) -> Option<usize> {
-    const PAD: f32 = 3.0;
-    const HEIGHT: f32 = 30.0;
+    let painter = ui.painter().clone();
+    let widths = segment_widths(&painter, segments);
+    let total = widths.iter().sum::<f32>() + SEGMENT_PAD * 2.0;
+    let (outer, _) = ui.allocate_exact_size(vec2(total, SEGMENT_HEIGHT), Sense::hover());
+    painter.rect_filled(outer, theme::CARD_RADIUS, theme::CARD);
+    let mut x = outer.left() + SEGMENT_PAD;
+    // Where the highlight should be: the chosen segment's left and width.
+    let mut target = (x, widths.first().copied().unwrap_or(0.0));
+    let mut rects = Vec::with_capacity(segments.len());
+    for (index, width) in widths.iter().enumerate() {
+        if index == selected {
+            target = (x, *width);
+        }
+        rects.push(Rect::from_min_size(
+            pos2(x, outer.top() + SEGMENT_PAD),
+            vec2(*width, SEGMENT_HEIGHT - SEGMENT_PAD * 2.0),
+        ));
+        x += width;
+    }
+    slide_highlight(ui.ctx(), &painter, id, outer, target);
+    let mut clicked = None;
+    for (index, (segment, rect)) in segments.iter().zip(&rects).enumerate() {
+        let response = ui.interact(*rect, id.with(index), Sense::click());
+        if response.clicked() {
+            clicked = Some(index);
+        }
+        let on = index == selected;
+        let color = if on || response.hovered() { theme::TEXT } else { theme::TEXT_WEAK };
+        paint_segment(&painter, segment, *rect, on, color);
+        if !segment.tooltip.is_empty() {
+            response.on_hover_text(segment.tooltip);
+        }
+    }
+    clicked
+}
+
+/// Each segment's width: its glyph, label and note, with room around them.
+fn segment_widths(painter: &egui::Painter, segments: &[Segment<'_>]) -> Vec<f32> {
     let font = FontId::proportional(theme::size::BODY);
     let note_font = FontId::proportional(theme::size::SMALL);
-    let painter = ui.painter().clone();
-    let widths: Vec<f32> = segments
+    segments
         .iter()
         .map(|segment| {
             let label = painter.layout_no_wrap(segment.label.to_owned(), font.clone(), theme::TEXT).size().x;
@@ -108,61 +145,35 @@ pub fn segmented(ui: &mut Ui, id: Id, segments: &[Segment<'_>], selected: usize)
             };
             glyph + label + note + 24.0
         })
-        .collect();
-    let total = widths.iter().sum::<f32>() + PAD * 2.0;
-    let (outer, _) = ui.allocate_exact_size(vec2(total, HEIGHT), Sense::hover());
-    painter.rect_filled(outer, theme::CARD_RADIUS, theme::CARD);
+        .collect()
+}
 
-    // Where the highlight should be, eased toward from where it was.
-    let mut x = outer.left() + PAD;
-    let mut target = (x, widths.first().copied().unwrap_or(0.0));
-    let mut rects = Vec::with_capacity(segments.len());
-    for (index, width) in widths.iter().enumerate() {
-        let rect = Rect::from_min_size(pos2(x, outer.top() + PAD), vec2(*width, HEIGHT - PAD * 2.0));
-        if index == selected {
-            target = (x, *width);
-        }
-        rects.push(rect);
-        x += width;
-    }
-    let ctx = ui.ctx();
+/// The chosen segment's highlight, eased toward `target` (its left and width) from where it was.
+fn slide_highlight(ctx: &egui::Context, painter: &egui::Painter, id: Id, outer: Rect, target: (f32, f32)) {
     let left = ctx.animate_value_with_time(id.with("x"), target.0, 0.16);
     let width = ctx.animate_value_with_time(id.with("w"), target.1, 0.16);
-    let highlight = Rect::from_min_size(pos2(left, outer.top() + PAD), vec2(width, HEIGHT - PAD * 2.0));
+    let highlight =
+        Rect::from_min_size(pos2(left, outer.top() + SEGMENT_PAD), vec2(width, SEGMENT_HEIGHT - SEGMENT_PAD * 2.0));
     painter.rect_filled(highlight, theme::RADIUS, theme::CARD_ACTIVE);
+}
 
-    let mut clicked = None;
-    for (index, (segment, rect)) in segments.iter().zip(&rects).enumerate() {
-        let response = ui.interact(*rect, id.with(index), Sense::click());
-        if response.clicked() {
-            clicked = Some(index);
-        }
-        let on = index == selected;
-        let color = if on || response.hovered() { theme::TEXT } else { theme::TEXT_WEAK };
-        let mut x = rect.left() + 12.0;
-        let y = rect.center().y;
-        if !segment.glyph.is_empty() {
-            let glyph_color = if on { theme::ACCENT } else { color };
-            painter.text(pos2(x, y), Align2::LEFT_CENTER, segment.glyph, FontId::proportional(ICON_SIZE), glyph_color);
-            x += ICON_SIZE + 6.0;
-        }
-        let label = painter.layout_no_wrap(segment.label.to_owned(), font.clone(), color);
-        let label_width = label.size().x;
-        painter.galley(pos2(x, y - label.size().y / 2.0), label, color);
-        if let Some(note) = &segment.note {
-            painter.text(
-                pos2(x + label_width + 6.0, y + 0.5),
-                Align2::LEFT_CENTER,
-                note,
-                note_font.clone(),
-                theme::TEXT_FAINT,
-            );
-        }
-        if !segment.tooltip.is_empty() {
-            response.on_hover_text(segment.tooltip);
-        }
+/// A segment's glyph (in the accent when it's the one chosen), its label in `color`, and its
+/// note, dimmer.
+fn paint_segment(painter: &egui::Painter, segment: &Segment<'_>, rect: Rect, on: bool, color: Color32) {
+    let mut x = rect.left() + 12.0;
+    let y = rect.center().y;
+    if !segment.glyph.is_empty() {
+        let glyph_color = if on { theme::ACCENT } else { color };
+        painter.text(pos2(x, y), Align2::LEFT_CENTER, segment.glyph, FontId::proportional(ICON_SIZE), glyph_color);
+        x += ICON_SIZE + 6.0;
     }
-    clicked
+    let label = painter.layout_no_wrap(segment.label.to_owned(), FontId::proportional(theme::size::BODY), color);
+    let label_width = label.size().x;
+    painter.galley(pos2(x, y - label.size().y / 2.0), label, color);
+    if let Some(note) = &segment.note {
+        let font = FontId::proportional(theme::size::SMALL);
+        painter.text(pos2(x + label_width + 6.0, y + 0.5), Align2::LEFT_CENTER, note, font, theme::TEXT_FAINT);
+    }
 }
 
 /// An on/off pill with an icon and a label.
