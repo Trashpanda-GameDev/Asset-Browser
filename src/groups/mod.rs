@@ -20,12 +20,10 @@ mod store;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, params};
-
+use crate::diag;
 pub use crate::library::path_key;
-use crate::{db, diag};
 pub use membership::Membership;
-use store::{load, now_ms, open_db};
+use store::Store;
 
 pub const FAVORITES: i64 = 0;
 
@@ -101,22 +99,16 @@ pub struct Member {
 }
 
 pub struct Groups {
-    /// `None` when the file couldn't be opened: the groups still work, but aren't saved.
-    conn: Option<Connection>,
+    /// Where every change is saved before it's made.
+    store: Store,
     /// Favorites first, then collections, then categories, each in the order they were made.
     list: Vec<Group>,
 }
 
 impl Groups {
     pub fn open(path: &Path) -> Self {
-        let opened = open_db(path).and_then(|conn| load(&conn).map(|list| (conn, list)));
-        match opened {
-            Ok((conn, list)) => Self { conn: Some(conn), list },
-            Err(err) => {
-                diag::report(&format!("Favorites and collections unavailable ({})", path.display()), err);
-                Self { conn: None, list: vec![favorites_group()] }
-            }
-        }
+        let (store, list) = Store::open(path);
+        Self { store, list }
     }
 
     pub fn all(&self) -> &[Group] {
@@ -159,18 +151,9 @@ impl Groups {
             return None;
         }
         let color = (self.of_kind(GroupKind::Category).count() % CATEGORY_COLOR_COUNT as usize) as u8;
-        let created = now_ms();
-        let id = match &self.conn {
-            Some(conn) => match conn.execute(
-                "INSERT INTO groups(kind, name, color, created) VALUES(?1, ?2, ?3, ?4)",
-                params![kind.to_db(), name, color, created],
-            ) {
-                Ok(_) => conn.last_insert_rowid(),
-                Err(err) => {
-                    diag::report("Saving a new group", err);
-                    return None;
-                }
-            },
+        let id = match saved(self.store.create(kind, name, color), "Saving a new group")? {
+            Some(id) => id,
+            // Not saved anywhere: an id for this session.
             None => self.list.iter().map(|group| group.id).max().unwrap_or(0) + 1,
         };
         let group = Group {
@@ -195,10 +178,7 @@ impl Groups {
         if id == FAVORITES || name.is_empty() {
             return false;
         }
-        if let Some(conn) = &self.conn
-            && let Err(err) = conn.execute("UPDATE groups SET name = ?1 WHERE id = ?2", params![name, id])
-        {
-            diag::report("Renaming a group", err);
+        if saved(self.store.rename(id, name), "Renaming a group").is_none() {
             return false;
         }
         let Some(group) = self.get_mut(id) else { return false };
@@ -209,10 +189,7 @@ impl Groups {
 
     pub fn set_color(&mut self, id: i64, color: u8) {
         let color = color % CATEGORY_COLOR_COUNT;
-        if let Some(conn) = &self.conn
-            && let Err(err) = conn.execute("UPDATE groups SET color = ?1 WHERE id = ?2", params![color, id])
-        {
-            diag::report("Saving a category's colour", err);
+        if saved(self.store.set_color(id, color), "Saving a category's colour").is_none() {
             return;
         }
         if let Some(group) = self.get_mut(id) {
@@ -225,15 +202,8 @@ impl Groups {
         if id == FAVORITES || self.get(id).is_none() {
             return false;
         }
-        if let Some(conn) = &self.conn {
-            let deleted = db::in_transaction(conn, |tx| {
-                tx.execute("DELETE FROM members WHERE grp = ?1", [id])?;
-                tx.execute("DELETE FROM groups WHERE id = ?1", [id])
-            });
-            if let Err(err) = deleted {
-                diag::report("Deleting a group", err);
-                return false;
-            }
+        if saved(self.store.delete(id), "Deleting a group").is_none() {
+            return false;
         }
         self.list.retain(|group| group.id != id);
         true
@@ -242,15 +212,8 @@ impl Groups {
     /// Deletes every collection and category and empties Favorites (Settings → Storage). The files
     /// are untouched.
     pub fn clear(&mut self) -> bool {
-        if let Some(conn) = &self.conn {
-            let cleared = db::in_transaction(conn, |tx| {
-                tx.execute("DELETE FROM members", [])?;
-                tx.execute("DELETE FROM groups WHERE id <> ?1", [FAVORITES])
-            });
-            if let Err(err) = cleared {
-                diag::report("Clearing favorites, collections and categories", err);
-                return false;
-            }
+        if saved(self.store.clear(), "Clearing favorites, collections and categories").is_none() {
+            return false;
         }
         self.list = vec![favorites_group()];
         true
@@ -258,64 +221,45 @@ impl Groups {
 
     /// Adds the files that aren't in the group yet; returns how many were added.
     pub fn add(&mut self, id: i64, paths: &[PathBuf]) -> usize {
-        let Some(group) = self.list.iter_mut().find(|group| group.id == id) else { return 0 };
-        let mut added = Vec::new();
-        for path in paths {
-            let key = path_key(path);
-            if group.keys.insert(key.clone()) {
-                let member = Member { key, path: path.to_string_lossy().into_owned() };
-                added.push((member, group.next_seq));
-                group.next_seq += 1;
-            }
-        }
-        if added.is_empty() {
+        let Some(group) = self.get(id) else { return 0 };
+        let mut keys = HashSet::new();
+        let added: Vec<(Member, i64)> = paths
+            .iter()
+            .filter_map(|path| {
+                let key = path_key(path);
+                (!group.contains(&key) && keys.insert(key.clone()))
+                    .then(|| Member { key, path: path.to_string_lossy().into_owned() })
+            })
+            .zip(group.next_seq..)
+            .collect();
+        if added.is_empty() || saved(self.store.add(id, &added), "Saving to a group").is_none() {
             return 0;
         }
-        if let Some(conn) = &self.conn {
-            let now = now_ms();
-            let saved = db::in_transaction(conn, |tx| {
-                let mut insert = tx.prepare_cached(
-                    "INSERT OR IGNORE INTO members(grp, key, path, seq, added) VALUES(?1, ?2, ?3, ?4, ?5)",
-                )?;
-                for (member, seq) in &added {
-                    insert.execute(params![id, member.key, member.path, seq, now])?;
-                }
-                Ok(())
-            });
-            if let Err(err) = saved {
-                diag::report("Saving to a group", err);
-            }
-        }
+        let Some(group) = self.get_mut(id) else { return 0 };
         let count = added.len();
+        group.next_seq += count as i64;
+        group.keys.extend(keys);
         group.members.extend(added.into_iter().map(|(member, _)| member));
         count
     }
 
     /// Takes files out of the group (the files themselves are untouched); returns how many.
     pub fn remove(&mut self, id: i64, keys: &[String]) -> usize {
-        let Some(group) = self.list.iter_mut().find(|group| group.id == id) else { return 0 };
-        let gone: HashSet<&String> = keys.iter().filter(|key| group.keys.contains(*key)).collect();
-        if gone.is_empty() {
+        let Some(group) = self.get(id) else { return 0 };
+        let gone: HashSet<String> = keys.iter().filter(|key| group.contains(key)).cloned().collect();
+        if gone.is_empty() || saved(self.store.remove(id, &gone), "Removing from a group").is_none() {
             return 0;
         }
+        let Some(group) = self.get_mut(id) else { return 0 };
         group.members.retain(|member| !gone.contains(&member.key));
-        for key in &gone {
-            group.keys.remove(*key);
-        }
-        if let Some(conn) = &self.conn {
-            let saved = db::in_transaction(conn, |tx| {
-                let mut delete = tx.prepare_cached("DELETE FROM members WHERE grp = ?1 AND key = ?2")?;
-                for key in &gone {
-                    delete.execute(params![id, key])?;
-                }
-                Ok(())
-            });
-            if let Err(err) = saved {
-                diag::report("Removing from a group", err);
-            }
-        }
+        group.keys.retain(|key| !gone.contains(key));
         gone.len()
     }
+}
+
+/// What a store change gave, or `None` once its failure is reported.
+fn saved<T>(result: rusqlite::Result<T>, doing: &str) -> Option<T> {
+    result.map_err(|err| diag::report(doing, err)).ok()
 }
 
 fn favorites_group() -> Group {
@@ -410,6 +354,22 @@ mod tests {
         assert!(groups.get(a).is_none());
         assert!(groups.contains(b, "/x/1.png"));
         assert_eq!(groups.unused_name(GroupKind::Collection), "New collection");
+    }
+
+    /// What the file refuses isn't done in memory either, so what's shown is what's saved.
+    #[test]
+    fn a_change_that_cant_be_saved_isnt_made() {
+        let (_dir, db) = user_data("groups_refused");
+        let mut groups = Groups::open(&db);
+        let props = groups.create(GroupKind::Collection, "Props").unwrap();
+        assert_eq!(groups.add(props, &[PathBuf::from("/x/1.png")]), 1);
+        // Another connection takes the members away under it.
+        rusqlite::Connection::open(&db).unwrap().execute_batch("DROP TABLE members").unwrap();
+        assert_eq!(groups.add(props, &[PathBuf::from("/x/2.png")]), 0);
+        assert!(!groups.contains(props, "/x/2.png"), "not saved, so not added");
+        assert_eq!(groups.remove(props, &["/x/1.png".to_owned()]), 0);
+        assert!(groups.contains(props, "/x/1.png"), "not saved, so not taken out");
+        assert!(!groups.delete(props) && groups.get(props).is_some(), "not saved, so not deleted");
     }
 
     #[test]
