@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 /// The layers, lowest first, and the top-level modules in each.
 const LAYERS: [(&str, &[&str]); 5] = [
-    ("foundation", &["paths", "db", "diag", "platform"]),
+    ("foundation", &["paths", "db", "diag", "platform", "work"]),
     (
         "domain",
         &[
@@ -57,7 +57,7 @@ impl Work {
     fn paths(self) -> &'static [&'static str] {
         match self {
             Work::Files => &["fs::"],
-            Work::Threads => &["thread::"],
+            Work::Threads => &["thread::", "work::spawn"],
             Work::Databases => &["rusqlite::", "Connection::"],
         }
     }

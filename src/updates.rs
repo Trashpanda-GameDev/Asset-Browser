@@ -6,7 +6,6 @@
 //! `.github/workflows/release.yml` packs and publishes the releases, and `main` hands the
 //! installer's and updater's visits to Velopack before anything else runs.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use crossbeam_channel::{Receiver, Sender};
@@ -14,6 +13,7 @@ use velopack::sources::AutoSource;
 use velopack::{UpdateCheck, UpdateInfo, UpdateManager};
 
 use crate::diag;
+use crate::work::{self, Wake};
 
 /// Where releases are published.
 pub const RELEASES: &str = "https://github.com/Trashpanda-GameDev/Asset-Browser";
@@ -63,7 +63,7 @@ pub struct Updates {
     status: Status,
     tx: Sender<Event>,
     rx: Receiver<Event>,
-    repaint: Arc<dyn Fn() + Send + Sync>,
+    repaint: Wake,
     /// When the last check started, to check again.
     started: Option<Instant>,
     /// When a check last found nothing newer.
@@ -78,7 +78,7 @@ pub struct Updates {
 
 impl Updates {
     /// Starts the first check, when installed. `repaint` wakes the window when there's news.
-    pub fn start(repaint: Arc<dyn Fn() + Send + Sync>) -> Self {
+    pub fn start(repaint: Wake) -> Self {
         let feed = std::env::var(FEED_VARIABLE).ok().filter(|feed| !feed.trim().is_empty());
         let source = AutoSource::new(feed.as_deref().unwrap_or(RELEASES));
         // Fails when the app isn't installed: there's no `Update.exe` beside its folder.
@@ -145,17 +145,13 @@ impl Updates {
             return;
         }
         let (manager, tx, repaint) = (manager.clone(), self.tx.clone(), self.repaint.clone());
-        let spawned = std::thread::Builder::new()
-            .name("updates".into())
-            .spawn(move || check_and_download(&manager, &tx, &*repaint));
-        match spawned {
-            Ok(_) => {
-                self.status = Status::Checking;
-                self.started = Some(Instant::now());
-                self.asked = asked;
-                self.answered = None;
-            }
-            Err(err) => self.status = Status::Failed { action: "check for updates", error: err.to_string() },
+        if work::spawn("updates", move || check_and_download(&manager, &tx, &*repaint)).is_some() {
+            self.status = Status::Checking;
+            self.started = Some(Instant::now());
+            self.asked = asked;
+            self.answered = None;
+        } else {
+            self.status = Status::Failed { action: "check for updates", error: "the check couldn't start".to_owned() };
         }
     }
 
@@ -264,6 +260,8 @@ fn failed(action: &'static str, err: &velopack::Error) -> Event {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]

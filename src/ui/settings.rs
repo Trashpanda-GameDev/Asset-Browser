@@ -16,6 +16,7 @@ use crate::memory::{self, Shares};
 use crate::storage::{self, Part, Usage};
 use crate::ui::keymap::{self, Action, Keymap, Shortcut};
 use crate::updates::{RELEASES, Status, Updates};
+use crate::work;
 
 use super::format::{format_age, format_size, grouped};
 use super::organize::plural;
@@ -299,13 +300,13 @@ impl Settings {
             let (cache, user) = (args.cache_path.to_path_buf(), args.user_path.to_path_buf());
             let (tx, rx) = crossbeam_channel::bounded(1);
             let ctx = ui.ctx().clone();
-            let spawned = std::thread::Builder::new().name("measure".into()).spawn(move || {
+            let spawned = work::spawn("measure", move || {
                 let _ = tx.send(storage::measure(&cache, &user));
                 ctx.request_repaint();
             });
             match spawned {
-                Ok(_) => self.measuring = Some(rx),
-                Err(err) => self.usage = Some(Err(err.to_string())),
+                Some(_) => self.measuring = Some(rx),
+                None => self.usage = Some(Err("measuring couldn't start".to_owned())),
             }
         }
         if let Some(rx) = &self.measuring

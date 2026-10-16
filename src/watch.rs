@@ -17,6 +17,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use crate::asset::AssetKind;
 use crate::diag;
 use crate::library::is_within;
+use crate::work;
 
 /// A folder is rescanned once its changes have stopped for this long...
 const QUIET: Duration = Duration::from_millis(750);
@@ -68,7 +69,7 @@ impl Watch {
             let shared = shared.clone();
             move |result: notify::Result<notify::Event>| {
                 let Ok(event) = result else { return };
-                let mut shared = shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut shared = work::lock(&shared);
                 let now = Instant::now();
                 let roots: Vec<PathBuf> = if event.need_rescan() {
                     // Events were lost: any of them may have changed.
@@ -128,7 +129,7 @@ impl Watch {
         }
         self.watched = roots.to_vec();
         let real = |root: &PathBuf| std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
-        let mut shared = self.shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut shared = work::lock(&self.shared);
         shared.roots = roots.iter().map(|root| (root.clone(), real(root))).collect();
         shared.changes.retain(|root, _| roots.contains(root));
     }
@@ -138,7 +139,7 @@ impl Watch {
     /// on Windows): what changes meanwhile, the rescan finds.
     pub fn poll(&mut self) -> Vec<PathBuf> {
         let ready = {
-            let mut shared = self.shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut shared = work::lock(&self.shared);
             let ready = settled(&shared.changes, Instant::now());
             shared.changes.retain(|root, _| !ready.contains(root));
             ready
@@ -154,7 +155,7 @@ impl Watch {
 
     /// How soon the next folder will have settled, if any is waiting: to ask for a frame then.
     pub fn next_due(&self) -> Option<Duration> {
-        let shared = self.shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let shared = work::lock(&self.shared);
         let now = Instant::now();
         shared.changes.values().map(|changes| due(*changes).saturating_duration_since(now)).min()
     }

@@ -28,6 +28,7 @@ pub mod thumbs;
 pub mod ui;
 pub(crate) mod updates;
 pub(crate) mod watch;
+pub mod work;
 
 #[cfg(test)]
 mod test_support;

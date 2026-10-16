@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use crossbeam_channel::Receiver;
 
-use crate::{diag, platform};
+use crate::{platform, work};
 
 /// How a deletion went.
 pub struct Deleted {
@@ -22,15 +22,12 @@ pub struct Deleted {
 /// the UI).
 pub fn start(paths: Vec<PathBuf>, done: impl FnOnce() + Send + 'static) -> Receiver<Deleted> {
     let (tx, rx) = crossbeam_channel::bounded(1);
-    let spawned = std::thread::Builder::new().name("delete".into()).spawn(move || {
+    work::spawn("delete", move || {
         let result = platform::move_to_trash(&paths).map_err(|err| err.to_string());
         // Fails only when the window has closed.
         let _ = tx.send(sort_out(paths, result));
         done();
     });
-    if let Err(err) = spawned {
-        diag::report("Starting to delete", err);
-    }
     rx
 }
 

@@ -19,6 +19,7 @@ use asset_browser::imaging::ThumbPixels;
 use asset_browser::library::{Entry, Library, root_string};
 use asset_browser::model::{self, LoadOptions, raster};
 use asset_browser::thumbs::{Preview, THUMB_MAX, THUMB_TEXTURE, ThumbJob, ThumbService};
+use asset_browser::work::Wake;
 use asset_browser::{db, scan};
 
 struct Options {
@@ -211,7 +212,7 @@ fn previews(label: &str, library: &Library, sample: &[&Entry], db_path: &Path, o
     let names: HashMap<i64, (&str, u64)> =
         sample.iter().map(|entry| (entry.key, (entry.rel.as_str(), entry.size))).collect();
     let order: HashMap<i64, usize> = sample.iter().enumerate().map(|(i, entry)| (entry.key, i)).collect();
-    let nothing: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+    let nothing: Wake = Arc::new(|| {});
     for pass in ["cold", "warm"] {
         let service = ThumbService::start_with_threads(db_path, options.threads, &nothing);
         let jobs = sample

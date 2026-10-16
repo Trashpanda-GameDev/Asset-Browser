@@ -8,7 +8,7 @@ use eframe::egui;
 
 use crate::library::{self, Library, folder_name, path_key, root_string};
 use crate::scan::ScannedFile;
-use crate::{db, diag, platform, scan};
+use crate::{db, diag, platform, scan, work};
 
 use super::BrowserApp;
 
@@ -265,7 +265,7 @@ impl BrowserApp {
         let tx = self.scan_tx.clone();
         let db_path = self.db_path.clone();
         let ctx = self.ctx.clone();
-        let spawned = std::thread::Builder::new().name("scan".into()).spawn(move || {
+        let spawned = work::spawn("scan", move || {
             let conn = db::open_cache(&db_path).map_err(|err| diag::report("Saving the index", err)).ok();
             let (mut elapsed, mut assets, mut dirs_visited, mut skipped) = (Duration::ZERO, 0, 0, 0);
             let mut fresh = Vec::new();
@@ -316,14 +316,11 @@ impl BrowserApp {
             let _ = tx.send(done);
             ctx.request_repaint();
         });
-        match spawned {
-            Ok(_) => {
-                if self.scans == 0 {
-                    self.scan_started = Instant::now();
-                }
-                self.scans += 1;
+        if spawned.is_some() {
+            if self.scans == 0 {
+                self.scan_started = Instant::now();
             }
-            Err(err) => diag::report("Starting the scan", err),
+            self.scans += 1;
         }
     }
 

@@ -10,7 +10,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{Cursor, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -25,6 +25,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::{Time, TimeBase};
 
 use crate::diag;
+use crate::work::{self, Wake, WorkList};
 
 /// Decoded audio kept ready ahead of the playhead: rides out a slow disk read without a gap.
 const BUFFER_SECONDS: f32 = 2.0;
@@ -111,7 +112,7 @@ struct Info {
 impl Player {
     /// `on_change` runs on the decoder thread whenever what `now` reports changes other than by
     /// the playhead moving (a seek landing, a sound starting or ending), e.g. to redraw the UI.
-    pub fn start(on_change: Arc<dyn Fn() + Send + Sync>) -> Result<Self, String> {
+    pub fn start(on_change: Wake) -> Result<Self, String> {
         let device = cpal::default_host().default_output_device().ok_or("no audio output device")?;
         let device_name = device.description().map_or_else(|_| "audio output".to_owned(), |d| d.to_string());
         let supported = device.default_output_config().map_err(|err| err.to_string())?;
@@ -133,10 +134,10 @@ impl Player {
 
         let (commands, receiver) = crossbeam_channel::unbounded();
         let decoder_shared = shared.clone();
-        std::thread::Builder::new()
-            .name("audio-decoder".into())
-            .spawn(move || decoder_loop(&decoder_shared, producer, &receiver, rate, channels, &*on_change))
-            .map_err(|err| err.to_string())?;
+        work::spawn("audio-decoder", move || {
+            decoder_loop(&decoder_shared, producer, &receiver, rate, channels, &*on_change);
+        })
+        .ok_or("the sound decoder couldn't start")?;
         Ok(Self { shared, commands, device_rate: rate, device_name, _stream: stream })
     }
 
@@ -171,7 +172,7 @@ impl Player {
     }
 
     pub fn now(&self) -> Option<NowPlaying> {
-        let info = self.shared.info.lock().unwrap().clone();
+        let info = work::lock(&self.shared.info).clone();
         let key = info.key?;
         let played = self.shared.played_frames.load(Ordering::Relaxed) as f64 / self.device_rate as f64;
         let mut position = info.start + played;
@@ -302,13 +303,13 @@ fn decoder_loop(
                         }
                     }
                     shared.played_frames.store(0, Ordering::Relaxed);
-                    *shared.info.lock().unwrap() = info;
+                    *work::lock(&shared.info) = info;
                 }
                 Command::Seek(seconds) => {
                     if let Some((stream, resampler)) = &mut current {
                         let result = stream.seek(seconds);
                         *resampler = Resampler::default();
-                        let mut info = shared.info.lock().unwrap();
+                        let mut info = work::lock(&shared.info);
                         match result {
                             Ok(at) => info.start = at,
                             Err(err) => {
@@ -322,7 +323,7 @@ fn decoder_loop(
                 Command::Stop => {
                     current = None;
                     shared.played_frames.store(0, Ordering::Relaxed);
-                    *shared.info.lock().unwrap() = Info::default();
+                    *work::lock(&shared.info) = Info::default();
                 }
             }
             on_change();
@@ -336,7 +337,7 @@ fn decoder_loop(
             if !pushed.is_empty()
                 && let Some(requested) = awaiting_first.take()
             {
-                shared.info.lock().unwrap().ready_ms = Some(requested.elapsed().as_secs_f32() * 1000.0);
+                work::lock(&shared.info).ready_ms = Some(requested.elapsed().as_secs_f32() * 1000.0);
                 on_change();
             }
             continue;
@@ -356,7 +357,7 @@ fn decoder_loop(
             }
             Err(err) => {
                 diag::note("Playing a sound", &err);
-                shared.info.lock().unwrap().error = Some(err);
+                work::lock(&shared.info).error = Some(err);
                 ended = true;
                 shared.decoder_done.store(true, Ordering::Release);
                 on_change();
@@ -610,10 +611,8 @@ pub struct ReadAhead {
 
 #[derive(Default)]
 struct ReadAheadShared {
-    wanted: Mutex<VecDeque<(i64, PathBuf)>>,
-    wake: Condvar,
+    wanted: WorkList<(i64, PathBuf)>,
     cache: Mutex<ByteCache>,
-    shutdown: AtomicBool,
 }
 
 #[derive(Default)]
@@ -627,55 +626,35 @@ impl ReadAhead {
     pub fn start() -> Self {
         let shared = Arc::new(ReadAheadShared::default());
         let worker = shared.clone();
-        let spawned = std::thread::Builder::new().name("read-ahead".into()).spawn(move || read_ahead_loop(&worker));
-        if let Err(err) = spawned {
-            diag::report("Starting sound read-ahead", err);
-        }
+        work::spawn("read-ahead", move || read_ahead_loop(&worker));
         Self { shared }
     }
 
     /// Replaces the list of files to read: (key, path, size). Big files are skipped.
     pub fn want(&self, files: Vec<(i64, PathBuf, u64)>) {
-        let mut wanted = self.shared.wanted.lock().unwrap();
-        wanted.clear();
-        wanted.extend(
+        self.shared.wanted.replace(
             files.into_iter().filter(|(_, _, size)| *size <= READ_AHEAD_MAX_FILE).map(|(key, path, _)| (key, path)),
         );
-        drop(wanted);
-        self.shared.wake.notify_one();
     }
 
     pub fn get(&self, key: i64) -> Option<Arc<[u8]>> {
-        self.shared.cache.lock().unwrap().files.get(&key).cloned()
+        work::lock(&self.shared.cache).files.get(&key).cloned()
     }
 }
 
 impl Drop for ReadAhead {
     fn drop(&mut self) {
-        self.shared.shutdown.store(true, Ordering::Relaxed);
-        self.shared.wake.notify_one();
+        self.shared.wanted.close();
     }
 }
 
 fn read_ahead_loop(shared: &ReadAheadShared) {
-    loop {
-        let (key, path) = {
-            let mut wanted = shared.wanted.lock().unwrap();
-            loop {
-                if shared.shutdown.load(Ordering::Relaxed) {
-                    return;
-                }
-                if let Some(next) = wanted.pop_front() {
-                    break next;
-                }
-                wanted = shared.wake.wait(wanted).unwrap();
-            }
-        };
-        if shared.cache.lock().unwrap().files.contains_key(&key) {
+    while let Some((key, path)) = shared.wanted.take() {
+        if work::lock(&shared.cache).files.contains_key(&key) {
             continue;
         }
         let Ok(bytes) = std::fs::read(&path) else { continue };
-        let mut cache = shared.cache.lock().unwrap();
+        let mut cache = work::lock(&shared.cache);
         cache.bytes += bytes.len();
         cache.files.insert(key, bytes.into());
         cache.order.push_back(key);

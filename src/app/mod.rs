@@ -49,7 +49,7 @@ use crate::ui::theme;
 use crate::ui::whats_new::WhatsNew;
 use crate::updates::Updates;
 use crate::watch::Watch;
-use crate::{db, diag, paths};
+use crate::{db, diag, paths, work};
 use deleting::{DeleteRequest, Deleting};
 use library::{LastScan, ScanDone};
 use settings::Clearing;
@@ -140,7 +140,7 @@ impl BrowserApp {
             .map_err(|err| diag::report(&format!("Cache unavailable ({})", db_path.display()), err))
             .ok();
         let ctx = cc.egui_ctx.clone();
-        let repaint: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || ctx.request_repaint());
+        let repaint: work::Wake = std::sync::Arc::new(move || ctx.request_repaint());
         let thumbs = ThumbService::start(&db_path, &repaint);
         let user_path = paths::user_data_file();
         let user_conn = db::open_user_data(&user_path)

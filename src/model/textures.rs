@@ -29,6 +29,8 @@ use std::time::{Instant, SystemTime};
 use fast_image_resize as fr;
 use image::ImageFormat;
 
+use crate::work;
+
 pub(super) struct Decoded {
     /// The file name, for display.
     pub name: String,
@@ -241,7 +243,7 @@ fn cache_cell(
     len: u64,
     modified: Option<SystemTime>,
 ) -> Arc<OnceLock<Option<Arc<Decoded>>>> {
-    let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut cache = work::lock(&CACHE);
     if let Some(index) = cache.iter().position(|entry| entry.path == path && entry.max == max && entry.alpha == alpha)
         && let Some(entry) = cache.remove(index)
         // Otherwise it changed on disk since, and is replaced.

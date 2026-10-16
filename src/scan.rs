@@ -5,11 +5,12 @@
 //! listing itself, so each file costs no extra system call.
 
 use std::path::Path;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use crate::asset::AssetKind;
+use crate::work;
 
 #[derive(Clone, Debug)]
 pub struct ScannedFile {
@@ -40,7 +41,7 @@ pub fn scan(root: &Path) -> ScanResult {
     let shared = Shared { files: Mutex::new(Vec::new()), dirs: AtomicUsize::new(0), skipped: AtomicUsize::new(0) };
     rayon::scope(|scope| walk(scope, root, "", &shared));
     ScanResult {
-        files: shared.files.into_inner().unwrap_or_default(),
+        files: shared.files.into_inner().unwrap_or_else(PoisonError::into_inner),
         dirs_visited: shared.dirs.into_inner(),
         skipped_files: shared.skipped.into_inner(),
         elapsed: start.elapsed(),
@@ -85,6 +86,6 @@ fn walk<'s>(scope: &rayon::Scope<'s>, dir: &Path, rel: &str, shared: &'s Shared)
     }
     shared.skipped.fetch_add(skipped, Ordering::Relaxed);
     if !found.is_empty() {
-        shared.files.lock().unwrap().extend(found);
+        work::lock(&shared.files).extend(found);
     }
 }

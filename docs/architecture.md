@@ -18,7 +18,7 @@ the core can be tested, measured and reused without a window.
 | ui | Draws the window from the state it's given, and returns what the user asked for; the keyboard shortcuts | `ui` |
 | services | Slow work on background threads, behind a handle | `thumbs`, `audio`, `detail`, `deletion`, `updates`, `watch`, `storage`, `memory` |
 | domain | What assets are and how to read them; the library and the user's organizing | `asset`, `library`, `scan`, `groups`, `sheets`, `model`, `imaging`, `preview_key`, `animated`, `psd_composite`, `changelog` |
-| foundation | Plumbing: where files go, the databases, the log, calls into the OS | `paths`, `db`, `diag`, `platform` |
+| foundation | Plumbing: where files go, the databases, the log, calls into the OS, background threads | `paths`, `db`, `diag`, `platform`, `work` |
 
 The programs (`src/main.rs`, `bench`, `shots`) sit on top of all of them.
 
@@ -38,7 +38,10 @@ exception the code no longer needs fails the test, so the list only shrinks.
   nothing changes halfway through drawing a frame.
 - **Services** keep slow work off the window's thread: `start(wake)` returns a handle, requests go in through its
   methods, results come back through `poll` or `try_recv`, `wake` asks the window to draw again when something is
-  ready, and dropping the handle stops its threads. Nothing slow runs on the window's thread.
+  ready, and dropping the handle stops its threads. Nothing slow runs on the window's thread. The pieces they're
+  built from are in `src/work.rs`: `spawn` starts a named thread (a thread the OS won't start is reported, and the
+  app carries on without it), `lock` and `wait` keep working after another thread panicked, `WorkList` is the list
+  of work a thread takes from (each new list replaces what's waiting), and `Wake` is the call that wakes the window.
 - **State** belongs to the part that uses it. States that rule each other out are one enum, not several bools.
 
 ## Rules for code

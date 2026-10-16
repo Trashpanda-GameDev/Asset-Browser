@@ -11,6 +11,7 @@ use fast_image_resize as fr;
 use image::ImageFormat;
 
 use crate::psd_composite;
+use crate::work;
 
 pub struct ThumbPixels {
     pub w: u32,
@@ -185,17 +186,17 @@ impl DecodeBudget {
 
     fn set_limit(&self, bytes: u64) {
         // Under the lock, so a waiter can't miss the change between checking and waiting.
-        let _state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _state = work::lock(&self.state);
         self.limit.store(bytes, Ordering::Relaxed);
         self.changed.notify_all();
     }
 
     fn reserve(&self, bytes: u64) -> Reserved<'_> {
-        let mut state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = work::lock(&self.state);
         let ticket = state.next;
         state.next += 1;
         while state.serving != ticket || (state.used > 0 && state.used + bytes > self.limit.load(Ordering::Relaxed)) {
-            state = self.changed.wait(state).unwrap_or_else(|poisoned| poisoned.into_inner());
+            state = work::wait(&self.changed, state);
         }
         state.serving += 1;
         state.used += bytes;
@@ -213,7 +214,7 @@ pub(crate) struct Reserved<'a> {
 
 impl Drop for Reserved<'_> {
     fn drop(&mut self) {
-        let mut state = self.budget.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = work::lock(&self.budget.state);
         state.used -= self.bytes;
         self.budget.changed.notify_all();
     }

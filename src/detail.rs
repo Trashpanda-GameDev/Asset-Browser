@@ -5,7 +5,7 @@
 
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 use fast_image_resize as fr;
@@ -15,6 +15,7 @@ use crate::asset::AssetKind;
 use crate::imaging::{self, ThumbPixels};
 use crate::model::{self, LoadOptions, Model};
 use crate::sheets::{self, Sheet};
+use crate::work::{self, Wake, WorkList};
 
 /// Longest side of an inspector picture, and of a model's textures in the 3D view.
 const DETAIL_MAX: u32 = 2048;
@@ -37,36 +38,25 @@ struct Request {
     kind: AssetKind,
 }
 
-#[derive(Default)]
-struct Slot {
-    next: Option<Request>,
-    shutdown: bool,
-}
-
 pub struct DetailLoader {
-    slot: Arc<(Mutex<Slot>, Condvar)>,
+    /// At most one request: a new one replaces the one waiting.
+    requests: Arc<WorkList<Request>>,
     results: Receiver<Loaded>,
 }
 
 impl DetailLoader {
     /// `on_result` runs on the loader thread after each load, e.g. to wake the UI.
-    pub fn start(on_result: Arc<dyn Fn() + Send + Sync>) -> Self {
-        let slot = Arc::new((Mutex::new(Slot::default()), Condvar::new()));
+    pub fn start(on_result: Wake) -> Self {
+        let requests = Arc::new(WorkList::new());
         let (sender, results) = crossbeam_channel::unbounded();
-        let worker = slot.clone();
-        let spawned =
-            std::thread::Builder::new().name("detail".into()).spawn(move || run(&worker, &sender, &*on_result));
-        if let Err(err) = spawned {
-            crate::diag::report("Starting the preview loader", err);
-        }
-        Self { slot, results }
+        let worker = requests.clone();
+        work::spawn("detail", move || run(&worker, &sender, &*on_result));
+        Self { requests, results }
     }
 
     /// Loads this next, replacing anything still waiting.
     pub fn request(&self, key: i64, path: PathBuf, kind: AssetKind) {
-        let (slot, wake) = &*self.slot;
-        slot.lock().unwrap().next = Some(Request { key, path, kind });
-        wake.notify_one();
+        self.requests.replace([Request { key, path, kind }]);
     }
 
     pub fn try_recv(&self) -> Option<Loaded> {
@@ -76,33 +66,15 @@ impl DetailLoader {
 
 impl Drop for DetailLoader {
     fn drop(&mut self) {
-        let (slot, wake) = &*self.slot;
-        slot.lock().unwrap().shutdown = true;
-        wake.notify_one();
+        self.requests.close();
     }
 }
 
-fn run(slot: &(Mutex<Slot>, Condvar), results: &Sender<Loaded>, on_result: &(dyn Fn() + Send + Sync)) {
+fn run(requests: &WorkList<Request>, results: &Sender<Loaded>, on_result: &(dyn Fn() + Send + Sync)) {
     let mut resizer = fr::Resizer::new();
-    loop {
-        let request = {
-            let (lock, wake) = slot;
-            let mut slot = lock.lock().unwrap();
-            loop {
-                if slot.shutdown {
-                    return;
-                }
-                if let Some(request) = slot.next.take() {
-                    break request;
-                }
-                slot = wake.wait(slot).unwrap();
-            }
-        };
+    while let Some(request) = requests.take() {
         // A newer request (or closing) makes a long load give up between frames.
-        let superseded = || {
-            let slot = slot.0.lock().unwrap();
-            slot.next.is_some() || slot.shutdown
-        };
+        let superseded = || requests.superseded();
         // Decoders can panic on malformed files; that file just fails.
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| match request.kind {
             AssetKind::Image => load_picture(&request.path, &mut resizer, &superseded),

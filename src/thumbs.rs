@@ -27,6 +27,7 @@ use crate::diag;
 use crate::imaging::{self, ThumbPixels};
 use crate::model::{self, LoadOptions, ModelInfo, blend, raster};
 use crate::storage::{self, Part};
+use crate::work::{self, Wake};
 
 /// Longest side of a stored thumbnail, in pixels. Images no bigger than this are stored as they
 /// are, so pixel art keeps its exact pixels.
@@ -101,7 +102,7 @@ pub fn default_threads() -> usize {
 
 impl ThumbService {
     /// `on_result` runs on a worker thread after each thumbnail, e.g. to wake the UI.
-    pub fn start(db_path: &Path, on_result: &Arc<dyn Fn() + Send + Sync>) -> Self {
+    pub fn start(db_path: &Path, on_result: &Wake) -> Self {
         Self::start_with_threads(db_path, default_threads(), on_result)
     }
 
@@ -111,7 +112,7 @@ impl ThumbService {
     /// 100/s. A spinning disk serves queued requests in the order that needs the least seeking,
     /// so it does best with many queued, and it tops out near 100 random files/s however
     /// they're sent. Capping reads made it slower, so there is no cap.
-    pub fn start_with_threads(db_path: &Path, threads: usize, on_result: &Arc<dyn Fn() + Send + Sync>) -> Self {
+    pub fn start_with_threads(db_path: &Path, threads: usize, on_result: &Wake) -> Self {
         let threads = threads.max(1);
         let shared = Arc::new(Shared { state: Mutex::default(), wake_workers: Condvar::new() });
         let stats = Arc::new(ThumbStats::default());
@@ -120,13 +121,10 @@ impl ThumbService {
 
         let writer = {
             let db_path = db_path.to_path_buf();
-            std::thread::Builder::new()
-                .name("thumb-writer".into())
-                .spawn(move || writer_loop(&db_path, &store_rx))
-                .expect("spawn thumbnail writer")
+            work::spawn("thumb-writer", move || writer_loop(&db_path, &store_rx))
         };
         let workers = (0..threads)
-            .map(|index| {
+            .filter_map(|index| {
                 let worker = Worker {
                     shared: shared.clone(),
                     results: result_tx.clone(),
@@ -135,14 +133,11 @@ impl ThumbService {
                     stats: stats.clone(),
                 };
                 let db_path = db_path.to_path_buf();
-                std::thread::Builder::new()
-                    .name(format!("thumb-{index}"))
-                    .spawn(move || worker.run(&db_path))
-                    .expect("spawn thumbnail worker")
+                work::spawn(&format!("thumb-{index}"), move || worker.run(&db_path))
             })
             .collect();
 
-        Self { shared, results, workers, writer: Some(writer), store: Some(store_tx), stats }
+        Self { shared, results, workers, writer, store: Some(store_tx), stats }
     }
 
     /// Clears parts of the cache, after what's waiting to be saved and before anything after it,
@@ -162,7 +157,7 @@ impl ThumbService {
 
     /// Replaces the queue. Jobs already being worked on are skipped.
     pub fn set_wanted(&self, jobs: Vec<ThumbJob>) {
-        let mut state = self.shared.state.lock().unwrap();
+        let mut state = work::lock(&self.shared.state);
         state.queue.clear();
         for job in jobs {
             if !state.in_flight.contains(&job.key) {
@@ -178,7 +173,7 @@ impl ThumbService {
 
     /// (queued, being made)
     pub fn pending(&self) -> (usize, usize) {
-        let state = self.shared.state.lock().unwrap();
+        let state = work::lock(&self.shared.state);
         (state.queue.len(), state.in_flight.len())
     }
 
@@ -194,7 +189,7 @@ impl ThumbService {
 impl Drop for ThumbService {
     fn drop(&mut self) {
         {
-            let mut state = self.shared.state.lock().unwrap();
+            let mut state = work::lock(&self.shared.state);
             state.shutdown = true;
             state.queue.clear();
         }
@@ -215,7 +210,7 @@ struct Worker {
     shared: Arc<Shared>,
     results: Sender<Thumb>,
     store: Sender<Store>,
-    on_result: Arc<dyn Fn() + Send + Sync>,
+    on_result: Wake,
     stats: Arc<ThumbStats>,
 }
 
@@ -227,7 +222,7 @@ impl Worker {
         let mut resizer = fr::Resizer::new();
         loop {
             let job = {
-                let mut state = self.shared.state.lock().unwrap();
+                let mut state = work::lock(&self.shared.state);
                 loop {
                     if state.shutdown {
                         return;
@@ -236,14 +231,14 @@ impl Worker {
                         state.in_flight.insert(job.key);
                         break job;
                     }
-                    state = self.shared.wake_workers.wait(state).unwrap();
+                    state = work::wait(&self.shared.wake_workers, state);
                 }
             };
             let thumb = self.process(&job, conn.as_ref(), &mut resizer);
             imaging::trim_resizer(&mut resizer);
             // Send before leaving `in_flight`, so the UI never re-requests a finished thumbnail.
             let sent = self.results.send(thumb).is_ok();
-            self.shared.state.lock().unwrap().in_flight.remove(&job.key);
+            work::lock(&self.shared.state).in_flight.remove(&job.key);
             if !sent {
                 return;
             }
