@@ -10,41 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::asset::AssetKind;
-use crate::model::ModelInfo;
 use crate::scan::ScannedFile;
-
-pub const FORMAT_FAILED: u8 = 0;
-pub const FORMAT_QOI: u8 = 1;
-pub const FORMAT_JPEG: u8 = 2;
-pub const FORMAT_RAW_RGBA: u8 = 3;
-
-/// A thumbnail as stored: encoded pixels, or the error message when the file couldn't be read.
-pub struct StoredThumb {
-    pub w: u32,
-    pub h: u32,
-    pub src_w: u32,
-    pub src_h: u32,
-    pub format: u8,
-    pub data: Vec<u8>,
-}
-
-/// A sound's waveform as stored, or the error message when the file couldn't be decoded.
-pub struct StoredWaveform {
-    pub duration_ms: u32,
-    pub sample_rate: u32,
-    pub channels: u16,
-    /// Min and max per point, as signed bytes.
-    pub peaks: Vec<u8>,
-    pub error: Option<String>,
-}
-
-/// One cache entry for the writer thread to save.
-pub enum CacheWrite {
-    Thumb(i64, StoredThumb),
-    Waveform(i64, StoredWaveform),
-    /// A model's picture, kept with the image thumbnails, and what's in the file.
-    Model(i64, StoredThumb, ModelInfo),
-}
 
 /// How much a file's last writes are worth after a crash or a power cut.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -242,121 +208,6 @@ pub fn save_index(conn: &Connection, root: &str, files: &[ScannedFile]) -> rusql
     })
 }
 
-pub fn get_thumb(conn: &Connection, key: i64) -> rusqlite::Result<Option<StoredThumb>> {
-    conn.prepare_cached("SELECT w, h, src_w, src_h, format, data FROM thumbs WHERE key = ?1")?
-        .query_row([key], |row| {
-            Ok(StoredThumb {
-                w: row.get(0)?,
-                h: row.get(1)?,
-                src_w: row.get(2)?,
-                src_h: row.get(3)?,
-                format: row.get(4)?,
-                data: row.get(5)?,
-            })
-        })
-        .optional()
-}
-
-pub fn get_waveform(conn: &Connection, key: i64) -> rusqlite::Result<Option<StoredWaveform>> {
-    conn.prepare_cached("SELECT duration_ms, sample_rate, channels, peaks, error FROM waveforms WHERE key = ?1")?
-        .query_row([key], |row| {
-            Ok(StoredWaveform {
-                duration_ms: row.get(0)?,
-                sample_rate: row.get(1)?,
-                channels: row.get(2)?,
-                peaks: row.get(3)?,
-                error: row.get(4)?,
-            })
-        })
-        .optional()
-}
-
-pub fn get_model(conn: &Connection, key: i64) -> rusqlite::Result<Option<ModelInfo>> {
-    conn.prepare_cached(
-        "SELECT format, vertices, triangles, meshes, materials, textures, missing_textures,
-                size_x, size_y, size_z, animations, geometry
-         FROM models WHERE key = ?1",
-    )?
-    .query_row([key], |row| {
-        Ok(ModelInfo {
-            format: row.get(0)?,
-            vertices: row.get::<_, i64>(1)? as u64,
-            triangles: row.get::<_, i64>(2)? as u64,
-            meshes: row.get(3)?,
-            materials: row.get(4)?,
-            textures: row.get(5)?,
-            missing_textures: row.get(6)?,
-            size: [row.get::<_, f64>(7)? as f32, row.get::<_, f64>(8)? as f32, row.get::<_, f64>(9)? as f32],
-            animations: decode_animations(&row.get::<_, String>(10)?),
-            geometry: row.get(11)?,
-        })
-    })
-    .optional()
-}
-
-/// One `name<TAB>seconds` line per animation.
-fn encode_animations(animations: &[(String, f32)]) -> String {
-    animations.iter().map(|(name, seconds)| format!("{}\t{seconds}\n", name.replace(['\t', '\n', '\r'], " "))).collect()
-}
-
-fn decode_animations(text: &str) -> Vec<(String, f32)> {
-    text.lines()
-        .filter_map(|line| {
-            let (name, seconds) = line.rsplit_once('\t')?;
-            Some((name.to_owned(), seconds.parse().ok()?))
-        })
-        .collect()
-}
-
-/// Saves a batch in one transaction.
-pub fn put_cache(conn: &Connection, batch: &[CacheWrite]) -> rusqlite::Result<()> {
-    in_transaction(conn, |tx| {
-        let mut thumb = tx.prepare_cached(
-            "INSERT OR REPLACE INTO thumbs(key, w, h, src_w, src_h, format, data)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        )?;
-        let mut waveform = tx.prepare_cached(
-            "INSERT OR REPLACE INTO waveforms(key, duration_ms, sample_rate, channels, peaks, error)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-        )?;
-        let mut model = tx.prepare_cached(
-            "INSERT OR REPLACE INTO models(key, format, vertices, triangles, meshes, materials, textures,
-                                           missing_textures, size_x, size_y, size_z, animations, geometry)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        )?;
-        for write in batch {
-            match write {
-                CacheWrite::Thumb(key, t) => {
-                    thumb.execute(params![key, t.w, t.h, t.src_w, t.src_h, t.format, t.data])?;
-                }
-                CacheWrite::Waveform(key, w) => {
-                    waveform.execute(params![key, w.duration_ms, w.sample_rate, w.channels, w.peaks, w.error])?;
-                }
-                CacheWrite::Model(key, t, info) => {
-                    thumb.execute(params![key, t.w, t.h, t.src_w, t.src_h, t.format, t.data])?;
-                    let [x, y, z] = info.size.map(f64::from);
-                    model.execute(params![
-                        key,
-                        info.format,
-                        info.vertices as i64,
-                        info.triangles as i64,
-                        info.meshes,
-                        info.materials,
-                        info.textures,
-                        info.missing_textures,
-                        x,
-                        y,
-                        z,
-                        encode_animations(&info.animations),
-                        info.geometry,
-                    ])?;
-                }
-            }
-        }
-        Ok(())
-    })
-}
-
 pub fn get_setting(conn: &Connection, key: &str) -> Option<String> {
     conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| row.get(0)).optional().ok().flatten()
 }
@@ -414,9 +265,7 @@ mod tests {
                 std::thread::spawn(move || {
                     barrier.wait();
                     let conn = open_cache(&path).map_err(|err| format!("open {i}: {err}"))?;
-                    let thumb =
-                        StoredThumb { w: 1, h: 1, src_w: 1, src_h: 1, format: FORMAT_RAW_RGBA, data: vec![0; 4] };
-                    put_cache(&conn, &[CacheWrite::Thumb(i, thumb)]).map_err(|err| format!("write {i}: {err}"))
+                    set_setting(&conn, &format!("thread.{i}"), "here").map_err(|err| format!("write {i}: {err}"))
                 })
             })
             .collect();

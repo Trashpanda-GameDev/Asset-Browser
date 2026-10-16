@@ -22,7 +22,7 @@ const LAYERS: [(&str, &[&str]); 5] = [
 ];
 
 /// A module using one in a higher layer: (module, the module it uses).
-const UPWARD_EXCEPTIONS: [(&str, &str); 3] = [("db", "asset"), ("db", "model"), ("db", "scan")];
+const UPWARD_EXCEPTIONS: [(&str, &str); 2] = [("db", "asset"), ("db", "scan")];
 
 /// Views that do what the app should: (file in src/, what it does).
 const VIEW_EXCEPTIONS: [(&str, Work); 3] =

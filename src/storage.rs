@@ -206,7 +206,6 @@ pub fn clear_cache(conn: &Connection, parts: &[Part]) -> rusqlite::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{CacheWrite, StoredThumb};
     use crate::test_support::TempDir;
     use rusqlite::OptionalExtension;
 
@@ -216,16 +215,17 @@ mod tests {
         let dir = temp.path();
         let path = dir.join("library.sqlite");
         let conn = db::open_cache(&path).unwrap();
-        let thumb = || StoredThumb {
-            w: 64,
-            h: 64,
-            src_w: 64,
-            src_h: 64,
-            format: db::FORMAT_RAW_RGBA,
-            data: vec![7; 64 * 64 * 4],
-        };
-        let writes: Vec<CacheWrite> = (0..200).map(|key| CacheWrite::Thumb(key, thumb())).collect();
-        db::put_cache(&conn, &writes).unwrap();
+        // 200 thumbnails of 64 × 64 pixels, as raw RGBA (the cache's format 3).
+        db::in_transaction(&conn, |tx| {
+            let mut insert = tx.prepare(
+                "INSERT INTO thumbs(key, w, h, src_w, src_h, format, data) VALUES(?1, 64, 64, 64, 64, 3, ?2)",
+            )?;
+            for key in 0..200 {
+                insert.execute(rusqlite::params![key, vec![7u8; 64 * 64 * 4]])?;
+            }
+            Ok(())
+        })
+        .unwrap();
         db::set_setting(&conn, "ui.mode", "all").unwrap();
 
         let usage = measure(&path, &dir.join("user.sqlite")).unwrap();
