@@ -25,12 +25,16 @@ use crate::db::{
 };
 use crate::diag;
 use crate::imaging::{self, ThumbPixels};
-use crate::model::{self, ModelInfo};
+use crate::model::{self, LoadOptions, ModelInfo, blend, raster};
 use crate::storage::{self, Part};
 
 /// Longest side of a stored thumbnail, in pixels. Images no bigger than this are stored as they
 /// are, so pixel art keeps its exact pixels.
 pub const THUMB_MAX: u32 = 192;
+
+/// Longest side of the textures loaded for thumbnails. A model fills at most 192 pixels, so more
+/// texture detail would only be averaged away.
+pub const THUMB_TEXTURE: u32 = 256;
 
 /// Bump when the way image thumbnails or waveforms are made changes, so old cache entries stop
 /// matching.
@@ -269,7 +273,7 @@ impl Worker {
             AssetKind::Image => make_thumbnail(&job.path, resizer).map(Preview::Image),
             AssetKind::Audio => audio::waveform(&job.path).map(|waveform| Preview::Sound(Arc::new(waveform))),
             AssetKind::Model => {
-                model::thumbnail(&job.path, resizer).map(|(pixels, info)| Preview::Model(pixels, Arc::new(info)))
+                model_thumbnail(&job.path, resizer).map(|(pixels, info)| Preview::Model(pixels, Arc::new(info)))
             }
         }))
         .unwrap_or_else(|_| Err("the decoder crashed on this file".into()));
@@ -394,6 +398,42 @@ fn writer_loop(db_path: &Path, jobs: &Receiver<Store>) {
 /// Reads an image file and shrinks the picture to fit `THUMB_MAX`.
 fn make_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<ThumbPixels, String> {
     imaging::make_image(path, resizer, THUMB_MAX)
+}
+
+/// The grid thumbnail of a model file, `THUMB_MAX` square with a transparent background, and
+/// what's in the file. For .blend files it's the picture Blender saved, cropped to what's drawn
+/// (`blend::crop_to_content`) and scaled to fit.
+///
+/// Renders have `src_w` and `src_h` set to 0: they weren't scaled from a picture of known size.
+fn model_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<(ThumbPixels, ModelInfo), String> {
+    if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("blend")) {
+        let preview = blend::read_preview(path)?;
+        let (w, h, rgba) = blend::crop_to_content(&preview);
+        let mut pixels = fit_picture(w, h, rgba, THUMB_MAX, resizer)?;
+        (pixels.src_w, pixels.src_h) = (preview.width, preview.height);
+        let info = ModelInfo { format: preview.format, ..ModelInfo::default() };
+        return Ok((pixels, info));
+    }
+    let model = model::load(path, &LoadOptions { max_texture: THUMB_TEXTURE })?;
+    let rgba = raster::render_thumbnail(&model, THUMB_MAX);
+    Ok((ThumbPixels { w: THUMB_MAX, h: THUMB_MAX, src_w: 0, src_h: 0, rgba }, model.info))
+}
+
+/// Scales a picture up or down so its longer side is `max`.
+fn fit_picture(w: u32, h: u32, rgba: Vec<u8>, max: u32, resizer: &mut fr::Resizer) -> Result<ThumbPixels, String> {
+    if w == 0 || h == 0 {
+        return Err("the saved preview has no pixels".into());
+    }
+    let scale = max as f64 / w.max(h) as f64;
+    let (fit_w, fit_h) = (((w as f64 * scale).round() as u32).max(1), ((h as f64 * scale).round() as u32).max(1));
+    if (fit_w, fit_h) == (w, h) {
+        return Ok(ThumbPixels { w, h, src_w: w, src_h: h, rgba });
+    }
+    let src = fr::images::Image::from_vec_u8(w, h, rgba, fr::PixelType::U8x4).map_err(|err| err.to_string())?;
+    let mut dst = fr::images::Image::new(fit_w, fit_h, fr::PixelType::U8x4);
+    let options = fr::ResizeOptions::new().resize_alg(fr::ResizeAlg::Convolution(fr::FilterType::CatmullRom));
+    resizer.resize(&src, &mut dst, &options).map_err(|err| err.to_string())?;
+    Ok(ThumbPixels { w: fit_w, h: fit_h, src_w: w, src_h: h, rgba: dst.into_vec() })
 }
 
 /// JPEG for opaque thumbnails (small), QOI when there's transparency (lossless and fast).

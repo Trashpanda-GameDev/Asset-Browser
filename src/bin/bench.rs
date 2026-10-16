@@ -18,7 +18,7 @@ use asset_browser::audio::{self, Source};
 use asset_browser::imaging::ThumbPixels;
 use asset_browser::library::{Entry, Library, root_string};
 use asset_browser::model::{self, LoadOptions, raster};
-use asset_browser::thumbs::{Preview, THUMB_MAX, ThumbJob, ThumbService};
+use asset_browser::thumbs::{Preview, THUMB_MAX, THUMB_TEXTURE, ThumbJob, ThumbService};
 use asset_browser::{db, scan};
 
 struct Options {
@@ -323,7 +323,7 @@ fn model_stages(library: &Library, sample: &[&Entry]) {
             continue;
         }
         let start = Instant::now();
-        let Ok(model) = model::load(&path, &LoadOptions { max_texture: model::THUMB_TEXTURE }) else { continue };
+        let Ok(model) = model::load(&path, &LoadOptions { max_texture: THUMB_TEXTURE }) else { continue };
         let loaded = start.elapsed();
         let start = Instant::now();
         let picture = raster::render_thumbnail(&model, THUMB_MAX);

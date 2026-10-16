@@ -1,5 +1,5 @@
 //! 3D models: reads the common interchange formats into one simple form (`Model`) that both the
-//! thumbnail renderer (`raster`) and the model viewer draw, and makes the grid's model thumbnails.
+//! thumbnail renderer (`raster`) and the model viewer draw.
 //!
 //! Every loader produces the same space: right-handed, Y up, metres, the model's front facing +Z
 //! (glTF's convention), with every node transform already applied, so nothing downstream looks at
@@ -8,11 +8,6 @@
 //! but it carries the picture Blender saved with it (`blend`).
 
 use std::path::Path;
-
-use fast_image_resize as fr;
-
-use crate::imaging::ThumbPixels;
-use crate::thumbs::THUMB_MAX;
 
 pub mod blend;
 mod collada;
@@ -140,10 +135,6 @@ pub struct LoadOptions {
     pub max_texture: u32,
 }
 
-/// Longest side of the textures loaded for thumbnails. A model fills at most 192 pixels, so more
-/// texture detail would only be averaged away.
-pub const THUMB_TEXTURE: u32 = 256;
-
 /// Models with more triangles than this aren't loaded. A vertex is 48 bytes and a faceted STL has
 /// three per triangle, so this keeps one model under about 600 MB with a thumbnail made on every
 /// core at once. The largest model in the test library has 151,000.
@@ -158,7 +149,7 @@ fn check_triangle_count(triangles: u64) -> Result<(), String> {
 }
 
 /// Reads a model file. Returns an error for .blend files, whose geometry can't be read without
-/// Blender (see `thumbnail` and `blend::read_preview` for their saved picture).
+/// Blender (see `blend::read_preview` for their saved picture).
 pub fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
     match extension(path).as_str() {
         "fbx" | "obj" => fbx::load(path, options),
@@ -172,44 +163,8 @@ pub fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
     }
 }
 
-/// The grid thumbnail of a model file, `THUMB_MAX` square with a transparent background, and
-/// what's in the file. For .blend files it's the picture Blender saved, cropped to what's drawn
-/// (`blend::crop_to_content`) and scaled to fit.
-///
-/// Renders have `src_w` and `src_h` set to 0: they weren't scaled from a picture of known size.
-pub fn thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<(ThumbPixels, ModelInfo), String> {
-    if extension(path) == "blend" {
-        let preview = blend::read_preview(path)?;
-        let (w, h, rgba) = blend::crop_to_content(&preview);
-        let mut pixels = fit_picture(w, h, rgba, THUMB_MAX, resizer)?;
-        (pixels.src_w, pixels.src_h) = (preview.width, preview.height);
-        let info = ModelInfo { format: preview.format, ..ModelInfo::default() };
-        return Ok((pixels, info));
-    }
-    let model = load(path, &LoadOptions { max_texture: THUMB_TEXTURE })?;
-    let rgba = raster::render_thumbnail(&model, THUMB_MAX);
-    Ok((ThumbPixels { w: THUMB_MAX, h: THUMB_MAX, src_w: 0, src_h: 0, rgba }, model.info))
-}
-
 fn extension(path: &Path) -> String {
     path.extension().and_then(|ext| ext.to_str()).unwrap_or("").to_ascii_lowercase()
-}
-
-/// Scales a picture up or down so its longer side is `max`.
-fn fit_picture(w: u32, h: u32, rgba: Vec<u8>, max: u32, resizer: &mut fr::Resizer) -> Result<ThumbPixels, String> {
-    if w == 0 || h == 0 {
-        return Err("the saved preview has no pixels".into());
-    }
-    let scale = max as f64 / w.max(h) as f64;
-    let (fit_w, fit_h) = (((w as f64 * scale).round() as u32).max(1), ((h as f64 * scale).round() as u32).max(1));
-    if (fit_w, fit_h) == (w, h) {
-        return Ok(ThumbPixels { w, h, src_w: w, src_h: h, rgba });
-    }
-    let src = fr::images::Image::from_vec_u8(w, h, rgba, fr::PixelType::U8x4).map_err(|err| err.to_string())?;
-    let mut dst = fr::images::Image::new(fit_w, fit_h, fr::PixelType::U8x4);
-    let options = fr::ResizeOptions::new().resize_alg(fr::ResizeAlg::Convolution(fr::FilterType::CatmullRom));
-    resizer.resize(&src, &mut dst, &options).map_err(|err| err.to_string())?;
-    Ok(ThumbPixels { w: fit_w, h: fit_h, src_w: w, src_h: h, rgba: dst.into_vec() })
 }
 
 /// Display colour (sRGB-encoded, as FBX, MTL and 3DS files store material colours) to linear.

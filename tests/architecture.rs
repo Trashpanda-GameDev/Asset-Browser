@@ -22,8 +22,7 @@ const LAYERS: [(&str, &[&str]); 5] = [
 ];
 
 /// A module using one in a higher layer: (module, the module it uses).
-const UPWARD_EXCEPTIONS: [(&str, &str); 5] =
-    [("db", "asset"), ("db", "model"), ("db", "scan"), ("library", "thumbs"), ("model", "thumbs")];
+const UPWARD_EXCEPTIONS: [(&str, &str); 4] = [("db", "asset"), ("db", "model"), ("db", "scan"), ("library", "thumbs")];
 
 /// Modules below `ui` that use egui.
 const EGUI_EXCEPTIONS: [&str; 1] = ["asset"];
