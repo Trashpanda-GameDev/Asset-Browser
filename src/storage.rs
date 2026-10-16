@@ -119,11 +119,31 @@ pub struct LogFile {
     pub bytes: Option<u64>,
 }
 
+/// Why the files couldn't be measured. The Storage page shows the message.
+#[derive(Debug, thiserror::Error)]
+pub enum StorageError {
+    #[error("measuring couldn't start")]
+    NotStarted,
+    #[error("{}: {error}", .path.display())]
+    File { path: PathBuf, error: FileError },
+}
+
+/// What went wrong measuring one of the files.
+#[derive(Debug, thiserror::Error)]
+pub enum FileError {
+    #[error("opening it: {0}")]
+    Open(rusqlite::Error),
+    #[error("looking for {table}: {error}")]
+    Find { table: &'static str, error: rusqlite::Error },
+    #[error("counting {table}: {error}")]
+    Count { table: &'static str, error: rusqlite::Error },
+}
+
 /// Measuring both files on a thread of its own, and the last measure.
 #[derive(Default)]
 pub struct Measurement {
-    usage: Option<Result<Usage, String>>,
-    job: Option<Receiver<Result<Usage, String>>>,
+    usage: Option<Result<Usage, StorageError>>,
+    job: Option<Receiver<Result<Usage, StorageError>>>,
 }
 
 impl Measurement {
@@ -140,7 +160,7 @@ impl Measurement {
         });
         match spawned {
             Some(_) => self.job = Some(rx),
-            None => self.usage = Some(Err("measuring couldn't start".to_owned())),
+            None => self.usage = Some(Err(StorageError::NotStarted)),
         }
     }
 
@@ -154,7 +174,7 @@ impl Measurement {
         }
     }
 
-    pub fn usage(&self) -> Option<&Result<Usage, String>> {
+    pub fn usage(&self) -> Option<&Result<Usage, StorageError>> {
         self.usage.as_ref()
     }
 
@@ -172,7 +192,7 @@ impl Measurement {
 /// Measures both files. Reads every page of the cache, so it's for a background thread. Every
 /// failure is logged with the file and the step. Sizes that can't be read are left unknown, with
 /// the counts still given; only a file that can't be opened or counted fails.
-pub fn measure(cache: &Path, user: &Path) -> Result<Usage, String> {
+pub fn measure(cache: &Path, user: &Path) -> Result<Usage, StorageError> {
     let mut usage =
         Usage { cache_file: file_size(cache), user_file: file_size(user), logs: log_files(), ..Usage::default() };
     let files = [(cache, &Part::CACHE[..], Durability::Cache), (user, &Part::USER[..], Durability::UserData)];
@@ -180,18 +200,18 @@ pub fn measure(cache: &Path, user: &Path) -> Result<Usage, String> {
         if !path.exists() {
             continue;
         }
-        if let Err(err) = measure_file(path, durability, parts, &mut usage) {
-            let message = format!("{}: {err}", path.display());
+        if let Err(error) = measure_file(path, durability, parts, &mut usage) {
+            let error = StorageError::File { path: path.to_path_buf(), error };
             // The Storage page shows it; the log keeps it.
-            diag::note("Measuring the files", &message);
-            return Err(message);
+            diag::note("Measuring the files", &error);
+            return Err(error);
         }
     }
     Ok(usage)
 }
 
-fn measure_file(path: &Path, durability: Durability, parts: &[Part], usage: &mut Usage) -> Result<(), String> {
-    let conn = db::connect(path, durability).map_err(|err| format!("opening it: {err}"))?;
+fn measure_file(path: &Path, durability: Durability, parts: &[Part], usage: &mut Usage) -> Result<(), FileError> {
+    let conn = db::connect(path, durability).map_err(FileError::Open)?;
     // The space each table takes, from SQLite's page statistics, tried three times.
     let mut bytes = None;
     for attempt in 1..=3 {
@@ -220,14 +240,14 @@ fn measure_file(path: &Path, durability: Durability, parts: &[Part], usage: &mut
 }
 
 /// A table's rows (those matching `filter`); none if the table hasn't been made yet.
-fn rows(conn: &Connection, table: &str, filter: &str) -> Result<u64, String> {
+fn rows(conn: &Connection, table: &'static str, filter: &str) -> Result<u64, FileError> {
     let count = |sql: &str| conn.query_row(sql, [], |row| row.get::<_, i64>(0)).map(|n| n as u64);
     let exists = count(&format!("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '{table}'"))
-        .map_err(|err| format!("looking for {table}: {err}"))?;
+        .map_err(|error| FileError::Find { table, error })?;
     if exists == 0 {
         return Ok(0);
     }
-    count(&format!("SELECT COUNT(*) FROM {table}{filter}")).map_err(|err| format!("counting {table}: {err}"))
+    count(&format!("SELECT COUNT(*) FROM {table}{filter}")).map_err(|error| FileError::Count { table, error })
 }
 
 /// The app's log, and the updater's when there is one.
@@ -328,6 +348,17 @@ mod tests {
     }
 
     /// The parts name tables that other modules make: renaming one there has to rename it here.
+    #[test]
+    fn a_failed_measure_says_which_file_and_step() {
+        let no_rows = || rusqlite::Error::QueryReturnedNoRows;
+        let error = StorageError::File {
+            path: PathBuf::from("cache.sqlite"),
+            error: FileError::Count { table: "thumbs", error: no_rows() },
+        };
+        assert_eq!(error.to_string(), format!("cache.sqlite: counting thumbs: {}", no_rows()));
+        assert_eq!(StorageError::NotStarted.to_string(), "measuring couldn't start");
+    }
+
     #[test]
     fn every_part_names_tables_its_file_has() {
         let temp = TempDir::new("storage_tables");

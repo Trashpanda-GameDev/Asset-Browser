@@ -9,7 +9,7 @@ use eframe::egui::{
 };
 use egui_phosphor::regular as icon;
 
-use crate::storage::{Part, Usage};
+use crate::storage::{Part, StorageError, Usage};
 use crate::ui::keymap::{self, Action, Keymap, Shortcut};
 use crate::updates::Updates;
 
@@ -86,7 +86,7 @@ pub struct SettingsArgs<'a> {
     pub user_path: &'a Path,
     pub log_path: &'a Path,
     /// The last measure of the files (`Command::Measure` asks for one), and whether one is under way.
-    pub usage: Option<&'a Result<Usage, String>>,
+    pub usage: Option<&'a Result<Usage, StorageError>>,
     pub measuring: bool,
 }
 
