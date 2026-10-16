@@ -70,7 +70,7 @@ fn binary(data: &[u8]) -> Vec<[f32; 3]> {
     corners
 }
 
-fn text(bytes: &[u8]) -> Result<Vec<[f32; 3]>, String> {
+fn text(bytes: &[u8]) -> Result<Vec<[f32; 3]>, ModelError> {
     let text = String::from_utf8_lossy(bytes);
     let mut corners = Vec::new();
     let mut words = text.split_ascii_whitespace();

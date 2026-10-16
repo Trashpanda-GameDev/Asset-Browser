@@ -19,6 +19,8 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 
+use super::ModelError;
+
 /// Stops a damaged length from asking for gigabytes; Blender's previews are 128 or 256 square.
 const MAX_SIDE: i64 = 2048;
 
@@ -31,10 +33,10 @@ pub struct Preview {
     pub format: String,
 }
 
-pub fn read_preview(path: &Path) -> Result<Preview, String> {
-    let file = File::open(path).map_err(|err| err.to_string())?;
+pub fn read_preview(path: &Path) -> Result<Preview, ModelError> {
+    let file = File::open(path)?;
     let mut reader = BufReader::with_capacity(64 * 1024, file);
-    let magic: [u8; 4] = match reader.fill_buf().map_err(|err| err.to_string())? {
+    let magic: [u8; 4] = match reader.fill_buf()? {
         [a, b, c, d, ..] => [*a, *b, *c, *d],
         _ => return Err("not a Blender file".into()),
     };
@@ -45,7 +47,7 @@ pub fn read_preview(path: &Path) -> Result<Preview, String> {
     }
 }
 
-fn read_from(mut r: impl Read) -> Result<Preview, String> {
+fn read_from(mut r: impl Read) -> Result<Preview, ModelError> {
     let mut header = [0u8; 12];
     r.read_exact(&mut header).map_err(|_| "not a Blender file")?;
     if &header[..7] != b"BLENDER" {
@@ -90,7 +92,7 @@ fn read_from(mut r: impl Read) -> Result<Preview, String> {
             b"GLOB" | b"DATA" | b"DNA1" | b"ENDB" => return Err("this Blender file has no saved preview".into()),
             _ => {
                 let len = u64::try_from(len).map_err(|_| "damaged Blender file")?;
-                let skipped = io::copy(&mut (&mut r).take(len), &mut io::sink()).map_err(|err| err.to_string())?;
+                let skipped = io::copy(&mut (&mut r).take(len), &mut io::sink())?;
                 if skipped < len {
                     return Err("this Blender file has no saved preview".into());
                 }
@@ -152,7 +154,7 @@ pub fn crop_to_content(preview: &Preview) -> (u32, u32, Vec<u8>) {
     (side as u32, side as u32, rgba)
 }
 
-fn read_test(r: &mut impl Read, layout: &Layout, len: i64) -> Result<(u32, u32, Vec<u8>), String> {
+fn read_test(r: &mut impl Read, layout: &Layout, len: i64) -> Result<(u32, u32, Vec<u8>), ModelError> {
     let mut size = [0u8; 8];
     r.read_exact(&mut size).map_err(|_| "the saved preview is cut short")?;
     let width = layout.i32(&size[..4]) as i64;
@@ -168,7 +170,7 @@ fn read_test(r: &mut impl Read, layout: &Layout, len: i64) -> Result<(u32, u32, 
     Ok((width as u32, height as u32, rgba))
 }
 
-fn digits(bytes: &[u8]) -> Result<u32, String> {
+fn digits(bytes: &[u8]) -> Result<u32, ModelError> {
     if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
         return Err("unknown Blender file header".into());
     }
@@ -330,7 +332,7 @@ mod tests {
         assert_eq!(preview.format, "Blender 5.0");
         // A format version we don't know is a clear error, not garbage.
         out[10..12].copy_from_slice(b"02");
-        assert!(read_from(&out[..]).err().unwrap().contains("newer"));
+        assert!(read_from(&out[..]).err().unwrap().to_string().contains("newer"));
     }
 
     #[test]
@@ -379,7 +381,7 @@ mod tests {
         // Rename the TEST block: no preview before GLOB.
         let at = data.windows(4).position(|w| w == b"TEST").unwrap();
         data[at..at + 4].copy_from_slice(b"XXXX");
-        assert_eq!(read_from(&data[..]).err().unwrap(), "this Blender file has no saved preview");
+        assert_eq!(read_from(&data[..]).err().unwrap().to_string(), "this Blender file has no saved preview");
         assert!(read_from(&b"PK\x03\x04 not blender"[..]).is_err());
         assert!(read_from(&data[..20]).is_err());
         assert_eq!(version_name(402), "4.2");

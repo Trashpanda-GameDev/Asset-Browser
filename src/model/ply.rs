@@ -94,7 +94,7 @@ struct Header {
     data: usize,
 }
 
-fn parse_header(bytes: &[u8]) -> Result<Header, String> {
+fn parse_header(bytes: &[u8]) -> Result<Header, ModelError> {
     if !bytes.starts_with(b"ply") {
         return Err("not a PLY file".into());
     }
@@ -110,7 +110,7 @@ fn parse_header(bytes: &[u8]) -> Result<Header, String> {
                     "ascii" => Encoding::Ascii,
                     "binary_little_endian" => Encoding::Little,
                     "binary_big_endian" => Encoding::Big,
-                    other => return Err(format!("unknown PLY format {other}")),
+                    other => return Err(format!("unknown PLY format {other}").into()),
                 }
             }
             ["comment", key, name @ ..] if key.eq_ignore_ascii_case("TextureFile") && !name.is_empty() => {
@@ -146,7 +146,7 @@ struct Values<'a> {
 }
 
 impl Values<'_> {
-    fn next(&mut self, scalar: Scalar) -> Result<f64, String> {
+    fn next(&mut self, scalar: Scalar) -> Result<f64, ModelError> {
         const SHORT: &str = "the PLY data ends early";
         if self.encoding == Encoding::Ascii {
             let rest = &self.bytes[self.at.min(self.bytes.len())..];
@@ -154,7 +154,7 @@ impl Values<'_> {
             let len = rest[start..].iter().position(|b| b.is_ascii_whitespace()).unwrap_or(rest.len() - start);
             self.at += start + len;
             let word = std::str::from_utf8(&rest[start..start + len]).map_err(|_| "bad number in PLY data")?;
-            return word.parse::<f64>().map_err(|_| format!("bad number in PLY data: {word}"));
+            return word.parse::<f64>().map_err(|_| format!("bad number in PLY data: {word}").into());
         }
         let size = scalar.size();
         let raw = self.bytes.get(self.at..self.at + size).ok_or(SHORT)?;
@@ -177,7 +177,7 @@ impl Values<'_> {
     }
 
     /// Steps over a list: its length, then that many entries.
-    fn skip_list(&mut self, count: Scalar, scalar: Scalar) -> Result<(), String> {
+    fn skip_list(&mut self, count: Scalar, scalar: Scalar) -> Result<(), ModelError> {
         let n = self.next(count)?;
         for _ in 0..n.clamp(0.0, MAX_LIST) as usize {
             self.next(scalar)?;
@@ -297,7 +297,7 @@ fn read_vertices(
     layout: &VertexLayout,
     values: &mut Values,
     vertices: &mut Vec<Vertex>,
-) -> Result<(), String> {
+) -> Result<(), ModelError> {
     vertices.reserve(element.count.min(MAX_RESERVED_VERTICES));
     let mut row = vec![0.0f64; element.properties.len()];
     for _ in 0..element.count {
@@ -323,7 +323,7 @@ struct FaceLayout {
 }
 
 impl FaceLayout {
-    fn of(element: &Element) -> Result<Self, String> {
+    fn of(element: &Element) -> Result<Self, ModelError> {
         let indices = element.find(&["vertex_indices", "vertex_index"]).ok_or("PLY faces without vertex indices")?;
         Ok(Self { indices, texcoord: element.find(&["texcoord"]) })
     }
@@ -338,7 +338,7 @@ struct Face {
 }
 
 impl Face {
-    fn read(&mut self, element: &Element, layout: &FaceLayout, values: &mut Values) -> Result<(), String> {
+    fn read(&mut self, element: &Element, layout: &FaceLayout, values: &mut Values) -> Result<(), ModelError> {
         self.corners.clear();
         self.uvs.clear();
         for (i, property) in element.properties.iter().enumerate() {
@@ -377,7 +377,7 @@ fn read_faces(
     element: &Element,
     values: &mut Values,
     corners: &mut Vec<(u32, Option<[f32; 2]>)>,
-) -> Result<bool, String> {
+) -> Result<bool, ModelError> {
     let layout = FaceLayout::of(element)?;
     let mut face = Face::default();
     let mut any = false;
@@ -390,7 +390,7 @@ fn read_faces(
 }
 
 /// Steps over an element this reader has no use for.
-fn skip(element: &Element, values: &mut Values) -> Result<(), String> {
+fn skip(element: &Element, values: &mut Values) -> Result<(), ModelError> {
     for _ in 0..element.count {
         for property in &element.properties {
             match property.list {

@@ -87,7 +87,7 @@ fn animations(document: &Document) -> Vec<(String, f32)> {
 /// The crate's validation, minus what doesn't stop us drawing: positions missing their min/max
 /// (bounds are computed from the data anyway), required extensions the crate doesn't know, and
 /// textures whose picture only an extension gives (KTX2), which are then counted as missing.
-fn check(document: &Document) -> Result<(), String> {
+fn check(document: &Document) -> Result<(), ModelError> {
     use ::gltf::json::validation::Validate;
     let root = document.as_json();
     // The crate's own check of POSITION indexes the accessors before checking the index.
@@ -105,11 +105,11 @@ fn check(document: &Document) -> Result<(), String> {
         !(path.ends_with(".min") || path.ends_with(".max") || path.starts_with("extensionsRequired") || textureless)
     });
     if let Some((path, error)) = errors.first() {
-        return Err(format!("glTF: {error} at {path}"));
+        return Err(format!("glTF: {error} at {path}").into());
     }
     for extension in document.extensions_required() {
         if matches!(extension, "KHR_draco_mesh_compression" | "EXT_meshopt_compression") {
-            return Err(format!("glTF: the geometry is compressed with {extension}, which isn't supported"));
+            return Err(format!("glTF: the geometry is compressed with {extension}, which isn't supported").into());
         }
     }
     Ok(())

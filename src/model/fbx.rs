@@ -175,7 +175,7 @@ impl Reader<'_> {
         slot
     }
 
-    fn add_mesh(&mut self, node: &ufbx::Node, mesh: &ufbx::Mesh) -> Result<(), String> {
+    fn add_mesh(&mut self, node: &ufbx::Node, mesh: &ufbx::Mesh) -> Result<(), ModelError> {
         let to_world = &node.geometry_to_world;
         let to_world_normals = ufbx::matrix_for_normals(to_world);
         // Skinned positions are in model space already.
@@ -228,7 +228,7 @@ impl Reader<'_> {
 
     /// Adds triangles given one vertex per corner, merging the identical ones first, and empties
     /// `vertices`.
-    fn add_corners(&mut self, material: u32, vertices: &mut Vec<Vertex>) -> Result<(), String> {
+    fn add_corners(&mut self, material: u32, vertices: &mut Vec<Vertex>) -> Result<(), ModelError> {
         if vertices.is_empty() {
             return Ok(());
         }

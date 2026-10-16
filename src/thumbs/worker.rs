@@ -102,7 +102,7 @@ fn make_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<Pixels, Stri
 /// Renders have `src_w` and `src_h` set to 0: they weren't scaled from a picture of known size.
 fn model_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<(Pixels, ModelInfo), String> {
     if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("blend")) {
-        let preview = blend::read_preview(path)?;
+        let preview = blend::read_preview(path).map_err(|err| err.to_string())?;
         let (w, h, rgba) = blend::crop_to_content(&preview);
         let mut pixels = fit_picture(w, h, rgba, THUMB_MAX, resizer)?;
         (pixels.src_w, pixels.src_h) = (preview.width, preview.height);
