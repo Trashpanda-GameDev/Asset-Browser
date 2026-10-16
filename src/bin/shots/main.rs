@@ -175,11 +175,9 @@ struct Shots {
     writing: Vec<JoinHandle<()>>,
 }
 
-impl eframe::App for Shots {
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        self.app.ui(ui, frame);
-        let ctx = ui.ctx().clone();
+impl Shots {
+    /// Saves the pictures asked for, and hands the clip's frames to its recording.
+    fn keep_screenshots(&mut self, ctx: &egui::Context) {
         // A picture's name, or none for the clip's frames.
         let taken: Vec<(Option<String>, Arc<egui::ColorImage>)> = ctx.input(|input| {
             input
@@ -206,51 +204,72 @@ impl eframe::App for Shots {
                 }
             }
         }
+    }
+
+    /// Runs the plan's steps whose time has come.
+    fn run_due_steps(&mut self, ctx: &egui::Context) {
         let elapsed = self.start.elapsed().as_secs_f32();
         while let Some((at, step)) = self.plan.get(self.next)
             && *at <= elapsed
         {
-            match step {
-                Step::Shot(name) => {
-                    let user_data = egui::UserData::new((*name).to_owned());
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(user_data));
-                }
-                Step::Settings(page) => self.app.show_settings(*page),
-                Step::WhatsNew(Some(every_version)) => self.app.show_whats_new(*every_version),
-                Step::WhatsNew(None) => self.app.hide_whats_new(),
-                Step::View(view) => self.app.show_view(*view),
-                Step::Record(clip) => self.recording = Some(Recording::start(*clip)),
-                Step::Key(key) => {
-                    for pressed in [true, false] {
-                        let modifiers = egui::Modifiers::NONE;
-                        self.keys.push(egui::Event::Key {
-                            key: *key,
-                            physical_key: None,
-                            pressed,
-                            repeat: false,
-                            modifiers,
-                        });
-                    }
-                }
-                Step::Arrive(i) => {
-                    if let Some(Err(err)) = self.library.as_deref().map(|library| demo::arrive(library, *i)) {
-                        eprintln!("couldn't add a file to the library: {err}");
-                    }
-                }
-                Step::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            }
+            self.run(step, ctx);
             self.next += 1;
         }
-        if let Some(recording) = &mut self.recording {
-            if recording.due() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(ClipFrame)));
+    }
+
+    fn run(&mut self, step: &Step, ctx: &egui::Context) {
+        match step {
+            Step::Shot(name) => {
+                let user_data = egui::UserData::new((*name).to_owned());
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(user_data));
             }
-            if recording.done()
-                && let Some(recording) = self.recording.take()
-            {
-                self.writing.push(recording.finish(&self.out));
+            Step::Settings(page) => self.app.show_settings(*page),
+            Step::WhatsNew(Some(every_version)) => self.app.show_whats_new(*every_version),
+            Step::WhatsNew(None) => self.app.hide_whats_new(),
+            Step::View(view) => self.app.show_view(*view),
+            Step::Record(clip) => self.recording = Some(Recording::start(*clip)),
+            Step::Key(key) => {
+                for pressed in [true, false] {
+                    let modifiers = egui::Modifiers::NONE;
+                    self.keys.push(egui::Event::Key {
+                        key: *key,
+                        physical_key: None,
+                        pressed,
+                        repeat: false,
+                        modifiers,
+                    });
+                }
             }
+            Step::Arrive(i) => {
+                if let Some(Err(err)) = self.library.as_deref().map(|library| demo::arrive(library, *i)) {
+                    eprintln!("couldn't add a file to the library: {err}");
+                }
+            }
+            Step::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
+    }
+
+    /// Asks for the clip's next frame when it's due, and writes the clip once it has them all.
+    fn record(&mut self, ctx: &egui::Context) {
+        let Some(recording) = &mut self.recording else { return };
+        if recording.due() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(ClipFrame)));
+        }
+        if recording.done()
+            && let Some(recording) = self.recording.take()
+        {
+            self.writing.push(recording.finish(&self.out));
+        }
+    }
+}
+
+impl eframe::App for Shots {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.app.ui(ui, frame);
+        let ctx = ui.ctx().clone();
+        self.keep_screenshots(&ctx);
+        self.run_due_steps(&ctx);
+        self.record(&ctx);
         ctx.request_repaint();
     }
 
@@ -261,6 +280,7 @@ impl eframe::App for Shots {
     fn on_exit(&mut self) {
         self.app.on_exit();
         for writing in self.writing.drain(..) {
+            // A clip's writer says itself whether it saved; one that panicked has printed why.
             let _ = writing.join();
         }
     }
@@ -289,10 +309,12 @@ fn main() -> eframe::Result {
         args.remove(0);
     }
     let out = args.first().cloned().unwrap_or_else(|| PathBuf::from("."));
+    // If it can't be made, saving each picture says so.
     let _ = std::fs::create_dir_all(&out);
     let (show, plan, size): (_, &'static [(f32, Step)], _) = if demo {
         // The app's own files go in the build folder, made afresh each time.
         let dir = std::path::absolute("target/demo").unwrap_or_else(|_| PathBuf::from("target/demo"));
+        // Not there the first time.
         let _ = std::fs::remove_dir_all(&dir);
         // SAFETY: no other thread has started yet, so nothing reads the environment meanwhile.
         unsafe { std::env::set_var(paths::HOME_VARIABLE, dir.join("home")) };
