@@ -649,6 +649,39 @@ mod tests {
     }
 
     #[test]
+    fn skinned_mesh_is_placed_by_its_joints_not_its_node() {
+        // Every vertex on joint 0 with all its weight; the joint is node 1, moved up 5. The
+        // mesh's own node is moved 10 to the side, which glTF says a skinned mesh ignores.
+        let mut bin = quad_buffer();
+        bin.extend([0u8; 16]);
+        for _ in 0..4 {
+            bin.extend([1.0f32, 0.0, 0.0, 0.0].iter().flat_map(|w| w.to_le_bytes()));
+        }
+        let json = r#"{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1]}],
+            "nodes":[{"mesh":0,"skin":0,"translation":[10,0,0]},{"translation":[0,5,0]}],
+            "skins":[{"joints":[1]}],
+            "meshes":[{"primitives":[{"attributes":
+                {"POSITION":0,"NORMAL":1,"TEXCOORD_0":2,"JOINTS_0":4,"WEIGHTS_0":5},"indices":3}]}],
+            "buffers":[{"byteLength":220}],
+            "bufferViews":[
+                {"buffer":0,"byteOffset":0,"byteLength":48},
+                {"buffer":0,"byteOffset":48,"byteLength":48},
+                {"buffer":0,"byteOffset":96,"byteLength":32},
+                {"buffer":0,"byteOffset":128,"byteLength":12},
+                {"buffer":0,"byteOffset":140,"byteLength":16},
+                {"buffer":0,"byteOffset":156,"byteLength":64}],
+            "accessors":[
+                {"bufferView":0,"componentType":5126,"count":4,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},
+                {"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"},
+                {"bufferView":2,"componentType":5126,"count":4,"type":"VEC2"},
+                {"bufferView":3,"componentType":5123,"count":6,"type":"SCALAR"},
+                {"bufferView":4,"componentType":5121,"count":4,"type":"VEC4"},
+                {"bufferView":5,"componentType":5126,"count":4,"type":"VEC4"}]}"#;
+        let model = parse(&glb(json, &bin), Path::new("test.glb"), &options()).unwrap();
+        assert_eq!((model.bounds.min, model.bounds.max), ([0.0, 5.0, 0.0], [1.0, 6.0, 0.0]));
+    }
+
+    #[test]
     fn missing_normals_give_flat_shading() {
         let json = quad_json(r#"{"byteLength":140}"#, "", "", "").replace(r#""NORMAL":1,"#, "");
         let model = parse(&glb(&json, &quad_buffer()), Path::new("test.glb"), &options()).unwrap();

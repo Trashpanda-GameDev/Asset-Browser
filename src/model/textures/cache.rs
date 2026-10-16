@@ -101,15 +101,58 @@ fn cache_cell(
         cache.push_front(entry);
         return cell;
     }
-    // The oldest go first, past the count or the bytes (of those decoded by now).
-    let budget = CACHE_BUDGET.load(Ordering::Relaxed);
-    let held = |cache: &VecDeque<Cached>| -> u64 {
-        cache.iter().filter_map(|entry| entry.texture.get()?.as_ref()).map(|decoded| decoded.rgba.len() as u64).sum()
-    };
-    while cache.len() >= CACHE_ENTRIES || (!cache.is_empty() && held(&cache) > budget) {
-        cache.pop_back();
-    }
+    make_room(&mut cache, CACHE_BUDGET.load(Ordering::Relaxed));
     let cell = Arc::new(OnceLock::new());
     cache.push_front(Cached { path: path.to_path_buf(), max, alpha, len, modified, texture: cell.clone() });
     cell
+}
+
+/// Drops the oldest textures (at the back) until one more fits: within `CACHE_ENTRIES`, and
+/// within `budget` bytes of those decoded by now.
+fn make_room(cache: &mut VecDeque<Cached>, budget: u64) {
+    let held = |cache: &VecDeque<Cached>| -> u64 {
+        cache.iter().filter_map(|entry| entry.texture.get()?.as_ref()).map(|decoded| decoded.rgba.len() as u64).sum()
+    };
+    while cache.len() >= CACHE_ENTRIES || (!cache.is_empty() && held(cache) > budget) {
+        cache.pop_back();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cache entry for `name`, decoded to `bytes` of pixels or still decoding.
+    fn entry(name: &str, bytes: Option<usize>) -> Cached {
+        let decoded = bytes.map(|bytes| {
+            Some(Arc::new(Decoded { name: name.into(), width: 1, height: 1, rgba: vec![0; bytes], cutout: false }))
+        });
+        let texture = Arc::new(decoded.map_or_else(OnceLock::new, OnceLock::from));
+        Cached { path: PathBuf::from(name), max: 64, alpha: Alpha::Guess, len: 0, modified: None, texture }
+    }
+
+    fn names(cache: &VecDeque<Cached>) -> Vec<String> {
+        cache.iter().map(|entry| entry.path.display().to_string()).collect()
+    }
+
+    #[test]
+    fn the_oldest_textures_make_room() {
+        // Newest first. Over the budget: the oldest go until it fits; one still decoding weighs
+        // nothing yet.
+        let mut cache: VecDeque<Cached> =
+            [("new", Some(100)), ("decoding", None), ("middle", Some(100)), ("old", Some(100))]
+                .into_iter()
+                .map(|(name, bytes)| entry(name, bytes))
+                .collect();
+        make_room(&mut cache, 250);
+        assert_eq!(names(&cache), ["new", "decoding", "middle"]);
+        make_room(&mut cache, 250);
+        assert_eq!(cache.len(), 3, "already within the budget");
+
+        // Full: the oldest goes to leave room for one more.
+        let mut full: VecDeque<Cached> = (0..CACHE_ENTRIES).map(|i| entry(&i.to_string(), Some(1))).collect();
+        make_room(&mut full, u64::MAX);
+        assert_eq!(full.len(), CACHE_ENTRIES - 1);
+        assert_eq!(names(&full).last().map(String::as_str), Some("30"));
+    }
 }

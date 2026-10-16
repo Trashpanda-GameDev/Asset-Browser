@@ -137,6 +137,28 @@ mod tests {
     }
 
     #[test]
+    fn each_part_is_drawn_in_its_own_material() {
+        // The cube's faces in order: -X, +X, -Y, +Y, -Z, +Z, two triangles each. The top (+Y) is
+        // blue, the faces before it red and those after green.
+        let mut model = cube(1.0);
+        let solid = |name: &str, color| Material { name: name.into(), color, texture: None, alpha_cutoff: None };
+        model.materials = vec![
+            solid("red", [0.8, 0.05, 0.05, 1.0]),
+            solid("blue", [0.05, 0.05, 0.8, 1.0]),
+            solid("green", [0.05, 0.8, 0.05, 1.0]),
+        ];
+        model.parts = vec![
+            Part { first: 0, count: 18, material: 0 },
+            Part { first: 18, count: 6, material: 1 },
+            Part { first: 24, count: 12, material: 2 },
+        ];
+        let rgba = render_thumbnail(&model, 96);
+        let [top, right, front] = [(48, 14), (72, 60), (24, 60)].map(|(x, y)| pixel(&rgba, 96, x, y));
+        let strongest = |p: [u8; 4]| (0..3).max_by_key(|&k| p[k]).unwrap();
+        assert_eq!([strongest(top), strongest(right), strongest(front)], [2, 0, 1], "{top:?} {right:?} {front:?}");
+    }
+
+    #[test]
     fn inside_out_cube_looks_the_same() {
         // Reversed winding with normals pointing in: the faces toward the camera are back faces,
         // and double-sided shading flips their normals back out.
