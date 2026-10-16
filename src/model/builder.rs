@@ -156,7 +156,7 @@ impl Builder {
         list.extend(indices.iter().map(|&index| base.saturating_add(index)));
     }
 
-    pub(super) fn triangle_count(&self) -> usize {
+    fn triangle_count(&self) -> usize {
         self.triangles.iter().map(|list| list.len() / 3).sum()
     }
 
@@ -319,6 +319,18 @@ mod tests {
         let model = bones.finish("test").unwrap();
         assert!(!model.info.geometry);
         assert_eq!(model.info.size, [0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn a_skeleton_is_drawn_only_without_triangles() {
+        let mut builder = Builder::default();
+        let clay = builder.default_material(false);
+        let base = builder.add_vertices(&[vertex([0.0; 3]), vertex([1.0, 0.0, 0.0]), vertex([0.0, 1.0, 0.0])]);
+        builder.add_triangles(clay, base, &[0, 1, 2]);
+        builder.add_bone([0.0; 3], [0.0, 5.0, 0.0]);
+        let model = builder.finish("test").unwrap();
+        assert!(model.bones.is_empty());
+        assert_eq!(model.bounds.max, [1.0, 1.0, 0.0], "nor are the bones in the bounds");
     }
 
     #[test]

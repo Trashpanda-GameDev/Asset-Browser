@@ -52,16 +52,13 @@ pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<
         }
     }
     let mut builder = reader.builder;
-
-    if builder.triangle_count() == 0 {
-        // Only a skeleton: draw the bones between joints.
-        for skin in document.skins() {
-            let joints: Vec<usize> = skin.joints().map(|joint| joint.index()).collect();
-            for joint in skin.joints() {
-                for child in joint.children().filter(|child| joints.contains(&child.index())) {
-                    if let (Some(a), Some(b)) = (world[joint.index()], world[child.index()]) {
-                        builder.add_bone(translation(&a), translation(&b));
-                    }
+    // The bones between joints, drawn when the file is only a skeleton.
+    for skin in document.skins() {
+        let joints: Vec<usize> = skin.joints().map(|joint| joint.index()).collect();
+        for joint in skin.joints() {
+            for child in joint.children().filter(|child| joints.contains(&child.index())) {
+                if let (Some(a), Some(b)) = (world[joint.index()], world[child.index()]) {
+                    builder.add_bone(translation(&a), translation(&b));
                 }
             }
         }

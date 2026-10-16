@@ -75,14 +75,12 @@ pub(super) fn parse(bytes: &[u8], path: &Path, options: &LoadOptions) -> Result<
     }
     let mut builder = reader.builder;
     builder.set_source_vertices(source_vertices);
-
-    if builder.triangle_count() == 0 {
-        // A skeleton and its animation, such as a Mixamo download without skin.
-        for node in &scene.nodes {
-            let Some(parent) = node.parent.as_ref() else { continue };
-            if node.bone.is_some() && parent.bone.is_some() {
-                builder.add_bone(translation(&parent.node_to_world), translation(&node.node_to_world));
-            }
+    // The bones, drawn when the file is only a skeleton and its animation, such as a Mixamo
+    // download without skin.
+    for node in &scene.nodes {
+        let Some(parent) = node.parent.as_ref() else { continue };
+        if node.bone.is_some() && parent.bone.is_some() {
+            builder.add_bone(translation(&parent.node_to_world), translation(&node.node_to_world));
         }
     }
     builder.set_animations(animations(&scene));
