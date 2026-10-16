@@ -22,7 +22,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 |---|---|
 | `src/scan.rs` | Parallel folder walk; which files count as assets |
 | `src/watch.rs` | Told by the OS when the library's folders change, to rescan them once the changes settle |
-| `src/library.rs` | The library's folders: sorted entries, one folder tree over all of them, filtering |
+| `src/library/` | The library's folders: its files and one folder tree over all of them, filtering (`mod.rs`), building it from a scan (`build.rs`), ordering (`sort.rs`), how paths are compared (`paths.rs`) |
 | `src/paths.rs` | Where the cache, the user's own data and the log are kept (`ASSET_BROWSER_HOME` moves all three) |
 | `src/db.rs` | SQLite: opening a file, transactions, the tables of both files, the user data file's migrations; the library's folders, settings |
 | `src/folder_index.rs` | What the last scan found in each folder, kept in the cache so the library opens at once |
