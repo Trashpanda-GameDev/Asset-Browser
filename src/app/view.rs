@@ -8,7 +8,7 @@ use crate::asset::AssetKind;
 use crate::groups::{Membership, UNCATEGORIZED};
 use crate::library::SortBy;
 use crate::ui::browse::BrowseOutput;
-use crate::ui::mode::{Mode, ModeView};
+use crate::ui::mode::{Layout as ViewLayout, Mode, ModeView};
 use crate::ui::organize::Targets;
 
 use super::BrowserApp;
@@ -65,6 +65,12 @@ impl Browsing {
 
     /// Whether the browsed assets are in a group's own order (the order they were added) or
     /// ordered like a folder's. Uncategorized was never added to, so it's ordered like a folder.
+    /// Shows the mode's assets as a grid or a list, keeping the focused one in sight.
+    pub(super) fn set_layout(&mut self, layout: ViewLayout) {
+        self.mode_view_mut().layout = layout;
+        self.scroll_to_focus = true;
+    }
+
     pub(super) fn in_group_order(&self) -> bool {
         self.group.is_some_and(|id| id != UNCATEGORIZED)
     }

@@ -2,7 +2,7 @@
 //! stars, drops and the pane, and "Delete this collection?". And how the user cut each picture
 //! into a sprite sheet.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Align, Layout, RichText};
 use egui_phosphor::regular as icon;
@@ -11,7 +11,7 @@ use crate::asset::AssetKind;
 use crate::groups::{self, FAVORITES, Groups, Membership};
 use crate::library::Library;
 use crate::sheets::{Saved, SheetStore};
-use crate::ui::organize::{GroupCommand, GroupEdit, plural};
+use crate::ui::organize::{GroupCommand, GroupEdit, Targets, plural};
 use crate::ui::{theme, widgets};
 
 use super::BrowserApp;
@@ -40,6 +40,23 @@ impl Organizing {
             confirm_delete: None,
             sheets: SheetChoices { store: SheetStore::open(path), shown: None },
         }
+    }
+
+    /// Adds the files to the group; how many weren't in it already.
+    fn add(&mut self, id: i64, paths: &[PathBuf]) -> usize {
+        self.membership_dirty = true;
+        self.groups.add(id, paths)
+    }
+
+    /// Takes the files (by `groups::path_key`) out of the group; how many were in it.
+    fn remove(&mut self, id: i64, keys: &[String]) -> usize {
+        self.membership_dirty = true;
+        self.groups.remove(id, keys)
+    }
+
+    /// The group's name, for messages.
+    fn name_of(&self, id: i64) -> String {
+        self.groups.get(id).map_or_else(String::new, |group| group.name.clone())
     }
 }
 
@@ -81,9 +98,7 @@ impl SheetChoices {
 
 impl BrowserApp {
     /// Applies what the user asked for from the sidebar, a menu, a star, a drop or the pane.
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub(super) fn run_group_command(&mut self, command: GroupCommand) {
-        let name_of = |groups: &Groups, id: i64| groups.get(id).map_or_else(String::new, |group| group.name.clone());
         // These can take assets out of the group being browsed (Uncategorized included).
         if matches!(
             command,
@@ -96,44 +111,9 @@ impl BrowserApp {
         }
         match command {
             GroupCommand::Show(id) => self.browsing.show_group(Some(id)),
-            GroupCommand::Add(id, targets) => {
-                let paths = self.resolve(targets);
-                let added = self.organizing.groups.add(id, &paths);
-                self.organizing.membership_dirty = true;
-                let name = name_of(&self.organizing.groups, id);
-                self.notify(match added {
-                    0 if paths.is_empty() => return,
-                    0 => format!("Already in {name}"),
-                    n => format!("Added {} to {name}", plural(n, "asset")),
-                });
-            }
-            GroupCommand::Remove(id, targets) => {
-                let keys: Vec<String> = self.resolve(targets).iter().map(|path| groups::path_key(path)).collect();
-                let removed = self.organizing.groups.remove(id, &keys);
-                self.organizing.membership_dirty = true;
-                if removed > 0 {
-                    let name = name_of(&self.organizing.groups, id);
-                    self.notify(format!(
-                        "Took {} out of {name}; the files stay where they are",
-                        plural(removed, "asset")
-                    ));
-                }
-            }
-            GroupCommand::ToggleFavorite(targets) => {
-                let paths = self.resolve(targets);
-                if paths.is_empty() {
-                    return;
-                }
-                let keys: Vec<String> = paths.iter().map(|path| groups::path_key(path)).collect();
-                if keys.iter().all(|key| self.organizing.groups.contains(FAVORITES, key)) {
-                    let removed = self.organizing.groups.remove(FAVORITES, &keys);
-                    self.notify(format!("Took {} out of Favorites", plural(removed, "asset")));
-                } else {
-                    let added = self.organizing.groups.add(FAVORITES, &paths);
-                    self.notify(format!("Added {} to Favorites", plural(added, "asset")));
-                }
-                self.organizing.membership_dirty = true;
-            }
+            GroupCommand::Add(id, targets) => self.add_to_group(id, targets),
+            GroupCommand::Remove(id, targets) => self.remove_from_group(id, targets),
+            GroupCommand::ToggleFavorite(targets) => self.toggle_favorite(targets),
             GroupCommand::New(kind, targets) => {
                 let paths = self.resolve(targets);
                 self.organizing.edit = Some(GroupEdit::new(kind, self.organizing.groups.unused_name(kind), paths));
@@ -141,27 +121,66 @@ impl BrowserApp {
             GroupCommand::StartRename(id) => {
                 self.organizing.edit = self.organizing.groups.get(id).map(GroupEdit::rename);
             }
-            GroupCommand::FinishEdit(edit) => match edit.id {
-                Some(id) => {
-                    self.organizing.groups.rename(id, &edit.name);
-                }
-                None => {
-                    if let Some(id) = self.organizing.groups.create(edit.kind, &edit.name) {
-                        let added = self.organizing.groups.add(id, &edit.add);
-                        self.organizing.membership_dirty = true;
-                        if added > 0 {
-                            self.notify(format!("Made {} with {}", edit.name.trim(), plural(added, "asset")));
-                        }
-                    }
-                }
-            },
+            GroupCommand::FinishEdit(edit) => self.finish_edit(&edit),
             GroupCommand::Recolor(id, color) => self.organizing.groups.set_color(id, color),
             GroupCommand::AskDelete(id) => self.organizing.confirm_delete = Some(id),
             GroupCommand::RemoveMissing(id) => {
                 let keys = self.organizing.membership.missing.get(&id).cloned().unwrap_or_default();
-                let removed = self.organizing.groups.remove(id, &keys);
-                self.organizing.membership_dirty = true;
+                let removed = self.organizing.remove(id, &keys);
                 self.notify(format!("Took out {} that weren't found", plural(removed, "missing asset")));
+            }
+        }
+    }
+
+    fn add_to_group(&mut self, id: i64, targets: Targets) {
+        let paths = self.resolve(targets);
+        let added = self.organizing.add(id, &paths);
+        let name = self.organizing.name_of(id);
+        self.notify(match added {
+            0 if paths.is_empty() => return,
+            0 => format!("Already in {name}"),
+            n => format!("Added {} to {name}", plural(n, "asset")),
+        });
+    }
+
+    fn remove_from_group(&mut self, id: i64, targets: Targets) {
+        let keys: Vec<String> = self.resolve(targets).iter().map(|path| groups::path_key(path)).collect();
+        let removed = self.organizing.remove(id, &keys);
+        if removed > 0 {
+            let name = self.organizing.name_of(id);
+            self.notify(format!("Took {} out of {name}; the files stay where they are", plural(removed, "asset")));
+        }
+    }
+
+    /// Stars the assets, or takes the star off when they all have it.
+    fn toggle_favorite(&mut self, targets: Targets) {
+        let paths = self.resolve(targets);
+        if paths.is_empty() {
+            return;
+        }
+        let keys: Vec<String> = paths.iter().map(|path| groups::path_key(path)).collect();
+        if keys.iter().all(|key| self.organizing.groups.contains(FAVORITES, key)) {
+            let removed = self.organizing.remove(FAVORITES, &keys);
+            self.notify(format!("Took {} out of Favorites", plural(removed, "asset")));
+        } else {
+            let added = self.organizing.add(FAVORITES, &paths);
+            self.notify(format!("Added {} to Favorites", plural(added, "asset")));
+        }
+    }
+
+    /// A group named in the sidebar: renamed, or made with the assets it was started from.
+    fn finish_edit(&mut self, edit: &GroupEdit) {
+        match edit.id {
+            Some(id) => {
+                self.organizing.groups.rename(id, &edit.name);
+            }
+            None => {
+                if let Some(id) = self.organizing.groups.create(edit.kind, &edit.name) {
+                    let added = self.organizing.add(id, &edit.add);
+                    if added > 0 {
+                        self.notify(format!("Made {} with {}", edit.name.trim(), plural(added, "asset")));
+                    }
+                }
             }
         }
     }

@@ -6,7 +6,7 @@ use eframe::egui;
 use crate::asset::AssetKind;
 use crate::library::folder_name;
 use crate::ui::browse::MenuAction;
-use crate::ui::keymap::Action;
+use crate::ui::keymap::{Action, Keymap};
 use crate::ui::mode::{Layout as ViewLayout, Mode};
 use crate::ui::organize::{GroupCommand, Targets, plural};
 use crate::{diag, platform};
@@ -68,7 +68,6 @@ impl BrowserApp {
 
     /// Runs before any widget is drawn and consumes the keys it handles, so a focused button
     /// can't also react to Space or Enter.
-    #[expect(clippy::cognitive_complexity, clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub(super) fn handle_keys(&mut self, ctx: &egui::Context) {
         // A "Delete?" dialog takes the keys itself (Enter, Esc), and so do the settings and "What's
         // new" (Esc, a shortcut being changed).
@@ -83,62 +82,88 @@ impl BrowserApp {
         // exactly: Ctrl+Shift+F isn't Ctrl+F.
         let keys = self.preferences.keymap.clone();
         let typing = ctx.egui_wants_keyboard_input();
-        // The window's own shortcuts work while typing in the search box when they have Ctrl or
-        // Alt; a plain key is typed.
-        let window = |action: Action| (!typing || keys.has_modifier(action)) && keys.pressed(ctx, action).is_some();
-        if window(Action::Search) {
+        self.window_keys(ctx, &keys, typing);
+        if typing {
+            return;
+        }
+        self.asset_keys(ctx, &keys);
+        let step = self.step_pressed(ctx, &keys);
+        let enter = keys.pressed(ctx, Action::Open).is_some();
+        let space = keys.pressed(ctx, Action::PlayPause).is_some();
+        let escape = keys.pressed(ctx, Action::StopOrClear).is_some();
+        if let Some((step, extend)) = step {
+            self.step_focus(step, extend);
+        }
+        let focus = self.browsing.mode_view().selection.focus;
+        if enter && let Some(focus) = focus {
+            self.open_entries(&[focus]);
+        }
+        if space {
+            self.play_or_pause(focus);
+        }
+        if escape {
+            self.stop_or_clear();
+        }
+    }
+
+    /// The window's own shortcuts. They work while typing in the search box when they have Ctrl
+    /// or Alt; a plain key is typed.
+    fn window_keys(&mut self, ctx: &egui::Context, keys: &Keymap, typing: bool) {
+        let pressed = |action: Action| (!typing || keys.has_modifier(action)) && keys.pressed(ctx, action).is_some();
+        if pressed(Action::Search) {
             self.chrome.focus_search = true;
         }
         for (action, mode) in
             [Action::ModeAll, Action::ModeImages, Action::ModeSounds, Action::ModeModels].into_iter().zip(Mode::ALL)
         {
-            if window(action) {
+            if pressed(action) {
                 self.set_mode(mode);
             }
         }
-        if window(Action::Settings) {
+        if pressed(Action::Settings) {
             self.preferences.settings.open = true;
         }
-        if window(Action::TogglePane) {
+        if pressed(Action::TogglePane) {
             self.chrome.show_inspector = !self.chrome.show_inspector;
         }
         for (action, layout) in [(Action::Grid, ViewLayout::Grid), (Action::List, ViewLayout::List)] {
-            if window(action) {
-                self.browsing.mode_view_mut().layout = layout;
-                self.browsing.scroll_to_focus = true;
+            if pressed(action) {
+                self.browsing.set_layout(layout);
             }
         }
-        if typing {
-            return;
-        }
-        let pressed = |action| keys.pressed(ctx, action);
-        if pressed(Action::Delete).is_some() {
+    }
+
+    /// What's done to the selected assets.
+    fn asset_keys(&mut self, ctx: &egui::Context, keys: &Keymap) {
+        let pressed = |action| keys.pressed(ctx, action).is_some();
+        if pressed(Action::Delete) {
             self.ask_to_delete_selection();
         }
-        if pressed(Action::SelectAll).is_some() {
+        if pressed(Action::SelectAll) {
             let view = std::mem::take(&mut self.browsing.view);
             self.browsing.mode_view_mut().selection.all(&view);
             self.browsing.view = view;
         }
-        if pressed(Action::CopyFiles).is_some() {
-            self.run_action(MenuAction::CopyFiles);
+        for (action, menu_action) in [
+            (Action::CopyFiles, MenuAction::CopyFiles),
+            (Action::CopyPaths, MenuAction::CopyPaths),
+            (Action::ShowInFolder, MenuAction::Reveal),
+        ] {
+            if pressed(action) {
+                self.run_action(menu_action);
+            }
         }
-        if pressed(Action::CopyPaths).is_some() {
-            self.run_action(MenuAction::CopyPaths);
-        }
-        if pressed(Action::ShowInFolder).is_some() {
-            self.run_action(MenuAction::Reveal);
-        }
-        if pressed(Action::Favorite).is_some() {
+        if pressed(Action::Favorite) {
             self.run_group_command(GroupCommand::ToggleFavorite(Targets::Selection));
         }
+    }
 
+    /// The move pressed, in places along the view, and whether it selects as it goes (Shift held).
+    fn step_pressed(&self, ctx: &egui::Context, keys: &Keymap) -> Option<(isize, bool)> {
         let columns = self.browsing.columns.max(1) as isize;
         let page = columns * self.browsing.page_rows.max(1) as isize;
         let len = self.browsing.view.len() as isize;
         let mut step = None;
-        // Holding Shift on a move selects as it goes.
-        let mut shift = false;
         for (action, delta) in [
             (Action::Left, -1),
             (Action::Right, 1),
@@ -149,56 +174,56 @@ impl BrowserApp {
             (Action::First, -len),
             (Action::Last, len),
         ] {
-            if let Some(held) = pressed(action) {
-                step = Some(delta);
-                shift = held;
+            if let Some(shift) = keys.pressed(ctx, action) {
+                step = Some((delta, shift));
             }
         }
-        let enter = pressed(Action::Open).is_some();
-        let space = pressed(Action::PlayPause).is_some();
-        let escape = pressed(Action::StopOrClear).is_some();
+        step
+    }
 
-        if let Some(step) = step
-            && !self.browsing.view.is_empty()
-        {
-            let focus = self.browsing.mode_view().selection.focus;
-            let current = focus.and_then(|focus| self.browsing.view.iter().position(|&index| index == focus));
-            let next = match current {
-                Some(position) => (position as isize + step).clamp(0, len - 1) as usize,
-                None => 0,
-            };
-            let index = self.browsing.view[next];
-            if current != Some(next) {
-                let view = std::mem::take(&mut self.browsing.view);
-                let selection = &mut self.browsing.mode_view_mut().selection;
-                if shift {
-                    selection.extend_to(&view, index);
-                } else {
-                    selection.only(index);
-                }
-                self.browsing.view = view;
-                self.focused(index);
-            }
-            self.browsing.scroll_to_focus = true;
+    /// Moves the focus `step` places along the view; with `extend`, the selection grows to it.
+    fn step_focus(&mut self, step: isize, extend: bool) {
+        let view = &self.browsing.view;
+        if view.is_empty() {
+            return;
         }
         let focus = self.browsing.mode_view().selection.focus;
-        if enter && let Some(focus) = focus {
-            self.open_entries(&[focus]);
-        }
-        if space && let Some(library) = &self.library {
-            // The selected sound, or else whatever is playing.
-            let selected_sound = focus.filter(|&focus| library.entry(focus).kind == AssetKind::Audio);
-            let playing = self.playback.playing.filter(|(_, key)| self.playback.now_for(*key).is_some());
-            if let Some(index) = selected_sound.or(playing.map(|(index, _)| index)) {
-                self.playback.toggle(library, index);
-            }
-        }
-        if escape {
-            if self.playback.now().is_some_and(|now| !now.finished) {
-                self.playback.stop();
+        let current = focus.and_then(|focus| view.iter().position(|&index| index == focus));
+        let next = match current {
+            Some(position) => (position as isize + step).clamp(0, view.len() as isize - 1) as usize,
+            None => 0,
+        };
+        let index = view[next];
+        if current != Some(next) {
+            let view = std::mem::take(&mut self.browsing.view);
+            let selection = &mut self.browsing.mode_view_mut().selection;
+            if extend {
+                selection.extend_to(&view, index);
             } else {
-                self.browsing.mode_view_mut().selection.clear();
+                selection.only(index);
             }
+            self.browsing.view = view;
+            self.focused(index);
+        }
+        self.browsing.scroll_to_focus = true;
+    }
+
+    /// Plays or pauses the selected sound, or else whatever is playing.
+    fn play_or_pause(&mut self, focus: Option<u32>) {
+        let Some(library) = &self.library else { return };
+        let selected_sound = focus.filter(|&focus| library.entry(focus).kind == AssetKind::Audio);
+        let playing = self.playback.playing.filter(|(_, key)| self.playback.now_for(*key).is_some());
+        if let Some(index) = selected_sound.or(playing.map(|(index, _)| index)) {
+            self.playback.toggle(library, index);
+        }
+    }
+
+    /// Stops the sound playing, or else clears the selection.
+    fn stop_or_clear(&mut self) {
+        if self.playback.now().is_some_and(|now| !now.finished) {
+            self.playback.stop();
+        } else {
+            self.browsing.mode_view_mut().selection.clear();
         }
     }
 }
