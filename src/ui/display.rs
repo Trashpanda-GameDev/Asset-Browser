@@ -32,6 +32,8 @@ pub enum Backdrop {
 impl Backdrop {
     pub const ALL: [Backdrop; 3] = [Self::Checker, Self::Dark, Self::Light];
     pub const LIGHT: Color32 = Color32::from_gray(222);
+    /// Text over the light backdrop.
+    pub const LIGHT_TEXT: Color32 = Color32::from_gray(90);
 
     pub fn key(self) -> &'static str {
         match self {

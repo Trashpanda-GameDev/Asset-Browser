@@ -1,7 +1,7 @@
 //! "What's new": the changelog's notes, shown once after an update for the versions since the
 //! last one seen, or for every version from the settings.
 
-use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Sense, Ui, UiBuilder, text::LayoutJob, vec2};
+use eframe::egui::{self, Align, FontId, Layout, RichText, Sense, Ui, UiBuilder, text::LayoutJob, vec2};
 use semver::Version;
 
 use crate::changelog::{self, Block, Release};
@@ -67,7 +67,7 @@ impl WhatsNew {
                     self.since = None;
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let close = egui::Button::new(RichText::new("Close").color(Color32::WHITE))
+                    let close = egui::Button::new(RichText::new("Close").color(theme::ON_ACCENT))
                         .fill(theme::ACCENT)
                         .min_size(vec2(88.0, 28.0));
                     if ui.add(close).clicked() {

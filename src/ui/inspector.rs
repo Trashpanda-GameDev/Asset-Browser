@@ -727,7 +727,7 @@ fn overlay(ui: &mut Ui, rect: Rect, add: impl FnOnce(&mut Ui)) {
     let area =
         Rect::from_min_max(pos2(rect.left() + 8.0, rect.top() + 8.0), pos2(rect.right() - 8.0, rect.top() + 36.0));
     let mut child = ui.new_child(UiBuilder::new().max_rect(area).layout(Layout::right_to_left(Align::Min)));
-    let frame = egui::Frame::new().fill(Color32::from_black_alpha(140)).corner_radius(theme::RADIUS).inner_margin(2);
+    let frame = egui::Frame::new().fill(theme::shade::OVERLAY).corner_radius(theme::RADIUS).inner_margin(2);
     frame.show(&mut child, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;

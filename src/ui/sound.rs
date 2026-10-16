@@ -127,7 +127,7 @@ fn play_button(ui: &mut Ui, glyph: &str) -> egui::Response {
         Align2::CENTER_CENTER,
         glyph,
         FontId::proportional(theme::size::LARGE),
-        Color32::WHITE,
+        theme::ON_ACCENT,
     );
     response
 }
@@ -171,7 +171,7 @@ pub fn scrubber(
     if let Some(progress) = progress {
         let x = inner.left() + progress * inner.width();
         painter
-            .line_segment([pos2(x, rect.top() + 4.0), pos2(x, rect.bottom() - 4.0)], Stroke::new(2.0, Color32::WHITE));
+            .line_segment([pos2(x, rect.top() + 4.0), pos2(x, rect.bottom() - 4.0)], Stroke::new(2.0, theme::PLAYHEAD));
     }
     if let Some(pointer) = response.interact_pointer_pos().or(response.hover_pos()) {
         // Where a click would jump to.

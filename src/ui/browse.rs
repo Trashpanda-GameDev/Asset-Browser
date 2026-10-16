@@ -282,7 +282,7 @@ fn star_button(ui: &Ui, browse: &Browse<'_>, index: u32, center: Pos2, show_outl
         (egui::FontFamily::Proportional, theme::TEXT.gamma_multiply(0.7))
     };
     // A dark halo keeps the star readable over light pictures.
-    painter.circle_filled(rect.center(), 10.0, Color32::from_black_alpha(if favorite { 110 } else { 80 }));
+    painter.circle_filled(rect.center(), 10.0, if favorite { theme::shade::FAVORITE } else { theme::shade::STAR });
     painter.text(rect.center(), Align2::CENTER_CENTER, icon::STAR, FontId::new(theme::size::MEDIUM, family), color);
     let tip = keymap::tooltip(&response.ctx, organize::favorite_action(favorite), Action::Favorite);
     let clicked = response.on_hover_text(tip).clicked();
@@ -343,7 +343,7 @@ impl Tile<'_, '_> {
         for (n, group) in self.browse.categories(self.index).enumerate() {
             if n < 5 {
                 let center = pos2(card.left() + 11.0 + n as f32 * 11.0, card.bottom() - 11.0);
-                painter.circle_filled(center, 5.0, Color32::from_black_alpha(120));
+                painter.circle_filled(center, 5.0, theme::shade::DOT);
                 painter.circle_filled(center, 3.5, theme::category_color(group.color));
             }
             categories.push(group.name.as_str());
@@ -377,7 +377,7 @@ pub fn draw_preview(
 ) {
     if entry.kind == AssetKind::Model {
         // A soft studio backdrop, lighter at the top.
-        widgets::vertical_gradient(painter, rect, Color32::from_rgb(44, 47, 56), Color32::from_rgb(29, 31, 37));
+        widgets::vertical_gradient(painter, rect, theme::SOUND_TILE[0], theme::SOUND_TILE[1]);
     }
     if let Some(texture) = previews.texture(entry.key) {
         let backdrop = (entry.kind == AssetKind::Image).then_some(look.backdrop);

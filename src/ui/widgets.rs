@@ -290,7 +290,7 @@ pub fn modal_window(id: &str, margin: i8) -> egui::Modal {
         .stroke(Stroke::new(1.0, theme::BORDER))
         .corner_radius(theme::CARD_RADIUS)
         .inner_margin(egui::Margin::same(margin));
-    egui::Modal::new(Id::new(id)).frame(frame).backdrop_color(Color32::from_black_alpha(150))
+    egui::Modal::new(Id::new(id)).frame(frame).backdrop_color(theme::SCRIM)
 }
 
 /// Takes this frame's scrolling out of the input, for a view that zooms when scrolled over: the
@@ -341,7 +341,7 @@ fn badge_font() -> FontId {
 }
 
 fn paint_badge(painter: &egui::Painter, rect: Rect, galley: std::sync::Arc<egui::Galley>, color: Color32) {
-    painter.rect_filled(rect, CornerRadius::same(5), Color32::from_black_alpha(150));
+    painter.rect_filled(rect, CornerRadius::same(5), theme::shade::BADGE);
     painter.rect_filled(rect, CornerRadius::same(5), color.gamma_multiply(0.16));
     painter.galley(rect.min + vec2(5.0, 2.0), galley, color);
 }

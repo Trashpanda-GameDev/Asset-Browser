@@ -185,7 +185,7 @@ impl Viewport {
         }
 
         let painter = ui.painter_at(rect);
-        widgets::vertical_gradient(&painter, rect, Color32::from_rgb(34, 37, 44), theme::WELL);
+        widgets::vertical_gradient(&painter, rect, theme::VIEWPORT_TOP, theme::WELL);
         painter.image(target.id, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         painter.rect_stroke(rect, theme::CARD_RADIUS, Stroke::new(1.0, theme::BORDER), StrokeKind::Inside);
         if response.hovered() && !interacting {

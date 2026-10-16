@@ -7,7 +7,7 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use eframe::egui::{self, Color32, ColorImage, TextureFilter, TextureHandle, TextureOptions};
+use eframe::egui::{self, ColorImage, TextureFilter, TextureHandle, TextureOptions};
 
 use crate::asset::AssetKind;
 use crate::audio::Waveform;
@@ -15,6 +15,8 @@ use crate::imaging::Pixels;
 use crate::library::{Entry, Library};
 use crate::model::ModelInfo;
 use crate::thumbs::{Preview, Thumb, ThumbJob, ThumbService};
+
+use super::theme;
 
 /// Thumbnails kept on the GPU, until the memory setting says otherwise (`set_max_textures`). The
 /// least recently drawn go first; scrolling back reloads them from the cache in about a
@@ -51,7 +53,7 @@ pub struct Previews {
 
 impl Previews {
     pub fn new(ctx: &egui::Context) -> Self {
-        let (light, dark) = (Color32::from_gray(46), Color32::from_gray(36));
+        let [light, dark] = theme::CHECKER;
         let checker = ctx.load_texture(
             "checker",
             ColorImage::new([2, 2], vec![light, dark, dark, light]),

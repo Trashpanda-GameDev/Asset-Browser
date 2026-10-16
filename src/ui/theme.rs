@@ -76,6 +76,35 @@ pub fn color_title_bar(ctx: &egui::Context, window: &impl raw_window_handle::Has
     crate::platform::color_title_bar(window, rgb(PANEL), rgb(TEXT_WEAK), rgb(BORDER));
 }
 
+/// Text and icons on the accent colour.
+pub const ON_ACCENT: Color32 = Color32::WHITE;
+/// Where a sound is, over its waveform.
+pub const PLAYHEAD: Color32 = Color32::WHITE;
+/// The toast's background, a step above the panels.
+pub const TOAST: Color32 = Color32::from_rgb(40, 43, 51);
+/// A sound's tile, top to bottom.
+pub const SOUND_TILE: [Color32; 2] = [Color32::from_rgb(44, 47, 56), Color32::from_rgb(29, 31, 37)];
+/// The top of the 3D view's backdrop, which darkens to `WELL` at the bottom.
+pub const VIEWPORT_TOP: Color32 = Color32::from_rgb(34, 37, 44);
+/// The checkerboard behind transparency: its light and dark squares.
+pub const CHECKER: [Color32; 2] = [Color32::from_gray(46), Color32::from_gray(36)];
+/// Over the app, behind a window such as the settings.
+pub const SCRIM: Color32 = Color32::from_black_alpha(150);
+
+/// Dark shades behind what's drawn over pictures, so it reads on light ones too.
+pub mod shade {
+    use eframe::egui::Color32;
+
+    pub const BADGE: Color32 = Color32::from_black_alpha(150);
+    /// The pane's buttons over a picture or model.
+    pub const OVERLAY: Color32 = Color32::from_black_alpha(140);
+    /// Around a category's dot on a tile.
+    pub const DOT: Color32 = Color32::from_black_alpha(120);
+    /// Around a tile's star: a favourite's, and the outline to click.
+    pub const FAVORITE: Color32 = Color32::from_black_alpha(110);
+    pub const STAR: Color32 = Color32::from_black_alpha(80);
+}
+
 /// Text sizes, smallest first: every size the window draws text and icons at, named for what
 /// they're used for. New text takes the one that fits rather than a number of its own.
 pub mod size {

@@ -35,7 +35,7 @@ impl BrowserApp {
             .show(ctx, |ui| {
                 ui.set_opacity(fade);
                 Frame::new()
-                    .fill(egui::Color32::from_rgb(40, 43, 51))
+                    .fill(theme::TOAST)
                     .stroke(egui::Stroke::new(1.0, theme::BORDER))
                     .corner_radius(10)
                     .inner_margin(Margin::symmetric(14, 8))

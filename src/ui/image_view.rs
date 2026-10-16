@@ -139,7 +139,7 @@ impl ImageView {
                 Align2::RIGHT_BOTTOM,
                 "scroll to zoom · double-click for 1:1",
                 FontId::proportional(theme::size::FINE),
-                if self.backdrop == Backdrop::Light { Color32::from_gray(90) } else { theme::TEXT_FAINT },
+                if self.backdrop == Backdrop::Light { Backdrop::LIGHT_TEXT } else { theme::TEXT_FAINT },
             );
         }
         painter.rect_stroke(rect, theme::CARD_RADIUS, Stroke::new(1.0, theme::BORDER), StrokeKind::Inside);

@@ -457,8 +457,9 @@ impl Settings {
             ui.horizontal(|ui| {
                 let label = if bytes > 0 { format!("Clear ({})", format_size(bytes)) } else { "Clear".to_owned() };
                 let fill = if yours { theme::ERROR } else { theme::ACCENT };
-                let clear =
-                    egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(fill).min_size(vec2(0.0, 28.0));
+                let clear = egui::Button::new(RichText::new(label).color(theme::ON_ACCENT))
+                    .fill(fill)
+                    .min_size(vec2(0.0, 28.0));
                 if ui.add(clear).clicked() {
                     commands.push(Command::Clear(chosen.clone()));
                     self.chosen.clear();
@@ -512,7 +513,7 @@ fn updates_page(ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command
         match updates.status() {
             Status::Ready { .. } => {
                 let restart = egui::Button::new(
-                    RichText::new(format!("{}  Restart to update", icon::ARROW_CLOCKWISE)).color(Color32::WHITE),
+                    RichText::new(format!("{}  Restart to update", icon::ARROW_CLOCKWISE)).color(theme::ON_ACCENT),
                 )
                 .fill(theme::ACCENT)
                 .min_size(vec2(0.0, 28.0));
@@ -614,7 +615,7 @@ fn tick(ui: &mut Ui, ticked: &mut bool, label: RichText) -> bool {
             egui::Align2::CENTER_CENTER,
             icon::CHECK,
             FontId::proportional(theme::size::BODY),
-            Color32::WHITE,
+            theme::ON_ACCENT,
         );
     } else {
         let color = if hovered { theme::TEXT_WEAK } else { theme::TEXT_FAINT };
