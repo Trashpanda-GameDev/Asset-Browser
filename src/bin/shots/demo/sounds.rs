@@ -7,109 +7,127 @@ use std::path::Path;
 
 const RATE: u32 = 44_100;
 
-#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 pub(super) fn sounds(dir: &Path) -> io::Result<()> {
     let (sfx, music) = (dir.join("SFX"), dir.join("Music"));
     fs::create_dir_all(&sfx)?;
     fs::create_dir_all(&music)?;
+    // One noise source, drawn from in this order, so every sound comes out the same each time.
     let mut noise = Noise(0x9e37_79b9);
-
-    let mut phase = 0.0;
-    wav(
-        &sfx.join("jump.wav"),
-        synth(0.32, |t| {
-            phase += (260.0 * (3.0f32).powf(t / 0.32)) / RATE as f32;
-            square(phase) * (1.0 - t / 0.32).powi(2)
-        }),
-    )?;
-    wav(
-        &sfx.join("coin.wav"),
-        synth(0.5, |t| if t < 0.08 { square(t * 988.0) * 0.8 } else { square(t * 1319.0) * (-(t - 0.08) * 7.0).exp() }),
-    )?;
-    let mut phase = 0.0;
-    wav(
-        &sfx.join("hit.wav"),
-        synth(0.3, |t| {
-            phase += (140.0 - 80.0 * t / 0.3) / RATE as f32;
-            noise.sample() * (-t * 28.0).exp() + sine(phase) * (-t * 12.0).exp() * 0.8
-        }),
-    )?;
-    let (mut low, mut phase) = (0.0, 0.0);
-    wav(
-        &sfx.join("explosion.wav"),
-        synth(1.7, |t| {
-            low += (noise.sample() - low) * (0.3 * (-t * 2.0).exp() + 0.02);
-            phase += 45.0 / RATE as f32;
-            (low * 2.5 + sine(phase) * 0.5 * (-t * 3.0).exp()) * (t / 0.01).min(1.0) * (-t * 2.2).exp()
-        }),
-    )?;
-    let mut phase = 0.0;
-    wav(
-        &sfx.join("laser.wav"),
-        synth(0.36, |t| {
-            phase += (1800.0 * (220.0f32 / 1800.0).powf(t / 0.36) * (1.0 + 0.02 * (t * 90.0).sin())) / RATE as f32;
-            sine(phase) * (1.0 - t / 0.36)
-        }),
-    )?;
-    wav(
-        &sfx.join("powerup.wav"),
-        synth(0.6, |t| {
-            let notes = [523.25, 659.25, 783.99, 1046.5, 1318.5, 1568.0];
-            let step = ((t / 0.1) as usize).min(notes.len() - 1);
-            square(t * notes[step]) * (-(t % 0.1) * 12.0).exp() * (1.0 - t / 0.6 * 0.5)
-        }),
-    )?;
-    let mut high = 0.0;
-    wav(
-        &sfx.join("footstep_grass.wav"),
-        synth(1.7, |t| {
-            let n = noise.sample();
-            high += (n - high) * 0.35;
-            let crunch: f32 = [0.1, 0.5, 0.9, 1.3]
-                .iter()
-                .map(|&at| {
-                    let dt = t - at;
-                    if (0.0..0.14).contains(&dt) {
-                        (-dt * 32.0).exp() * (0.6 + 0.4 * (dt * 140.0).sin().abs())
-                    } else {
-                        0.0
-                    }
-                })
-                .sum();
-            (n - high) * crunch
-        }),
-    )?;
-    let mut phase = 0.0;
-    wav(
-        &sfx.join("door_open.wav"),
-        synth(1.5, |t| {
-            phase += (105.0 + 30.0 * (t * 7.0).sin() + 6.0 * noise.sample()) / RATE as f32;
-            let creak = saw(phase) * (t / 0.15).min(1.0) * (1.0 - (t - 0.9).max(0.0) / 0.3).max(0.0) * 0.5;
-            let dt = t - 1.22;
-            let thud = if dt >= 0.0 { sine(dt * 68.0) * (-dt * 14.0).exp() } else { 0.0 };
-            creak + thud
-        }),
-    )?;
-    wav(
-        &sfx.join("click.wav"),
-        synth(0.06, |t| sine(t * 2100.0) * (-t * 110.0).exp() + noise.sample() * (-t * 400.0).exp() * 0.5),
-    )?;
-    wav(
-        &sfx.join("magic_spell.wav"),
-        synth(1.4, |t| {
-            let rise = 1.0 + t * 0.45;
-            let tones: f32 = [880.0, 1320.0, 1760.0, 2640.0]
-                .iter()
-                .enumerate()
-                .map(|(i, &f)| sine(t * f * rise) * (1.0 + (t * (9.0 + i as f32 * 3.0)).sin()) * 0.25)
-                .sum();
-            (tones + noise.sample() * 0.15 * (t * 23.0).sin().abs()) * (t / 0.12).min(1.0) * (-(t * 1.8)).exp()
-        }),
-    )?;
-
+    wav(&sfx.join("jump.wav"), jump())?;
+    wav(&sfx.join("coin.wav"), coin())?;
+    wav(&sfx.join("hit.wav"), hit(&mut noise))?;
+    wav(&sfx.join("explosion.wav"), explosion(&mut noise))?;
+    wav(&sfx.join("laser.wav"), laser())?;
+    wav(&sfx.join("powerup.wav"), powerup())?;
+    wav(&sfx.join("footstep_grass.wav"), footsteps(&mut noise))?;
+    wav(&sfx.join("door_open.wav"), door_open(&mut noise))?;
+    wav(&sfx.join("click.wav"), click(&mut noise))?;
+    wav(&sfx.join("magic_spell.wav"), magic_spell(&mut noise))?;
     wav(&music.join("menu_theme.wav"), menu_theme())?;
     wav(&music.join("battle_loop.wav"), battle_loop(&mut noise))?;
     wav(&music.join("ambience_forest.wav"), ambience(&mut noise))
+}
+
+/// A square wave sweeping up.
+fn jump() -> Vec<f32> {
+    let mut phase = 0.0;
+    synth(0.32, |t| {
+        phase += (260.0 * (3.0f32).powf(t / 0.32)) / RATE as f32;
+        square(phase) * (1.0 - t / 0.32).powi(2)
+    })
+}
+
+/// Two quick notes.
+fn coin() -> Vec<f32> {
+    synth(0.5, |t| if t < 0.08 { square(t * 988.0) * 0.8 } else { square(t * 1319.0) * (-(t - 0.08) * 7.0).exp() })
+}
+
+/// A burst of noise over a falling thump.
+fn hit(noise: &mut Noise) -> Vec<f32> {
+    let mut phase = 0.0;
+    synth(0.3, |t| {
+        phase += (140.0 - 80.0 * t / 0.3) / RATE as f32;
+        noise.sample() * (-t * 28.0).exp() + sine(phase) * (-t * 12.0).exp() * 0.8
+    })
+}
+
+/// Low rumbling noise and a deep tone, dying away.
+fn explosion(noise: &mut Noise) -> Vec<f32> {
+    let (mut low, mut phase) = (0.0, 0.0);
+    synth(1.7, |t| {
+        low += (noise.sample() - low) * (0.3 * (-t * 2.0).exp() + 0.02);
+        phase += 45.0 / RATE as f32;
+        (low * 2.5 + sine(phase) * 0.5 * (-t * 3.0).exp()) * (t / 0.01).min(1.0) * (-t * 2.2).exp()
+    })
+}
+
+/// A falling, wavering tone.
+fn laser() -> Vec<f32> {
+    let mut phase = 0.0;
+    synth(0.36, |t| {
+        phase += (1800.0 * (220.0f32 / 1800.0).powf(t / 0.36) * (1.0 + 0.02 * (t * 90.0).sin())) / RATE as f32;
+        sine(phase) * (1.0 - t / 0.36)
+    })
+}
+
+/// A rising arpeggio.
+fn powerup() -> Vec<f32> {
+    synth(0.6, |t| {
+        let notes = [523.25, 659.25, 783.99, 1046.5, 1318.5, 1568.0];
+        let step = ((t / 0.1) as usize).min(notes.len() - 1);
+        square(t * notes[step]) * (-(t % 0.1) * 12.0).exp() * (1.0 - t / 0.6 * 0.5)
+    })
+}
+
+/// Four steps on grass: crunches of high noise.
+fn footsteps(noise: &mut Noise) -> Vec<f32> {
+    let mut high = 0.0;
+    synth(1.7, |t| {
+        let n = noise.sample();
+        high += (n - high) * 0.35;
+        let crunch: f32 = [0.1, 0.5, 0.9, 1.3]
+            .iter()
+            .map(|&at| {
+                let dt = t - at;
+                if (0.0..0.14).contains(&dt) {
+                    (-dt * 32.0).exp() * (0.6 + 0.4 * (dt * 140.0).sin().abs())
+                } else {
+                    0.0
+                }
+            })
+            .sum();
+        (n - high) * crunch
+    })
+}
+
+/// A creak, then a thud as the door stops.
+fn door_open(noise: &mut Noise) -> Vec<f32> {
+    let mut phase = 0.0;
+    synth(1.5, |t| {
+        phase += (105.0 + 30.0 * (t * 7.0).sin() + 6.0 * noise.sample()) / RATE as f32;
+        let creak = saw(phase) * (t / 0.15).min(1.0) * (1.0 - (t - 0.9).max(0.0) / 0.3).max(0.0) * 0.5;
+        let dt = t - 1.22;
+        let thud = if dt >= 0.0 { sine(dt * 68.0) * (-dt * 14.0).exp() } else { 0.0 };
+        creak + thud
+    })
+}
+
+/// A short tick.
+fn click(noise: &mut Noise) -> Vec<f32> {
+    synth(0.06, |t| sine(t * 2100.0) * (-t * 110.0).exp() + noise.sample() * (-t * 400.0).exp() * 0.5)
+}
+
+/// Shimmering rising tones with a sparkle of noise.
+fn magic_spell(noise: &mut Noise) -> Vec<f32> {
+    synth(1.4, |t| {
+        let rise = 1.0 + t * 0.45;
+        let tones: f32 = [880.0, 1320.0, 1760.0, 2640.0]
+            .iter()
+            .enumerate()
+            .map(|(i, &f)| sine(t * f * rise) * (1.0 + (t * (9.0 + i as f32 * 3.0)).sin()) * 0.25)
+            .sum();
+        (tones + noise.sample() * 0.15 * (t * 23.0).sin().abs()) * (t / 0.12).min(1.0) * (-(t * 1.8)).exp()
+    })
 }
 
 fn menu_theme() -> Vec<f32> {

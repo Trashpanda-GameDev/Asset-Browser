@@ -74,98 +74,101 @@ pub fn arrive(root: &Path, i: usize) -> io::Result<()> {
     canvas.save(&root.join(INCOMING[i.min(INCOMING.len() - 1)]))
 }
 
+/// The favorites the pictures show.
+const FAVORITE_FILES: [&str; 5] = [
+    "Items/gem_ruby.png",
+    "Items/potion_red.png",
+    "Characters/slime_bounce.png",
+    "Audio/Music/menu_theme.wav",
+    "Models/crystal.obj",
+];
+
+/// Collections, with their files.
+const COLLECTIONS: [(&str, &[&str]); 2] = [
+    (
+        "Forest level",
+        &[
+            "Environment/Tiles/grass.png",
+            "Environment/Backgrounds/forest_day.png",
+            "Models/tree.obj",
+            "Models/mushroom.obj",
+            "Items/mushroom.png",
+            "Audio/SFX/footstep_grass.wav",
+            "Audio/Music/ambience_forest.wav",
+        ],
+    ),
+    (
+        "Boss fight",
+        &[
+            "Audio/Music/battle_loop.wav",
+            "Audio/SFX/explosion.wav",
+            "Environment/Tiles/lava.png",
+            "Items/bomb.png",
+            "Items/sword.png",
+            "Items/shield.png",
+            "Characters/flame.gif",
+        ],
+    ),
+];
+
+/// Categories, with their colours (as numbers into the category palette) and files.
+const CATEGORIES: [(&str, u8, &[&str]); 4] = [
+    (
+        "Pickups",
+        2,
+        &[
+            "Items/coin.png",
+            "Items/gem_ruby.png",
+            "Items/gem_emerald.png",
+            "Items/gem_sapphire.png",
+            "Items/potion_red.png",
+            "Items/potion_blue.png",
+            "Items/potion_green.png",
+            "Items/heart.png",
+            "Items/key.png",
+            "Items/star.png",
+            "Characters/coin_strip8.png",
+            "Audio/SFX/coin.wav",
+            "Audio/SFX/powerup.wav",
+        ],
+    ),
+    ("Enemies", 0, &["Characters/slime_bounce.png", "Characters/flame.gif", "Audio/SFX/hit.wav"]),
+    (
+        "Interface",
+        4,
+        &[
+            "UI/button_play.png",
+            "UI/button_pause.png",
+            "UI/panel.png",
+            "UI/health_bar.png",
+            "UI/cursor.png",
+            "Audio/SFX/click.wav",
+        ],
+    ),
+    (
+        "Magic",
+        6,
+        &[
+            "Models/crystal.obj",
+            "Audio/SFX/magic_spell.wav",
+            "Items/potion_blue.png",
+            "Characters/portal.gif",
+            "Items/gem_sapphire.png",
+        ],
+    ),
+];
+
 /// Favorites, collections and categories over the library in `root`, in the app's user data.
-#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 pub fn organize(root: &Path) {
     let mut groups = Groups::open(&paths::user_data_file());
     let paths = |files: &[&str]| files.iter().map(|file| root.join(file)).collect::<Vec<_>>();
-    groups.add(
-        FAVORITES,
-        &paths(&[
-            "Items/gem_ruby.png",
-            "Items/potion_red.png",
-            "Characters/slime_bounce.png",
-            "Audio/Music/menu_theme.wav",
-            "Models/crystal.obj",
-        ]),
-    );
-    let collections: [(&str, &[&str]); 2] = [
-        (
-            "Forest level",
-            &[
-                "Environment/Tiles/grass.png",
-                "Environment/Backgrounds/forest_day.png",
-                "Models/tree.obj",
-                "Models/mushroom.obj",
-                "Items/mushroom.png",
-                "Audio/SFX/footstep_grass.wav",
-                "Audio/Music/ambience_forest.wav",
-            ],
-        ),
-        (
-            "Boss fight",
-            &[
-                "Audio/Music/battle_loop.wav",
-                "Audio/SFX/explosion.wav",
-                "Environment/Tiles/lava.png",
-                "Items/bomb.png",
-                "Items/sword.png",
-                "Items/shield.png",
-                "Characters/flame.gif",
-            ],
-        ),
-    ];
-    for (name, files) in collections {
+    groups.add(FAVORITES, &paths(&FAVORITE_FILES));
+    for (name, files) in COLLECTIONS {
         if let Some(id) = groups.create(GroupKind::Collection, name) {
             groups.add(id, &paths(files));
         }
     }
-    let categories: [(&str, u8, &[&str]); 4] = [
-        (
-            "Pickups",
-            2,
-            &[
-                "Items/coin.png",
-                "Items/gem_ruby.png",
-                "Items/gem_emerald.png",
-                "Items/gem_sapphire.png",
-                "Items/potion_red.png",
-                "Items/potion_blue.png",
-                "Items/potion_green.png",
-                "Items/heart.png",
-                "Items/key.png",
-                "Items/star.png",
-                "Characters/coin_strip8.png",
-                "Audio/SFX/coin.wav",
-                "Audio/SFX/powerup.wav",
-            ],
-        ),
-        ("Enemies", 0, &["Characters/slime_bounce.png", "Characters/flame.gif", "Audio/SFX/hit.wav"]),
-        (
-            "Interface",
-            4,
-            &[
-                "UI/button_play.png",
-                "UI/button_pause.png",
-                "UI/panel.png",
-                "UI/health_bar.png",
-                "UI/cursor.png",
-                "Audio/SFX/click.wav",
-            ],
-        ),
-        (
-            "Magic",
-            6,
-            &[
-                "Models/crystal.obj",
-                "Audio/SFX/magic_spell.wav",
-                "Items/potion_blue.png",
-                "Characters/portal.gif",
-                "Items/gem_sapphire.png",
-            ],
-        ),
-    ];
-    for (name, color, files) in categories {
+    for (name, color, files) in CATEGORIES {
         if let Some(id) = groups.create(GroupKind::Category, name) {
             groups.set_color(id, color);
             groups.add(id, &paths(files));
