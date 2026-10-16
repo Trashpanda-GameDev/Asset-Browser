@@ -9,19 +9,18 @@
 //!
 //! Rectangles are in the file's pixels; the picture the guesses look at may be a shrunk copy.
 
+mod data;
+mod guess;
+mod store;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use rusqlite::{Connection, OptionalExtension, params};
-
 use crate::imaging::Pixels;
-use crate::{db, diag};
+use data::from_data_file;
+use guess::{gaps, is_empty, name_says_sheet, square_strip, strip_count};
 
-/// Alpha below this counts as transparent when looking for gaps between frames.
-const CLEAR_ALPHA: u8 = 8;
-/// Frames smaller than this along a side aren't guessed.
-const MIN_FRAME: u32 = 4;
-const MAX_FRAMES_PER_LINE: u32 = 128;
+pub use store::{Saved, SheetStore};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
@@ -165,21 +164,6 @@ impl Sheet {
     }
 }
 
-/// A pixel's alpha in the picture the guesses look at (as decoded, `w` × `h`).
-fn alpha(pixels: &Pixels, x: u32, y: u32) -> u8 {
-    pixels.rgba.get(((y * pixels.w + x) * 4 + 3) as usize).copied().unwrap_or(0)
-}
-
-/// Whether a rectangle in the file's own pixels (`src_w` × `src_h`) has nothing visible in it.
-fn is_empty(pixels: &Pixels, rect: [u32; 4]) -> bool {
-    let (sx, sy) = (pixels.w as f32 / pixels.src_w.max(1) as f32, pixels.h as f32 / pixels.src_h.max(1) as f32);
-    let x0 = (rect[0] as f32 * sx) as u32;
-    let y0 = (rect[1] as f32 * sy) as u32;
-    let x1 = (((rect[0] + rect[2]) as f32 * sx).ceil() as u32).min(pixels.w);
-    let y1 = (((rect[1] + rect[3]) as f32 * sy).ceil() as u32).min(pixels.h);
-    !(y0..y1).any(|y| (x0..x1).any(|x| alpha(pixels, x, y) >= CLEAR_ALPHA))
-}
-
 /// What's known about a picture as a sprite sheet, or `None` when nothing suggests it is one.
 pub fn detect(path: &Path, pixels: &Pixels) -> Option<Sheet> {
     if let Some(sheet) = from_data_file(path) {
@@ -245,280 +229,11 @@ pub fn from_grid(grid: Grid, pixels: &Pixels, guessed: Guess) -> Sheet {
     Sheet { frames, animations, source: Source::Grid(grid, guessed) }
 }
 
-/// GameMaker names strips `something_strip8`.
-fn strip_count(name: &str) -> Option<u32> {
-    let at = name.rfind("_strip")?;
-    let digits: String = name[at + 6..].chars().take_while(char::is_ascii_digit).collect();
-    digits.parse().ok()
-}
-
-fn name_says_sheet(name: &str) -> bool {
-    ["sheet", "strip", "anim", "sprite", "frames", "walk", "run", "idle", "attack", "jump", "death"]
-        .iter()
-        .any(|word| name.contains(word))
-}
-
-/// As many square frames side by side (or stacked) as fit exactly.
-fn square_strip(w: u32, h: u32) -> Option<Grid> {
-    if h >= MIN_FRAME && w > h && w.is_multiple_of(h) && w / h <= MAX_FRAMES_PER_LINE {
-        return Some(Grid::strip(w / h));
-    }
-    if w >= MIN_FRAME && h > w && h.is_multiple_of(w) && h / w <= MAX_FRAMES_PER_LINE {
-        return Some(Grid { columns: 1, rows: h / w, margin: 0, spacing: 0, split: Split::All });
-    }
-    None
-}
-
-/// Frames separated by fully transparent lines: the finest even division along each side whose
-/// every cut is clear and every cell has something in it.
-fn gaps(pixels: &Pixels) -> Option<Grid> {
-    // Gaps are looked for in file pixels when the picture is its own size; a shrunk copy's lines
-    // are matched to the file's by scale, which is close enough for a starting point.
-    let clear_columns: Vec<bool> =
-        (0..pixels.w).map(|x| (0..pixels.h).all(|y| alpha(pixels, x, y) < CLEAR_ALPHA)).collect();
-    let clear_rows: Vec<bool> =
-        (0..pixels.h).map(|y| (0..pixels.w).all(|x| alpha(pixels, x, y) < CLEAR_ALPHA)).collect();
-    let columns = divide(&clear_columns);
-    let rows = divide(&clear_rows);
-    if columns.is_none() && rows.is_none() {
-        return None;
-    }
-    let (columns, column_margin, column_spacing) = columns.unwrap_or((1, 0, 0));
-    let (rows, row_margin, row_spacing) = rows.unwrap_or((1, 0, 0));
-    let scale = pixels.src_w as f32 / pixels.w.max(1) as f32;
-    let margin = (column_margin.max(row_margin) as f32 * scale).round() as u32;
-    let spacing = (column_spacing.max(row_spacing) as f32 * scale).round() as u32;
-    Some(Grid { columns, rows, margin, spacing, split: if rows > 1 { Split::Rows } else { Split::All } })
-}
-
-/// (count, margin, spacing) of the finest division of a line of `clear` flags into equal cells.
-fn divide(clear: &[bool]) -> Option<(u32, u32, u32)> {
-    let n = clear.len() as u32;
-    let mut best: Option<(u32, u32, u32)> = None;
-    for margin in 0..=2u32 {
-        if (0..margin).any(|i| !clear.get(i as usize).copied().unwrap_or(false))
-            || (n.saturating_sub(margin)..n).any(|i| !clear[i as usize])
-        {
-            continue;
-        }
-        for spacing in 0..=2u32 {
-            for count in 2..=MAX_FRAMES_PER_LINE {
-                let Some(inner) = n.checked_sub(2 * margin + (count - 1) * spacing) else { break };
-                let size = inner / count;
-                if size < MIN_FRAME {
-                    break;
-                }
-                if !inner.is_multiple_of(count) {
-                    continue;
-                }
-                let start = |k: u32| margin + k * (size + spacing);
-                let cuts_clear = (1..count).all(|k| {
-                    let cut = start(k);
-                    if spacing > 0 {
-                        (cut - spacing..cut).all(|i| clear[i as usize])
-                    } else {
-                        clear[cut as usize - 1] || clear[cut as usize]
-                    }
-                });
-                let cells_full = (0..count).all(|k| (start(k)..start(k) + size).any(|i| !clear[i as usize]));
-                if cuts_clear && cells_full && best.is_none_or(|(c, _, _)| count > c) {
-                    best = Some((count, margin, spacing));
-                }
-            }
-        }
-    }
-    best
-}
-
-/// Reads `name.json` (or `name.png.json`) beside the picture, if it's sprite sheet data.
-fn from_data_file(path: &Path) -> Option<Sheet> {
-    let stem = path.file_stem()?.to_string_lossy().into_owned();
-    let file_name = path.file_name()?.to_string_lossy().into_owned();
-    let dir = path.parent()?;
-    let candidates = [dir.join(format!("{stem}.json")), dir.join(format!("{file_name}.json"))];
-    let (data_path, text) = candidates
-        .iter()
-        .find_map(|candidate| std::fs::read_to_string(candidate).ok().map(|text| (candidate, text)))?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let data_name = data_path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-    parse_data(&json, &data_name)
-}
-
-/// Aseprite / TexturePacker JSON: `frames` as an array or an object of named frames, and
-/// optional `meta.frameTags`.
-fn parse_data(json: &serde_json::Value, data_name: &str) -> Option<Sheet> {
-    let entries: Vec<(String, &serde_json::Value)> = match json.get("frames")? {
-        serde_json::Value::Array(list) => list
-            .iter()
-            .map(|frame| (frame.get("filename").and_then(|v| v.as_str()).unwrap_or("").to_owned(), frame))
-            .collect(),
-        serde_json::Value::Object(map) => map.iter().map(|(name, frame)| (name.clone(), frame)).collect(),
-        _ => return None,
-    };
-    let number = |value: Option<&serde_json::Value>, key: &str| -> Option<u32> {
-        value?.get(key)?.as_f64().map(|n| n.max(0.0).round() as u32)
-    };
-    let mut frames = Vec::new();
-    let mut names = Vec::new();
-    for (name, frame) in entries {
-        let rect = frame.get("frame");
-        let [x, y, w, h] = ["x", "y", "w", "h"].map(|key| number(rect, key));
-        let (Some(x), Some(y), Some(w), Some(h)) = (x, y, w, h) else { continue };
-        if w == 0 || h == 0 {
-            continue;
-        }
-        let trimmed = frame.get("spriteSourceSize");
-        let source = frame.get("sourceSize");
-        let offset = [number(trimmed, "x").unwrap_or(0), number(trimmed, "y").unwrap_or(0)];
-        let size = [number(source, "w").unwrap_or(w).max(w), number(source, "h").unwrap_or(h).max(h)];
-        let rotated = frame.get("rotated").and_then(|v| v.as_bool()).unwrap_or(false);
-        let duration_ms = frame.get("duration").and_then(|v| v.as_f64()).map(|d| d.max(1.0).round() as u32);
-        frames.push(Frame { rect: [x, y, w, h], rotated, offset, size, duration_ms });
-        names.push(name);
-    }
-    if frames.is_empty() {
-        return None;
-    }
-
-    let mut animations = Vec::new();
-    if let Some(tags) = json.get("meta").and_then(|meta| meta.get("frameTags")).and_then(|tags| tags.as_array()) {
-        for tag in tags {
-            let name = tag.get("name").and_then(|v| v.as_str()).unwrap_or("").to_owned();
-            let (Some(from), Some(to)) = (number(Some(tag), "from"), number(Some(tag), "to")) else { continue };
-            let last = frames.len() as u32 - 1;
-            let (from, to) = (from.min(last) as usize, to.min(last) as usize);
-            let forward: Vec<usize> = (from.min(to)..=from.max(to)).collect();
-            let order = match tag.get("direction").and_then(|v| v.as_str()).unwrap_or("forward") {
-                "reverse" => forward.into_iter().rev().collect(),
-                "pingpong" if forward.len() > 2 => {
-                    let back: Vec<usize> = forward[1..forward.len() - 1].iter().rev().copied().collect();
-                    forward.into_iter().chain(back).collect()
-                }
-                _ => forward,
-            };
-            animations.push(Animation { name, frames: order });
-        }
-    }
-    if animations.is_empty() {
-        animations = animations_by_name(&names);
-    }
-    if animations.is_empty() {
-        animations = vec![Animation { name: "All frames".to_owned(), frames: (0..frames.len()).collect() }];
-    }
-    Some(Sheet { frames, animations, source: Source::Data(data_name.to_owned()) })
-}
-
-/// Atlas frames named `run-1`, `run-2`, `bat/fly_01`…: grouped by the name without its
-/// number, in number order. Only worth it when some name has more than one frame.
-fn animations_by_name(names: &[String]) -> Vec<Animation> {
-    let mut groups: BTreeMap<String, Vec<(u64, usize)>> = BTreeMap::new();
-    for (index, name) in names.iter().enumerate() {
-        let base = name.rsplit_once('.').filter(|(_, ext)| ext.len() <= 4).map_or(name.as_str(), |(base, _)| base);
-        let digits = base.chars().rev().take_while(char::is_ascii_digit).count();
-        let (stem, number) = base.split_at(base.len() - digits);
-        let stem = stem.trim_end_matches(['-', '_', ' ', '.']);
-        groups.entry(stem.to_owned()).or_default().push((number.parse().unwrap_or(0), index));
-    }
-    if !groups.values().any(|frames| frames.len() > 1) {
-        return Vec::new();
-    }
-    groups
-        .into_iter()
-        .map(|(stem, mut frames)| {
-            frames.sort_unstable();
-            let name = stem.rsplit('/').next().unwrap_or(&stem).to_owned();
-            let name = if name.is_empty() { "Frames".to_owned() } else { name };
-            Animation { name, frames: frames.into_iter().map(|(_, index)| index).collect() }
-        })
-        .collect()
-}
-
-/// What the user chose for one picture: to see it as an animation, their grid, and the speed.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Saved {
-    pub animate: bool,
-    pub grid: Option<Grid>,
-    /// The speed the user picked; `None` plays at the default speed, whatever that is now.
-    pub fps: Option<f32>,
-}
-
-/// Per-picture sheet choices, in the user data file beside the favourites and collections.
-pub struct SheetStore {
-    conn: Option<Connection>,
-}
-
-impl SheetStore {
-    pub fn open(path: &Path) -> Self {
-        match db::open_user_data(path) {
-            Ok(conn) => Self { conn: Some(conn) },
-            Err(err) => {
-                diag::report("Sprite sheet settings unavailable", err);
-                Self { conn: None }
-            }
-        }
-    }
-
-    pub fn get(&self, key: &str) -> Option<Saved> {
-        let conn = self.conn.as_ref()?;
-        conn.query_row(
-            "SELECT animate, columns, rows, margin, spacing, split, fps FROM sheets WHERE key = ?1",
-            [key],
-            |row| {
-                let columns: Option<u32> = row.get(1)?;
-                let grid = match columns {
-                    Some(columns) => Some(Grid {
-                        columns,
-                        rows: row.get::<_, Option<u32>>(2)?.unwrap_or(1),
-                        margin: row.get::<_, Option<u32>>(3)?.unwrap_or(0),
-                        spacing: row.get::<_, Option<u32>>(4)?.unwrap_or(0),
-                        split: Split::from_db(row.get::<_, Option<i64>>(5)?.unwrap_or(0)),
-                    }),
-                    None => None,
-                };
-                let fps: f64 = row.get(6)?;
-                Ok(Saved { animate: row.get::<_, i64>(0)? != 0, grid, fps: (fps > 0.0).then_some(fps as f32) })
-            },
-        )
-        .optional()
-        .map_err(|err| diag::report("Reading sprite sheet settings", err))
-        .ok()
-        .flatten()
-    }
-
-    /// Forgets every picture's choices (Settings → Storage).
-    pub fn clear(&self) {
-        if let Some(conn) = &self.conn
-            && let Err(err) = conn.execute("DELETE FROM sheets", [])
-        {
-            diag::report("Clearing sprite sheet choices", err);
-        }
-    }
-
-    pub fn set(&self, key: &str, saved: &Saved) {
-        let Some(conn) = &self.conn else { return };
-        let grid = saved.grid;
-        let result = conn.execute(
-            "INSERT OR REPLACE INTO sheets(key, animate, columns, rows, margin, spacing, split, fps)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                key,
-                saved.animate,
-                grid.map(|g| g.columns),
-                grid.map(|g| g.rows),
-                grid.map(|g| g.margin),
-                grid.map(|g| g.spacing),
-                grid.map(|g| g.split.to_db()),
-                saved.fps.unwrap_or(0.0),
-            ],
-        );
-        if let Err(err) = result {
-            diag::report("Saving sprite sheet settings", err);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use rusqlite::Connection;
+
+    use super::data::parse_data;
     use super::*;
     use crate::test_support::TempDir;
 
