@@ -107,7 +107,7 @@ fn model_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<(Pixels, Mo
         let info = ModelInfo { format: preview.format, ..ModelInfo::default() };
         return Ok((pixels, info));
     }
-    let model = model::load(path, &LoadOptions { max_texture: THUMB_TEXTURE })?;
+    let model = model::load(path, &LoadOptions { max_texture: THUMB_TEXTURE }).map_err(|err| err.to_string())?;
     let rgba = raster::render_thumbnail(&model, THUMB_MAX);
     Ok((Pixels { w: THUMB_MAX, h: THUMB_MAX, src_w: 0, src_h: 0, rgba }, model.info))
 }

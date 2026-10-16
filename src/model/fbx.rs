@@ -6,7 +6,7 @@ use std::path::Path;
 
 use super::textures::{self, Alpha};
 use super::vector::normalize;
-use super::{Builder, LoadOptions, Model, Slot, Vertex, srgb_to_linear};
+use super::{Builder, LoadOptions, Model, ModelError, Slot, Vertex, srgb_to_linear};
 
 /// ufbx's working memory per file. Only there to stop a corrupt file from exhausting memory: the
 /// largest model in the test library (6 MB) needs a small fraction of it.
@@ -18,7 +18,7 @@ const CHUNK_CORNERS: usize = 1 << 16;
 
 #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 /// An FBX or OBJ file: ufbx reads it from memory, with its name to find an OBJ's .mtl beside it.
-pub(super) fn parse(bytes: &[u8], path: &Path, options: &LoadOptions) -> Result<Model, String> {
+pub(super) fn parse(bytes: &[u8], path: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
     let filename = path.to_string_lossy();
     let limit = || ufbx::AllocatorOpts { memory_limit: MEMORY_LIMIT, ..Default::default() };
     let opts = ufbx::LoadOpts {
@@ -73,26 +73,18 @@ pub(super) fn parse(bytes: &[u8], path: &Path, options: &LoadOptions) -> Result<
         source_vertices += mesh.num_vertices as u64;
     }
     let mut builder = reader.builder;
-    builder.source_vertices = Some(source_vertices);
+    builder.set_source_vertices(source_vertices);
 
     if builder.triangle_count() == 0 {
         // A skeleton and its animation, such as a Mixamo download without skin.
         for node in &scene.nodes {
             let Some(parent) = node.parent.as_ref() else { continue };
             if node.bone.is_some() && parent.bone.is_some() {
-                builder.bones.push([translation(&parent.node_to_world), translation(&node.node_to_world)]);
+                builder.add_bone(translation(&parent.node_to_world), translation(&node.node_to_world));
             }
         }
-        if builder.bones.is_empty() {
-            return Err("there are no meshes in this file".into());
-        }
     }
-    builder.animations = scene
-        .anim_stacks
-        .iter()
-        .filter(|stack| stack.layers.iter().any(|layer| !layer.anim_values.is_empty()))
-        .map(|stack| (stack.element.name.to_string(), (stack.time_end - stack.time_begin).max(0.0) as f32))
-        .collect();
+    builder.set_animations(animations(&scene));
 
     let meta = &scene.metadata;
     let format = if meta.file_format == ufbx::FileFormat::Obj {
@@ -102,6 +94,16 @@ pub(super) fn parse(bytes: &[u8], path: &Path, options: &LoadOptions) -> Result<
         format!("FBX {}.{} {encoding}", meta.version / 1000, meta.version % 1000 / 100)
     };
     builder.finish(format)
+}
+
+/// Each animation that moves something: its name and length in seconds.
+fn animations(scene: &ufbx::Scene) -> Vec<(String, f32)> {
+    scene
+        .anim_stacks
+        .iter()
+        .filter(|stack| stack.layers.iter().any(|layer| !layer.anim_values.is_empty()))
+        .map(|stack| (stack.element.name.to_string(), (stack.time_end - stack.time_begin).max(0.0) as f32))
+        .collect()
 }
 
 /// ufbx's short description, plus its detail when there is one.
@@ -206,7 +208,7 @@ impl Reader<'_> {
             }
             self.add_corners(material, &mut vertices)?;
         }
-        self.builder.meshes += 1;
+        self.builder.count_mesh();
         Ok(())
     }
 
@@ -549,6 +551,6 @@ Connections:  {
         let dir = TempDir::new("fbx_broken");
         let path = dir.write("broken.fbx", b"Kaydara FBX Binary  \x00\x1a\x00\xe8\x1c\x00\x00");
         let err = crate::model::load(&path, &LoadOptions::default()).err().unwrap();
-        assert!(!err.is_empty());
+        assert!(!err.to_string().is_empty());
     }
 }

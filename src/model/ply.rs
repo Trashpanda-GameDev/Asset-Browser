@@ -12,7 +12,7 @@ use std::sync::Arc;
 use super::geometry::{self, DEFAULT_CREASE};
 use super::textures::{self, Alpha};
 use super::vector;
-use super::{Builder, LoadOptions, Model, Vertex, z_up_to_y_up};
+use super::{Builder, LoadOptions, Model, ModelError, Vertex, z_up_to_y_up};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Encoding {
@@ -175,7 +175,7 @@ impl Values<'_> {
 const MAX_LIST: f64 = 4096.0;
 
 #[expect(clippy::cognitive_complexity, clippy::too_many_lines, reason = "refactor: split into named steps")]
-pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, String> {
+pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
     let dir = super::folder(file);
     let header = parse_header(bytes)?;
     let mut values = Values { encoding: header.encoding, bytes, at: header.data };
@@ -331,8 +331,8 @@ pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<
     };
     let base = builder.add_vertices(&vertices);
     builder.add_triangles(material, base, &indices);
-    builder.meshes = 1;
-    builder.source_vertices = Some(count as u64);
+    builder.count_mesh();
+    builder.set_source_vertices(count as u64);
     let format = if header.encoding == Encoding::Ascii { "PLY ASCII" } else { "PLY binary" };
     builder.finish(format)
 }
@@ -420,7 +420,7 @@ mod tests {
     fn point_clouds_and_broken_files() {
         let points = "ply\nformat ascii 1.0\nelement vertex 2\nproperty float x\nproperty float y\nproperty float z\nend_header\n0 0 0\n1 1 1\n";
         assert_eq!(
-            parse(points.as_bytes(), Path::new("test.ply"), &options()).err().unwrap(),
+            parse(points.as_bytes(), Path::new("test.ply"), &options()).err().unwrap().to_string(),
             "there are only points, no faces to draw"
         );
         assert!(parse(b"ply\nformat ascii 1.0\nelement vertex 2\n", Path::new("test.ply"), &options()).is_err());

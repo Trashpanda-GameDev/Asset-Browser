@@ -13,7 +13,7 @@ use std::sync::Arc;
 use super::geometry::{self, Smoothing};
 use super::textures::{self, Alpha};
 use super::vector::{cross, dot};
-use super::{Builder, LoadOptions, Model, Slot, Vertex, srgb_to_linear, z_up_to_y_up};
+use super::{Builder, LoadOptions, Model, ModelError, Slot, Vertex, srgb_to_linear, z_up_to_y_up};
 
 const MAIN: u16 = 0x4D4D;
 const EDITOR: u16 = 0x3D3D;
@@ -109,7 +109,7 @@ fn material_def(data: &[u8]) -> MaterialDef {
     def
 }
 
-pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, String> {
+pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
     let dir = super::folder(file);
     let main = chunks(bytes).next().filter(|chunk| chunk.id == MAIN).ok_or("not a 3DS file")?;
     let editors: Vec<Chunk> = chunks(main.data).filter(|chunk| chunk.id == EDITOR).collect();
@@ -137,10 +137,7 @@ pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<
     }
     let points = reader.points;
     let mut builder = reader.builder;
-    if builder.triangle_count() == 0 {
-        return Err("there are no meshes in this file".into());
-    }
-    builder.source_vertices = Some(points);
+    builder.set_source_vertices(points);
     builder.finish("3DS")
 }
 
@@ -270,7 +267,7 @@ impl Reader<'_> {
             self.builder.add_triangles(material, base, &indices[start * 3..end * 3]);
             start = end;
         }
-        self.builder.meshes += 1;
+        self.builder.count_mesh();
     }
 
     fn material(&mut self, name: &str) -> u32 {

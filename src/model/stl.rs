@@ -9,10 +9,10 @@
 use std::path::Path;
 
 use super::vector::{cross, normalize, sub};
-use super::{Builder, LoadOptions, Model, Vertex, z_up_to_y_up};
+use super::{Builder, LoadOptions, Model, ModelError, Vertex, z_up_to_y_up};
 
 /// STL has nothing beside it to read, and no textures.
-pub(super) fn parse(bytes: &[u8], _file: &Path, _options: &LoadOptions) -> Result<Model, String> {
+pub(super) fn parse(bytes: &[u8], _file: &Path, _options: &LoadOptions) -> Result<Model, ModelError> {
     let count = bytes.get(80..84).map(|count| u32::from_le_bytes([count[0], count[1], count[2], count[3]]) as u64);
     // Some exporters add a few bytes after the last triangle.
     let binary_size = count.map(|count| 84 + 50 * count).filter(|&size| size <= bytes.len() as u64);
@@ -51,7 +51,7 @@ pub(super) fn parse(bytes: &[u8], _file: &Path, _options: &LoadOptions) -> Resul
     let base = builder.add_vertices(&vertices);
     let indices: Vec<u32> = (0..vertices.len() as u32).collect();
     builder.add_triangles(material, base, &indices);
-    builder.meshes = 1;
+    builder.count_mesh();
     builder.finish(format)
 }
 
@@ -92,7 +92,7 @@ fn text(bytes: &[u8]) -> Result<Vec<[f32; 3]>, String> {
 mod tests {
     use super::*;
 
-    fn read(bytes: &[u8]) -> Result<Model, String> {
+    fn read(bytes: &[u8]) -> Result<Model, ModelError> {
         parse(bytes, Path::new("test.stl"), &LoadOptions::default())
     }
 

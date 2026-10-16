@@ -101,7 +101,8 @@ fn run(requests: &WorkList<Request>, results: &Sender<Loaded>, on_result: &(dyn 
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| match request.kind {
             AssetKind::Image => load_picture(&request.path, &mut resizer, &superseded),
             AssetKind::Model => model::load(&request.path, &LoadOptions { max_texture: DETAIL_MAX })
-                .map(|model| Detail::Model(Arc::new(DetailModel::prepare(model)))),
+                .map(|model| Detail::Model(Arc::new(DetailModel::prepare(model))))
+                .map_err(|err| err.to_string()),
             AssetKind::Audio => Err("sounds have no large preview".to_owned()),
         }))
         .unwrap_or_else(|_| Err("the decoder crashed on this file".into()));

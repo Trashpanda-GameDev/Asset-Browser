@@ -157,7 +157,7 @@ pub struct LoadOptions {
 
 /// A format's reader: the file's bytes, the file itself (for what it refers to beside it, such as
 /// textures), and how to read it.
-type Parse = fn(&[u8], &Path, &LoadOptions) -> Result<Model, String>;
+type Parse = fn(&[u8], &Path, &LoadOptions) -> Result<Model, ModelError>;
 
 /// The formats read, by extension. A new format is a reader and a line here (and its extension
 /// in `asset`).
@@ -175,25 +175,67 @@ const FORMATS: [(&[&str], Parse); 6] = [
 /// core at once. The largest model in the test library has 151,000.
 const MAX_TRIANGLES: u64 = 4_000_000;
 
-fn check_triangle_count(triangles: u64) -> Result<(), String> {
+/// Why a model can't be shown. The message is what the user reads, and the thumbnail cache keeps
+/// it with the failure, so a message doesn't change.
+#[derive(Debug, thiserror::Error)]
+pub enum ModelError {
+    #[error("{0}")]
+    Read(#[from] std::io::Error),
+    #[error("Blender files can't be read without Blender, only their saved preview")]
+    Blender,
+    #[error("unsupported model format .{0}")]
+    Unsupported(String),
+    #[error(
+        "too many triangles to preview: {:.1} million (the limit is {} million)",
+        *.0 as f64 / 1e6,
+        MAX_TRIANGLES / 1_000_000
+    )]
+    TooManyTriangles(u64),
+    #[error("there are no meshes in this file")]
+    NoMeshes,
+    /// Nothing was read, and this is why what the file has was left out.
+    #[error("{0}")]
+    Skipped(&'static str),
+    /// Triangles were read, but none has a position that can be drawn.
+    #[error("there are no triangles to draw")]
+    NoTriangles,
+    /// What a format's reader found wrong: a damaged file, or one stored in a way it can't read.
+    #[error("{0}")]
+    Unreadable(String),
+}
+
+impl From<String> for ModelError {
+    fn from(message: String) -> Self {
+        Self::Unreadable(message)
+    }
+}
+
+impl From<&str> for ModelError {
+    fn from(message: &str) -> Self {
+        Self::Unreadable(message.to_owned())
+    }
+}
+
+/// `Builder::finish` checks the count it was given; a reader checks first too where it would
+/// otherwise read or make this much.
+fn check_triangle_count(triangles: u64) -> Result<(), ModelError> {
     if triangles > MAX_TRIANGLES {
-        let millions = triangles as f64 / 1e6;
-        return Err(format!("too many triangles to preview: {millions:.1} million (the limit is 4 million)"));
+        return Err(ModelError::TooManyTriangles(triangles));
     }
     Ok(())
 }
 
 /// Reads a model file. Returns an error for .blend files, whose geometry can't be read without
 /// Blender (see `blend::read_preview` for their saved picture).
-pub fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
+pub fn load(path: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
     let extension = extension(path);
     if extension == "blend" {
-        return Err("Blender files can't be read without Blender, only their saved preview".into());
+        return Err(ModelError::Blender);
     }
     let Some(&(_, parse)) = FORMATS.iter().find(|(extensions, _)| extensions.contains(&extension.as_str())) else {
-        return Err(format!("unsupported model format .{extension}"));
+        return Err(ModelError::Unsupported(extension));
     };
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+    let bytes = std::fs::read(path)?;
     parse(&bytes, path, options)
 }
 
@@ -273,6 +315,8 @@ struct Builder {
     animations: Vec<(String, f32)>,
     /// Triangles offered to `add_triangles`, kept or not.
     added_triangles: u64,
+    /// Why some of the file was left out: the error when nothing else is read.
+    skipped: Option<&'static str>,
 }
 
 impl Builder {
@@ -336,6 +380,38 @@ impl Builder {
         index
     }
 
+    /// Sets how a material's alpha is used, where the file says (glTF's alpha mode) rather than it
+    /// being guessed from the texture.
+    fn set_alpha_cutoff(&mut self, material: u32, cutoff: Option<f32>) {
+        self.materials[material as usize].alpha_cutoff = cutoff;
+    }
+
+    /// One more of the file's meshes read, for `ModelInfo::meshes`.
+    fn count_mesh(&mut self) {
+        self.meshes += 1;
+    }
+
+    /// The file's own vertex count, shown rather than the number of vertices drawn.
+    fn set_source_vertices(&mut self, count: u64) {
+        self.source_vertices = Some(count);
+    }
+
+    /// A skeleton segment, from a joint to its child: drawn when the file has no triangles.
+    fn add_bone(&mut self, from: [f32; 3], to: [f32; 3]) {
+        self.bones.push([from, to]);
+    }
+
+    /// The file's animations: their names and lengths in seconds.
+    fn set_animations(&mut self, animations: Vec<(String, f32)>) {
+        self.animations = animations;
+    }
+
+    /// Notes why some of the file's geometry was left out, for the error when nothing else is
+    /// read.
+    fn skip(&mut self, reason: &'static str) {
+        self.skipped = Some(reason);
+    }
+
     /// Appends vertices; returns the index of the first, for `add_triangles`.
     fn add_vertices(&mut self, vertices: &[Vertex]) -> u32 {
         let base = self.vertices.len() as u32;
@@ -363,53 +439,22 @@ impl Builder {
 
     /// Checks and packs everything into a `Model`. Triangles touching a vertex whose position
     /// isn't a finite number are dropped; other broken attributes get neutral values.
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
-    fn finish(mut self, format: impl Into<String>) -> Result<Model, String> {
+    fn finish(mut self, format: impl Into<String>) -> Result<Model, ModelError> {
         check_triangle_count(self.added_triangles)?;
-        let mut bad = vec![false; self.vertices.len()];
-        for (vertex, bad) in self.vertices.iter_mut().zip(&mut bad) {
-            *bad = !vertex.position.iter().all(|c| c.is_finite());
-            if !vertex.normal.iter().all(|c| c.is_finite()) {
-                vertex.normal = [0.0; 3];
-            }
-            if !vertex.uv.iter().all(|c| c.is_finite()) {
-                vertex.uv = [0.0; 2];
-            }
-            if !vertex.color.iter().all(|c| c.is_finite()) {
-                vertex.color = [1.0; 4];
-            }
+        if self.triangle_count() == 0 && self.bones.is_empty() {
+            return Err(self.skipped.map_or(ModelError::NoMeshes, ModelError::Skipped));
         }
-        let mut indices = Vec::with_capacity(self.triangle_count() * 3);
-        let mut parts = Vec::new();
-        for (material, list) in self.triangles.iter().enumerate() {
-            let first = indices.len();
-            for triangle in list.as_chunks::<3>().0 {
-                if triangle.iter().all(|&index| bad.get(index as usize) == Some(&false)) {
-                    indices.extend_from_slice(triangle);
-                }
-            }
-            if indices.len() > first {
-                let count = (indices.len() - first) as u32;
-                parts.push(Part { first: first as u32, count, material: material as u32 });
-            }
-        }
-        let mut bounds = Bounds::EMPTY;
-        for &index in &indices {
-            bounds.add(self.vertices[index as usize].position);
-        }
+        let unusable = self.repair_vertices();
+        let (indices, parts) = self.usable_triangles(&unusable);
+        // The skeleton is drawn only when there's nothing else.
         self.bones.retain(|segment| segment.iter().flatten().all(|c| c.is_finite()));
-        if indices.is_empty() {
-            for &[a, b] in &self.bones {
-                bounds.add(a);
-                bounds.add(b);
-            }
-        } else {
+        if !indices.is_empty() {
             self.bones.clear();
         }
         if indices.is_empty() && self.bones.is_empty() {
-            return Err("there are no triangles to draw".into());
+            return Err(ModelError::NoTriangles);
         }
-
+        let bounds = self.bounds(&indices);
         let used_materials = parts.iter().filter(|part| !self.made_up.contains(&part.material)).count() as u32;
         let info = ModelInfo {
             format: format.into(),
@@ -433,6 +478,57 @@ impl Builder {
             bounds,
             info,
         })
+    }
+
+    /// Gives broken normals, UVs and colours neutral values, and marks the vertices whose position
+    /// is broken: those can't be drawn.
+    fn repair_vertices(&mut self) -> Vec<bool> {
+        let mut unusable = Vec::with_capacity(self.vertices.len());
+        for vertex in &mut self.vertices {
+            unusable.push(!vertex.position.iter().all(|c| c.is_finite()));
+            if !vertex.normal.iter().all(|c| c.is_finite()) {
+                vertex.normal = [0.0; 3];
+            }
+            if !vertex.uv.iter().all(|c| c.is_finite()) {
+                vertex.uv = [0.0; 2];
+            }
+            if !vertex.color.iter().all(|c| c.is_finite()) {
+                vertex.color = [1.0; 4];
+            }
+        }
+        unusable
+    }
+
+    /// The triangles that can be drawn, as one list with a part per material, in material order.
+    fn usable_triangles(&self, unusable: &[bool]) -> (Vec<u32>, Vec<Part>) {
+        let mut indices = Vec::with_capacity(self.triangle_count() * 3);
+        let mut parts = Vec::new();
+        for (material, list) in self.triangles.iter().enumerate() {
+            let first = indices.len();
+            for triangle in list.as_chunks::<3>().0 {
+                if triangle.iter().all(|&index| unusable.get(index as usize) == Some(&false)) {
+                    indices.extend_from_slice(triangle);
+                }
+            }
+            if indices.len() > first {
+                let count = (indices.len() - first) as u32;
+                parts.push(Part { first: first as u32, count, material: material as u32 });
+            }
+        }
+        (indices, parts)
+    }
+
+    /// The box around what's drawn: the triangles, or else the skeleton.
+    fn bounds(&self, indices: &[u32]) -> Bounds {
+        let mut bounds = Bounds::EMPTY;
+        for &index in indices {
+            bounds.add(self.vertices[index as usize].position);
+        }
+        for &[a, b] in &self.bones {
+            bounds.add(a);
+            bounds.add(b);
+        }
+        bounds
     }
 }
 
@@ -528,14 +624,21 @@ mod tests {
         builder.add_triangles(material, base, &many);
         builder.add_triangles(material, base, &many);
         assert_eq!(builder.vertices.len(), 3);
-        assert!(builder.finish("test").err().unwrap().contains("too many triangles"));
+        assert!(matches!(builder.finish("test"), Err(ModelError::TooManyTriangles(_))));
+
+        // All in one go, so none were kept: still too many, not nothing to draw.
+        let mut builder = Builder::default();
+        let material = builder.default_material(false);
+        let base = builder.add_vertices(&[vertex([0.0; 3]), vertex([1.0, 0.0, 0.0]), vertex([0.0, 1.0, 0.0])]);
+        builder.add_triangles(material, base, &[many.as_slice(), &many].concat());
+        assert!(matches!(builder.finish("test"), Err(ModelError::TooManyTriangles(_))));
     }
 
     #[test]
     fn builder_needs_something_to_draw() {
         assert!(Builder::default().finish("test").is_err());
         let mut bones = Builder::default();
-        bones.bones.push([[0.0; 3], [0.0, 1.0, 0.0]]);
+        bones.add_bone([0.0; 3], [0.0, 1.0, 0.0]);
         let model = bones.finish("test").unwrap();
         assert!(!model.info.geometry);
         assert_eq!(model.info.size, [0.0, 1.0, 0.0]);
@@ -553,6 +656,41 @@ mod tests {
         assert_eq!(builder.missing_textures, 1);
         let red = builder.material("red".into(), [1.0, 0.0, 0.0, 1.0], slot);
         assert_eq!(builder.materials[red as usize].color, [1.0, 0.0, 0.0, 1.0], "colour kept");
+    }
+
+    #[test]
+    fn messages_stay_as_the_thumbnail_cache_keeps_them() {
+        let messages = [
+            (ModelError::Blender, "Blender files can't be read without Blender, only their saved preview"),
+            (ModelError::Unsupported("xyz".into()), "unsupported model format .xyz"),
+            (
+                ModelError::TooManyTriangles(5_300_000),
+                "too many triangles to preview: 5.3 million (the limit is 4 million)",
+            ),
+            (ModelError::NoMeshes, "there are no meshes in this file"),
+            (ModelError::NoTriangles, "there are no triangles to draw"),
+            (ModelError::Skipped("only lines"), "only lines"),
+            (ModelError::from("not a 3DS file"), "not a 3DS file"),
+        ];
+        for (error, message) in messages {
+            assert_eq!(error.to_string(), message);
+        }
+    }
+
+    #[test]
+    fn nothing_read_says_why() {
+        assert!(matches!(Builder::default().finish("test"), Err(ModelError::NoMeshes)));
+        let mut skipped = Builder::default();
+        skipped.skip("there are only points or lines, no surfaces to draw");
+        assert_eq!(
+            skipped.finish("test").err().unwrap().to_string(),
+            "there are only points or lines, no surfaces to draw"
+        );
+        let mut broken = Builder::default();
+        let clay = broken.default_material(false);
+        let base = broken.add_vertices(&[vertex([f32::NAN; 3]), vertex([0.0; 3]), vertex([1.0, 0.0, 0.0])]);
+        broken.add_triangles(clay, base, &[0, 1, 2]);
+        assert!(matches!(broken.finish("test"), Err(ModelError::NoTriangles)));
     }
 
     #[test]

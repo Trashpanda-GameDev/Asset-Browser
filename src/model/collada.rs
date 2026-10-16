@@ -16,9 +16,9 @@ use roxmltree::Node;
 use super::geometry::{self, DEFAULT_CREASE, IDENTITY, Mat4, NormalMatrix};
 use super::textures::{self, Alpha};
 use super::vector::normalize;
-use super::{Builder, LoadOptions, Model, Slot, Vertex, srgb_to_linear};
+use super::{Builder, LoadOptions, Model, ModelError, Slot, Vertex, srgb_to_linear};
 
-pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, String> {
+pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
     let (text, dir) = (String::from_utf8_lossy(bytes), super::folder(file));
     let parsing = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
     let doc = roxmltree::Document::parse_with_options(&text, parsing).map_err(|err| format!("Collada: {err}"))?;
@@ -73,10 +73,7 @@ pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<
         }
     }
     let mut builder = reader.builder;
-    builder.source_vertices = Some(reader.source_vertices);
-    if builder.triangle_count() == 0 {
-        return Err("there are no meshes in this file".into());
-    }
+    builder.set_source_vertices(reader.source_vertices);
     let version = root.attribute("version").unwrap_or("");
     builder.finish(format!("Collada {version}").trim_end().to_owned())
 }
@@ -277,7 +274,7 @@ impl<'a, 'input> Reader<'a, 'input> {
             drawn = true;
         }
         if drawn {
-            self.builder.meshes += 1;
+            self.builder.count_mesh();
         }
     }
 

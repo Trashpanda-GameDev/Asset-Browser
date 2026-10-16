@@ -17,9 +17,9 @@ use ::gltf::{Accessor, Document, Semantic};
 use super::geometry::{self, IDENTITY, Mat4, NormalMatrix};
 use super::textures::{self, Alpha};
 use super::vector::normalize;
-use super::{Builder, LoadOptions, Model, Slot, Vertex, percent_decode};
+use super::{Builder, LoadOptions, Model, ModelError, Slot, Vertex, percent_decode};
 
-pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, String> {
+pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
     let dir = super::folder(file);
     let ::gltf::Gltf { document, mut blob } =
         ::gltf::Gltf::from_slice_without_validation(bytes).map_err(|err| format!("glTF: {err}"))?;
@@ -44,14 +44,12 @@ pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<
         builder: Builder::default(),
         materials: HashMap::new(),
         images: HashMap::new(),
-        skipped: None,
     };
     for node in document.nodes() {
         if let (Some(mesh), Some(matrix)) = (node.mesh(), world[node.index()]) {
             reader.add_mesh(&node, &mesh, &matrix, &world);
         }
     }
-    let skipped = reader.skipped;
     let mut builder = reader.builder;
 
     if builder.triangle_count() == 0 {
@@ -61,16 +59,13 @@ pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<
             for joint in skin.joints() {
                 for child in joint.children().filter(|child| joints.contains(&child.index())) {
                     if let (Some(a), Some(b)) = (world[joint.index()], world[child.index()]) {
-                        builder.bones.push([translation(&a), translation(&b)]);
+                        builder.add_bone(translation(&a), translation(&b));
                     }
                 }
             }
         }
-        if builder.bones.is_empty() {
-            return Err(skipped.unwrap_or("there are no meshes in this file").into());
-        }
     }
-    builder.animations = animations(&document);
+    builder.set_animations(animations(&document));
     let format = if bytes.starts_with(b"glTF") { "glTF 2.0 (GLB)" } else { "glTF 2.0" };
     builder.finish(format)
 }
@@ -164,8 +159,6 @@ struct Reader<'a> {
     materials: HashMap<usize, u32>,
     /// glTF image index (or `usize::MAX` for a texture with no picture) → what became of it.
     images: HashMap<usize, Slot>,
-    /// Why geometry was left out, for the error when nothing is left.
-    skipped: Option<&'static str>,
 }
 
 /// The data of each buffer, for the crate's readers.
@@ -183,11 +176,11 @@ impl<'a> Reader<'a> {
         let mut drawn = false;
         for primitive in mesh.primitives() {
             if !matches!(primitive.mode(), Mode::Triangles | Mode::TriangleStrip | Mode::TriangleFan) {
-                self.skipped = Some("there are only points or lines, no surfaces to draw");
+                self.builder.skip("there are only points or lines, no surfaces to draw");
                 continue;
             }
             let Some(vertices) = self.read_vertices(&primitive, world, skin.as_deref()) else {
-                self.skipped = Some("the geometry is stored in a way this app can't read");
+                self.builder.skip("the geometry is stored in a way this app can't read");
                 continue;
             };
             let count = vertices.len() as u32;
@@ -200,7 +193,7 @@ impl<'a> Reader<'a> {
                     }
                 }
                 Some(_) => {
-                    self.skipped = Some("the geometry is stored in a way this app can't read");
+                    self.builder.skip("the geometry is stored in a way this app can't read");
                     continue;
                 }
                 None => (0..count).collect(),
@@ -226,7 +219,7 @@ impl<'a> Reader<'a> {
             drawn = true;
         }
         if drawn {
-            self.builder.meshes += 1;
+            self.builder.count_mesh();
         }
     }
 
@@ -361,12 +354,13 @@ impl<'a> Reader<'a> {
         let name = material.name().unwrap_or_default().to_owned();
         let ours = self.builder.material(name, pbr.base_color_factor(), slot);
         // glTF says how alpha is used, rather than leaving it to be guessed from the texture.
-        self.builder.materials[ours as usize].alpha_cutoff = match material.alpha_mode() {
+        let cutoff = match material.alpha_mode() {
             ::gltf::material::AlphaMode::Opaque => None,
             ::gltf::material::AlphaMode::Mask => Some(material.alpha_cutoff().unwrap_or(0.5)),
             // Blending isn't drawn; a cutout keeps foliage and hair cards readable.
             ::gltf::material::AlphaMode::Blend => Some(0.5),
         };
+        self.builder.set_alpha_cutoff(ours, cutoff);
         self.materials.insert(index, ours);
         ours
     }
@@ -677,7 +671,8 @@ mod tests {
     fn broken_files_are_errors_not_panics() {
         // Buffer shorter than the accessors claim.
         let json = quad_json(r#"{"byteLength":140}"#, "", "", "");
-        let err = parse(&glb(&json, &quad_buffer()[..100]), Path::new("test.glb"), &options()).err().unwrap();
+        let err =
+            parse(&glb(&json, &quad_buffer()[..100]), Path::new("test.glb"), &options()).err().unwrap().to_string();
         assert!(err.contains("can't read") || err.contains("no meshes"), "{err}");
         // Out-of-range index.
         let json = quad_json(r#"{"byteLength":140}"#, "", r#","material":7"#, "");
@@ -685,7 +680,7 @@ mod tests {
         assert!(parse(b"{ not json", Path::new("test.glb"), &options()).is_err());
         let draco =
             quad_json(r#"{"byteLength":140}"#, "", "", r#","extensionsRequired":["KHR_draco_mesh_compression"]"#);
-        let err = parse(&glb(&draco, &quad_buffer()), Path::new("test.glb"), &options()).err().unwrap();
+        let err = parse(&glb(&draco, &quad_buffer()), Path::new("test.glb"), &options()).err().unwrap().to_string();
         assert!(err.contains("KHR_draco_mesh_compression"), "{err}");
         // Extensions the crate doesn't know don't stop a file that draws without them.
         let unknown = quad_json(r#"{"byteLength":140}"#, "", "", r#","extensionsRequired":["KHR_texture_transform"]"#);
