@@ -65,6 +65,7 @@ impl BrowserApp {
                     groups: &self.organizing.groups,
                     membership: &self.organizing.membership,
                     sheet_choices: self.organizing.sheets.of_focus(library, selection.focus),
+                    display: self.browsing.display,
                 };
                 output = Some(self.inspector.show(ui, args));
             });
@@ -74,6 +75,9 @@ impl BrowserApp {
         {
             let entry = library.entry(index);
             self.detail.request(entry.key, library.path_of(entry), entry.kind);
+        }
+        if let Some(display) = output.display {
+            self.browsing.display = display;
         }
         if let Some((key, choices)) = output.sheet_choices {
             self.organizing.sheets.save(key, choices);
@@ -188,7 +192,7 @@ impl BrowserApp {
             mode: self.browsing.mode,
             sort,
             descending,
-            backdrop: self.inspector.image.backdrop,
+            backdrop: self.browsing.display.backdrop,
             scroll_to,
             groups: &self.organizing.groups,
             membership: &self.organizing.membership,

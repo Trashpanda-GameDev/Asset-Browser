@@ -6,8 +6,8 @@ use egui_phosphor::regular as icon;
 use crate::groups::{self, GroupKind, Groups, Membership, UNCATEGORIZED};
 use crate::library::{Library, SortBy};
 
+use super::display::{self, Display};
 use super::format::grouped;
-use super::image_view::{self, Backdrop};
 use super::mode::{Layout as ViewLayout, Mode, ModeView};
 use super::organize::GroupCommand;
 use super::{theme, widgets};
@@ -27,8 +27,7 @@ pub struct ToolbarArgs<'a> {
     /// How many assets are shown.
     pub shown: usize,
     pub autoplay: bool,
-    pub backdrop: Backdrop,
-    pub turntable: bool,
+    pub display: Display,
 }
 
 /// What the user asked for from the toolbar.
@@ -39,8 +38,7 @@ pub enum ToolbarCommand {
     Order(SortBy, bool),
     Tile(f32),
     Autoplay(bool),
-    Backdrop(Backdrop),
-    Turntable(bool),
+    Display(Display),
 }
 
 pub fn show(ui: &mut Ui, args: &ToolbarArgs<'_>) -> Vec<ToolbarCommand> {
@@ -196,15 +194,15 @@ fn mode_options(ui: &mut Ui, args: &ToolbarArgs<'_>) -> Option<ToolbarCommand> {
             chip.changed().then_some(ToolbarCommand::Autoplay(autoplay))
         }
         Mode::Images => {
-            let mut backdrop = args.backdrop;
-            image_view::backdrop_buttons(ui, &mut backdrop);
-            (backdrop != args.backdrop).then_some(ToolbarCommand::Backdrop(backdrop))
+            let mut backdrop = args.display.backdrop;
+            display::backdrop_buttons(ui, &mut backdrop);
+            (backdrop != args.display.backdrop).then_some(ToolbarCommand::Display(Display { backdrop, ..args.display }))
         }
         Mode::Models => {
-            let mut turntable = args.turntable;
+            let mut turntable = args.display.turntable;
             let tip = "Turn the model in the preview pane slowly";
             let chip = widgets::toggle_chip(ui, icon::ARROWS_CLOCKWISE, "Turntable", &mut turntable, tip);
-            chip.changed().then_some(ToolbarCommand::Turntable(turntable))
+            chip.changed().then_some(ToolbarCommand::Display(Display { turntable, ..args.display }))
         }
     }
 }

@@ -8,6 +8,7 @@ use crate::asset::AssetKind;
 use crate::groups::{Membership, UNCATEGORIZED};
 use crate::library::SortBy;
 use crate::ui::browse::BrowseOutput;
+use crate::ui::display::Display;
 use crate::ui::mode::{Layout as ViewLayout, Mode, ModeView};
 use crate::ui::organize::Targets;
 
@@ -33,6 +34,8 @@ pub(super) struct Browsing {
     /// The current view's scroll offset and height, last frame.
     pub(super) scroll: (f32, f32),
     pub(super) scroll_to_focus: bool,
+    /// The backdrop behind pictures, and the 3D view's turntable and triangles.
+    pub(super) display: Display,
 }
 
 impl Default for Browsing {
@@ -50,6 +53,7 @@ impl Default for Browsing {
             page_rows: 1,
             scroll: (0.0, 0.0),
             scroll_to_focus: false,
+            display: Display::default(),
         }
     }
 }

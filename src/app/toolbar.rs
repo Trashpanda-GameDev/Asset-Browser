@@ -21,8 +21,7 @@ impl BrowserApp {
             in_group_order: self.browsing.in_group_order(),
             shown: self.browsing.view.len(),
             autoplay: self.playback.autoplay,
-            backdrop: self.inspector.image.backdrop,
-            turntable: self.inspector.viewport.auto_rotate,
+            display: self.browsing.display,
         };
         for command in toolbar::show(ui, &args) {
             match command {
@@ -31,8 +30,7 @@ impl BrowserApp {
                 ToolbarCommand::Order(sort, descending) => self.browsing.set_order(sort, descending),
                 ToolbarCommand::Tile(size) => self.browsing.mode_view_mut().tile = size,
                 ToolbarCommand::Autoplay(on) => self.playback.autoplay = on,
-                ToolbarCommand::Backdrop(backdrop) => self.inspector.image.backdrop = backdrop,
-                ToolbarCommand::Turntable(on) => self.inspector.viewport.auto_rotate = on,
+                ToolbarCommand::Display(display) => self.browsing.display = display,
             }
         }
     }

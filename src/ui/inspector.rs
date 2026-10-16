@@ -22,8 +22,9 @@ use crate::sheets::{Saved, Sheet, Source};
 
 use super::asset_actions::{self, AssetAction};
 use super::browse::{Look, channels, draw_preview};
+use super::display::{self, Display};
 use super::format::{format_age, format_size, format_time, grouped};
-use super::image_view::{self, ImageView, Picture};
+use super::image_view::{ImageView, Picture};
 use super::mode::Selection;
 use super::organize::{self, GroupCommand, Targets};
 use super::previews::Previews;
@@ -70,6 +71,7 @@ pub struct InspectorArgs<'a> {
     pub membership: &'a Membership,
     /// What the user chose for the focused picture's sprite sheet before, if it's a picture.
     pub sheet_choices: Option<Saved>,
+    pub display: Display,
 }
 
 #[derive(Default)]
@@ -83,6 +85,8 @@ pub struct InspectorOutput {
     pub load_detail: Option<u32>,
     /// The user changed a picture's sprite sheet: its key and the choices to save.
     pub sheet_choices: Option<(String, Saved)>,
+    /// The user changed the backdrop, the turntable or the triangles in the pane.
+    pub display: Option<Display>,
 }
 
 impl Inspector {
@@ -142,7 +146,12 @@ impl Inspector {
             groups,
             membership,
             sheet_choices,
+            display,
         } = args;
+        // The picture and 3D views draw with the app's display; their buttons change it here, to
+        // be handed back.
+        self.image.backdrop = display.backdrop;
+        (self.viewport.auto_rotate, self.viewport.wireframe) = (display.turntable, display.wireframe);
         let Some(focus) = selection.focus.filter(|&focus| (focus as usize) < library.entries().len()) else {
             self.viewport.release();
             empty_state(ui, totals, kinds);
@@ -237,6 +246,12 @@ impl Inspector {
             }
         });
         output.sheet_choices = self.sheet.take_choices();
+        let shown = Display {
+            backdrop: self.image.backdrop,
+            turntable: self.viewport.auto_rotate,
+            wireframe: self.viewport.wireframe,
+        };
+        output.display = (shown != display).then_some(shown);
         output
     }
 
@@ -335,7 +350,7 @@ impl Inspector {
         }
         let (sheet, backdrop) = (&mut self.sheet, &mut self.image.backdrop);
         overlay(ui, rect, |ui| {
-            image_view::backdrop_buttons(ui, backdrop);
+            display::backdrop_buttons(ui, backdrop);
             if let Some((_, _, pixels)) = &loaded {
                 widgets::divider(ui);
                 if animation_button(ui, sheet.animate, sheet.frame_count()).clicked() {

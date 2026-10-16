@@ -2,6 +2,7 @@
 
 pub mod asset_actions;
 pub mod browse;
+pub mod display;
 pub mod empty;
 pub mod folders;
 pub mod format;

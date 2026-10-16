@@ -9,7 +9,7 @@ use eframe::egui;
 use crate::changelog;
 use crate::library::SortBy;
 use crate::storage::{Measurement, Part};
-use crate::ui::image_view::{Backdrop, ImageView};
+use crate::ui::display::{Backdrop, Display};
 use crate::ui::keymap::Keymap;
 use crate::ui::mode::{Layout as ViewLayout, Mode, ModeView};
 use crate::ui::settings::{Command, Settings, SettingsArgs};
@@ -260,11 +260,12 @@ impl BrowserApp {
         if let Some(volume) = get("sound.volume").and_then(|value| value.parse::<f32>().ok()) {
             self.playback.set_volume(volume.clamp(0.0, 1.0));
         }
+        let display = &mut self.browsing.display;
         if let Some(backdrop) = get("image.backdrop").as_deref().and_then(Backdrop::from_key) {
-            self.inspector.image.backdrop = backdrop;
+            display.backdrop = backdrop;
         }
-        self.inspector.viewport.auto_rotate = get("model.turntable").is_some_and(|value| value == "1");
-        self.inspector.viewport.wireframe = get("model.wireframe").is_some_and(|value| value == "1");
+        display.turntable = get("model.turntable").is_some_and(|value| value == "1");
+        display.wireframe = get("model.wireframe").is_some_and(|value| value == "1");
         self.preferences.keymap = Keymap::load(get);
         self.preferences.memory_mb = get(SETTING_MEMORY)
             .and_then(|value| value.parse::<u64>().ok())
@@ -277,7 +278,7 @@ impl BrowserApp {
         self.browsing.modes = Mode::ALL.map(ModeView::new);
         self.chrome.show_inspector = true;
         self.playback.set_volume(playback::DEFAULT_VOLUME);
-        self.inspector.image.backdrop = ImageView::default().backdrop;
+        self.browsing.display = Display::default();
         // The rest have their defaults where nothing is saved.
         self.load_settings();
         self.apply_memory();
@@ -299,9 +300,9 @@ impl BrowserApp {
             ("sound.autoplay".to_owned(), flag(self.playback.autoplay).to_owned()),
             ("sound.loop".to_owned(), flag(self.playback.looping()).to_owned()),
             ("sound.volume".to_owned(), format!("{:.3}", self.playback.volume())),
-            ("image.backdrop".to_owned(), self.inspector.image.backdrop.key().to_owned()),
-            ("model.turntable".to_owned(), flag(self.inspector.viewport.auto_rotate).to_owned()),
-            ("model.wireframe".to_owned(), flag(self.inspector.viewport.wireframe).to_owned()),
+            ("image.backdrop".to_owned(), self.browsing.display.backdrop.key().to_owned()),
+            ("model.turntable".to_owned(), flag(self.browsing.display.turntable).to_owned()),
+            ("model.wireframe".to_owned(), flag(self.browsing.display.wireframe).to_owned()),
         ];
         for mode in Mode::ALL {
             let view = &self.browsing.modes[mode.index()];

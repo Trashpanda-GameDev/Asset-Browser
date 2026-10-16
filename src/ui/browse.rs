@@ -15,8 +15,8 @@ use crate::groups::{GroupKind, Groups, Membership};
 use crate::library::{Entry, Library, SortBy};
 
 use super::asset_actions::{self, AssetAction};
+use super::display::Backdrop;
 use super::format::{format_age, format_size, format_time, grouped};
-use super::image_view::Backdrop;
 use super::mode::{Mode, Selection};
 use super::organize::{self, DraggedAssets, GroupCommand, Targets};
 use super::previews::{CachedTexture, Previews};

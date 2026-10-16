@@ -5,49 +5,9 @@
 use eframe::egui::{
     Align2, Color32, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, TextureId, Ui, Vec2, pos2, vec2,
 };
-use egui_phosphor::regular as icon;
 
+use super::display::Backdrop;
 use super::{theme, widgets};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Backdrop {
-    Checker,
-    Dark,
-    Light,
-}
-
-impl Backdrop {
-    pub const ALL: [Backdrop; 3] = [Self::Checker, Self::Dark, Self::Light];
-    pub const LIGHT: Color32 = Color32::from_gray(222);
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Checker => "checker",
-            Self::Dark => "dark",
-            Self::Light => "light",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|backdrop| backdrop.key() == key)
-    }
-
-    pub fn glyph(self) -> &'static str {
-        match self {
-            Self::Checker => icon::CHECKERBOARD,
-            Self::Dark => icon::MOON,
-            Self::Light => icon::SUN,
-        }
-    }
-
-    pub fn tooltip(self) -> &'static str {
-        match self {
-            Self::Checker => "Checkerboard behind transparency",
-            Self::Dark => "Dark background",
-            Self::Light => "Light background",
-        }
-    }
-}
 
 /// What to draw: a texture showing the whole picture, and the picture's real size.
 pub struct Picture {
@@ -200,14 +160,5 @@ impl ImageView {
     #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
     fn picture_point(&self, rect: Rect, at: Pos2, scale: f32, w: f32, h: f32) -> Vec2 {
         self.center + (at - rect.center()) / vec2(w * scale, h * scale)
-    }
-}
-
-/// The backdrop switch shown above the picture.
-pub fn backdrop_buttons(ui: &mut Ui, backdrop: &mut Backdrop) {
-    for option in Backdrop::ALL {
-        if widgets::icon_button_sized(ui, option.glyph(), option.tooltip(), *backdrop == option, 24.0).clicked() {
-            *backdrop = option;
-        }
     }
 }
