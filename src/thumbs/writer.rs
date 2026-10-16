@@ -25,6 +25,7 @@ pub(super) fn writer_loop(db_path: &Path, jobs: &Receiver<Store>) {
             diag::report("Thumbnail cache writer", err);
             while let Ok(job) = jobs.recv() {
                 if let Store::Clear(_, done) = job {
+                    // Fails only when nobody's waiting for the answer any more.
                     let _ = done.send(Err(message.clone()));
                 }
             }
@@ -53,6 +54,7 @@ pub(super) fn writer_loop(db_path: &Path, jobs: &Receiver<Store>) {
             diag::report("Saving previews", err);
         }
         if let Some((parts, done)) = clear {
+            // Fails only when nobody's waiting for the answer any more.
             let _ = done.send(storage::clear_cache(&conn, &parts).map_err(|err| err.to_string()));
         }
     }

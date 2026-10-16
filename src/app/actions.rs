@@ -28,8 +28,10 @@ impl BrowserApp {
             MenuAction::Delete => {}
             MenuAction::Open => self.open_entries(&items),
             MenuAction::Reveal => {
-                if let Some(&first) = items.first() {
-                    let _ = platform::reveal(&library.path_of(library.entry(first)));
+                if let Some(&first) = items.first()
+                    && let Err(err) = platform::reveal(&library.path_of(library.entry(first)))
+                {
+                    diag::report("Showing the file", err);
                 }
             }
             MenuAction::CopyFiles => {
@@ -58,7 +60,9 @@ impl BrowserApp {
         let Some(library) = &self.library else { return };
         let items = if items.len() > OPEN_MANY_MAX { &items[..1] } else { items };
         for &index in items {
-            let _ = platform::open(&library.path_of(library.entry(index)));
+            if let Err(err) = platform::open(&library.path_of(library.entry(index))) {
+                diag::report("Opening the file", err);
+            }
         }
     }
 

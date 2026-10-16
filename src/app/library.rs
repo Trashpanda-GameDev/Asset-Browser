@@ -74,8 +74,10 @@ impl BrowserApp {
         match db::save_roots(user, &roots) {
             // Saved in its new place, it mustn't come back after being taken out.
             Ok(()) => {
-                if let Some(conn) = &self.conn {
-                    let _ = db::remove_setting(conn, SETTING_LAST_ROOT);
+                if let Some(conn) = &self.conn
+                    && let Err(err) = db::remove_setting(conn, SETTING_LAST_ROOT)
+                {
+                    diag::note("Forgetting the folder opened last", err);
                 }
             }
             Err(err) => diag::report("Saving the library's folders", err),

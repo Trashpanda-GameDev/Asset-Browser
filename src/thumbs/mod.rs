@@ -138,6 +138,7 @@ impl ThumbService {
         let (done_tx, done) = crossbeam_channel::bounded(1);
         let sent = self.store.as_ref().is_some_and(|store| store.send(Store::Clear(parts, done_tx.clone())).is_ok());
         if !sent {
+            // Can't fail: the receiver is right here.
             let _ = done_tx.send(Err("the cache isn't open".to_owned()));
         }
         done
@@ -187,12 +188,14 @@ impl Drop for ThumbService {
         }
         self.shared.wake_workers.notify_all();
         for worker in self.workers.drain(..) {
+            // A worker that panicked was logged by the panic hook.
             let _ = worker.join();
         }
         // The writer stops once every sender is gone (the workers' and this one), after committing
         // what's left.
         self.store = None;
         if let Some(writer) = self.writer.take() {
+            // A writer that panicked was logged by the panic hook.
             let _ = writer.join();
         }
     }

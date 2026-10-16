@@ -182,7 +182,8 @@ pub fn measure(cache: &Path, user: &Path) -> Result<Usage, String> {
         }
         if let Err(err) = measure_file(path, durability, parts, &mut usage) {
             let message = format!("{}: {err}", path.display());
-            diag::report("Measuring the files", &message);
+            // The Storage page shows it; the log keeps it.
+            diag::note("Measuring the files", &message);
             return Err(message);
         }
     }

@@ -132,20 +132,21 @@ impl Player {
 
     /// Plays from the start. `extension` helps the format probe ("wav", "ogg", ...).
     pub fn play(&self, key: i64, source: Source, extension: &str) {
-        let _ = self.commands.send(Command::Play {
-            key,
-            source,
-            extension: extension.to_owned(),
-            requested: Instant::now(),
-        });
+        self.send(Command::Play { key, source, extension: extension.to_owned(), requested: Instant::now() });
     }
 
     pub fn seek(&self, seconds: f64) {
-        let _ = self.commands.send(Command::Seek(seconds));
+        self.send(Command::Seek(seconds));
     }
 
     pub fn stop(&self) {
-        let _ = self.commands.send(Command::Stop);
+        self.send(Command::Stop);
+    }
+
+    fn send(&self, command: Command) {
+        // Fails only when the decoder thread has died, which the panic hook has logged: then
+        // there's no sound to play.
+        let _ = self.commands.send(command);
     }
 
     pub fn set_paused(&self, paused: bool) {

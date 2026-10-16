@@ -137,11 +137,13 @@ impl BrowserApp {
     fn clear(&mut self, parts: Vec<Part>) {
         for part in &parts {
             match part {
+                // A clear the file refused is reported, and nothing changes.
                 Part::Groups => {
-                    self.groups.clear();
-                    self.group = None;
-                    self.membership_dirty = true;
-                    self.view_dirty = true;
+                    if self.groups.clear() {
+                        self.group = None;
+                        self.membership_dirty = true;
+                        self.view_dirty = true;
+                    }
                 }
                 Part::SheetChoices => self.inspector.sheet.forget_choices(),
                 Part::LibraryFolders => {
@@ -248,8 +250,10 @@ impl BrowserApp {
         self.apply_memory();
         self.view_dirty = true;
         // Cleared settings aren't a first install: no "What's new" next time.
-        if let (Some(conn), Ok(current)) = (&self.conn, semver::Version::parse(&self.updates.version())) {
-            let _ = db::set_setting(conn, SETTING_WHATS_NEW, &current.to_string());
+        if let (Some(conn), Ok(current)) = (&self.conn, semver::Version::parse(&self.updates.version()))
+            && let Err(err) = db::set_setting(conn, SETTING_WHATS_NEW, &current.to_string())
+        {
+            diag::note("Saving that What's new was seen", err);
         }
     }
 

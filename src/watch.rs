@@ -68,7 +68,10 @@ impl Watch {
         let handler = {
             let shared = shared.clone();
             move |result: notify::Result<notify::Event>| {
-                let Ok(event) = result else { return };
+                let event = match result {
+                    Ok(event) => event,
+                    Err(err) => return diag::note("Watching the library's folders", err),
+                };
                 let mut shared = work::lock(&shared);
                 let now = Instant::now();
                 let roots: Vec<PathBuf> = if event.need_rescan() {
@@ -117,6 +120,7 @@ impl Watch {
         let Some(watcher) = &mut self.watcher else { return };
         for root in &self.watched {
             if !roots.contains(root) {
+                // A folder that's gone isn't watched any more anyway.
                 let _ = watcher.unwatch(root);
             }
         }
@@ -146,6 +150,7 @@ impl Watch {
         };
         if let Some(watcher) = &mut self.watcher {
             for root in &ready {
+                // Watched again from scratch just below.
                 let _ = watcher.unwatch(root);
                 arm(watcher, root, &mut self.failed);
             }

@@ -170,8 +170,14 @@ pub fn open_cache(path: &Path) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
+/// A setting, or `None` when it was never saved. One that can't be read is logged, and the
+/// default is used.
 pub fn get_setting(conn: &Connection, key: &str) -> Option<String> {
-    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| row.get(0)).optional().ok().flatten()
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| row.get(0))
+        .optional()
+        .map_err(|err| crate::diag::note(&format!("Reading the setting {key}"), err))
+        .ok()
+        .flatten()
 }
 
 pub fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {

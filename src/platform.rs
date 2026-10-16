@@ -132,6 +132,7 @@ pub fn has_trash(path: &Path) -> bool {
     }
     #[cfg(not(target_os = "windows"))]
     {
+        // Elsewhere `trash` fails rather than deleting for good, so there's nothing to ask.
         let _ = path;
         true
     }
@@ -170,6 +171,7 @@ pub fn color_title_bar(
     }
     #[cfg(not(target_os = "windows"))]
     {
+        // Only Windows lets the title bar take colours.
         let _ = (window, caption, text, border);
     }
 }

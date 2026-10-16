@@ -14,6 +14,8 @@ As things change, add them under a `## Unreleased` heading at the top. To releas
   pane too, and copies every selected file at once.
 - A damaged Photoshop file can no longer close the app by asking for more memory than there is: it
   shows as a file that can't be read.
+- When a file can't be opened or shown in its folder, the status bar says why, where nothing
+  happened before.
 
 ## 0.2.1 – 14 Oct 2026
 

@@ -235,6 +235,7 @@ impl Updates {
 /// Checks for a newer release and downloads it, sending news as it goes.
 fn check_and_download(manager: &UpdateManager, tx: &Sender<Event>, repaint: &(dyn Fn() + Send + Sync)) {
     let send = |event| {
+        // Fails only when the window has closed.
         let _ = tx.send(event);
         repaint();
     };

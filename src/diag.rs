@@ -41,10 +41,12 @@ pub fn install_panic_hook() {
 fn append(line: &str) {
     let path = paths::log_file();
     if let Some(dir) = path.parent() {
+        // The log can't report failing to write itself: opening the file below fails too.
         let _ = std::fs::create_dir_all(dir);
     }
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        // Nowhere left to tell.
         let _ = writeln!(file, "[unix {secs}] {line}");
     }
 }
