@@ -44,16 +44,16 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/ui/toolbar.rs` | Above the assets: where you are, the counts, the order and each mode's own options |
 | `src/ui/empty.rs` | The welcome before any folder is added, and why a view is empty |
 | `src/ui/status_bar.rs` | The bar along the bottom: the last error, scans, previews, updates, the sound playing |
-| `src/ui/browse.rs` | The grid and the list (with each mode's columns) |
-| `src/ui/inspector.rs` | The preview pane, with a section per kind |
+| `src/ui/browse/` | The grid (`grid.rs`) and the list with each mode's columns (`list.rs`), drawing a preview (`preview.rs`), and what they share (`mod.rs`) |
+| `src/ui/inspector/` | The preview pane (`mod.rs`), with a file per kind (`image.rs`, `audio.rs`, `model.rs`) and for several assets or none (`selection.rs`) |
 | `src/ui/image_view.rs` | The pane's zoomable picture, which animations are drawn through too |
 | `src/ui/display.rs` | How assets are shown everywhere: the backdrop behind pictures, the 3D view's turntable and triangles |
 | `src/ui/asset_actions.rs` | Open, show in folder, copy and delete: the context menu's items and the pane's buttons |
 | `src/ui/sound.rs` | The player's controls: transport and waveforms, asking for what they want (`SoundCommand`) |
-| `src/ui/viewport.rs` | The pane's 3D view (wgpu) |
+| `src/ui/viewport/` | The pane's 3D view (wgpu): the widget (`mod.rs`), the GPU's pipelines (`gpu.rs`), a model on the GPU (`scene.rs`), the orbit (`camera.rs`), the shader (`model.wgsl`, `shader.rs`) |
 | `src/ui/folders.rs` | The folder tree and the list of the library's folders |
-| `src/ui/organize.rs` | Favorites, collections and categories in the sidebar, menus, chips, dragging |
-| `src/ui/sheet_view.rs` | The pane's player for sprite sheets and GIFs, and the grid |
+| `src/ui/organize/` | Favorites, collections and categories: what's asked of them and dragging (`mod.rs`), the sidebar (`sidebar.rs`), an asset's groups in its menu and the pane (`asset_groups.rs`) |
+| `src/ui/sheet_view/` | The pane's player for sprite sheets and GIFs (`mod.rs`), and its controls and grid (`controls.rs`) |
 | `src/ui/previews.rs` | Thumbnails on the GPU, waveforms and model facts the window has |
 | `src/ui/theme.rs`, `widgets.rs`, `format.rs` | Colours, fonts and icons; the hand-drawn controls; numbers and dates |
 | `src/platform.rs` | Open / show in file manager, the Recycle Bin, the title bar's colours, the process's memory: the only per-OS code |
@@ -66,7 +66,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/memory.rs` | The memory setting, shared out among decoding, GPU thumbnails, read-ahead, textures and GIF frames |
 | `src/storage.rs` | Measuring the cache and user data part by part, and clearing parts of the cache |
 | `src/changelog.rs`, `CHANGELOG.md` | What's new in each version, built into the app; the release's notes too |
-| `src/ui/settings.rs` | The settings window: Updates, Keyboard, Storage and Memory pages |
+| `src/ui/settings/` | The settings window (`mod.rs`), with a file per page: Updates, Keyboard, Storage and Memory |
 | `src/ui/whats_new.rs` | "What's new" after an update, and every version's notes |
 | `src/bin/bench.rs` | The benchmark |
 | `src/bin/shots/` | Screenshots of the window and the settings, to check the look; and the README's pictures and clips, of made-up assets |
