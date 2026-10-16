@@ -2,9 +2,13 @@
 //! material, and what else the file says (meshes, bones, animations). `Builder::finish` checks
 //! it all and packs it into a `Model`.
 
+use std::collections::HashMap;
+use std::path::Path;
+
+use super::textures::{self, Alpha};
 use super::{
-    Bounds, MAX_TRIANGLES, Material, Model, ModelError, ModelInfo, Part, Texture, Vertex, check_triangle_count,
-    textures,
+    Bounds, LoadOptions, MAX_TRIANGLES, Material, Model, ModelError, ModelInfo, Part, Texture, Vertex,
+    check_triangle_count,
 };
 
 /// A material's base-colour texture, as a loader found it.
@@ -17,6 +21,38 @@ pub(super) enum Slot {
         index: u32,
         cutout: bool,
     },
+}
+
+/// The texture files a model names, looked for beside it and read once each, however often they're
+/// named.
+pub(super) struct TextureFiles<'a> {
+    /// The folder the model is in.
+    dir: &'a Path,
+    /// `LoadOptions::max_texture`: none are read when it's 0.
+    max_texture: u32,
+    /// Each name, as the model gives it, and what became of it.
+    read: HashMap<String, Slot>,
+}
+
+impl<'a> TextureFiles<'a> {
+    pub(super) fn new(file: &'a Path, options: &LoadOptions) -> Self {
+        Self { dir: super::folder(file), max_texture: options.max_texture, read: HashMap::new() }
+    }
+
+    /// The texture file `name`: added to `builder` (or counted as missing) the first time it's
+    /// named, `Slot::None` when textures aren't read.
+    pub(super) fn slot(&mut self, builder: &mut Builder, name: &str) -> Slot {
+        if self.max_texture == 0 {
+            return Slot::None;
+        }
+        if let Some(&slot) = self.read.get(name) {
+            return slot;
+        }
+        let decoded = textures::from_file(self.dir, name, self.max_texture, Alpha::Guess);
+        let slot = builder.texture_slot(decoded.as_deref());
+        self.read.insert(name.to_owned(), slot);
+        slot
+    }
 }
 
 /// What a loader has read so far: vertices already in model space, triangles grouped by material.
@@ -258,7 +294,24 @@ impl Builder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::test_files::vertex;
+    use crate::model::test_files::{png_2x2, vertex};
+    use crate::test_support::TempDir;
+
+    #[test]
+    fn a_texture_file_is_read_once_however_often_it_is_named() {
+        let dir = TempDir::new("texture_files");
+        dir.write("wood.png", &png_2x2());
+        let model = dir.path().join("crate.3ds");
+        let mut builder = Builder::default();
+        let mut files = TextureFiles::new(&model, &LoadOptions { max_texture: 64 });
+        for _ in 0..2 {
+            assert!(matches!(files.slot(&mut builder, "wood.png"), Slot::Found { index: 0, .. }));
+            assert!(matches!(files.slot(&mut builder, "gone.png"), Slot::Missing));
+        }
+        assert_eq!((builder.textures.len(), builder.missing_textures), (1, 1));
+        let mut without = TextureFiles::new(&model, &LoadOptions::default());
+        assert!(matches!(without.slot(&mut builder, "wood.png"), Slot::None));
+    }
 
     #[test]
     fn builder_groups_by_material_and_drops_broken_triangles() {

@@ -7,11 +7,9 @@
 //! writes), and step over any other element. A `comment TextureFile <name>` line names the texture.
 
 use std::path::Path;
-use std::sync::Arc;
 
-use super::builder::Builder;
+use super::builder::{Builder, TextureFiles};
 use super::geometry::{self, DEFAULT_CREASE};
-use super::textures::{self, Alpha};
 use super::vector;
 use super::{LoadOptions, Model, ModelError, Vertex, flip_v, z_up_to_y_up};
 
@@ -177,7 +175,6 @@ const MAX_LIST: f64 = 4096.0;
 
 #[expect(clippy::cognitive_complexity, clippy::too_many_lines, reason = "refactor: split into named steps")]
 pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
-    let dir = super::folder(file);
     let header = parse_header(bytes)?;
     let mut values = Values { encoding: header.encoding, bytes, at: header.data };
     let mut vertices: Vec<Vertex> = Vec::new();
@@ -322,10 +319,11 @@ pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<
     }
 
     let mut builder = Builder::default();
-    let texture = header.texture.as_deref().filter(|_| options.max_texture > 0).map(|name| {
-        let decoded = textures::from_file(dir, name, options.max_texture, Alpha::Guess);
-        builder.texture_slot(decoded.as_ref().map(Arc::as_ref))
-    });
+    let texture = header
+        .texture
+        .as_deref()
+        .filter(|_| options.max_texture > 0)
+        .map(|name| TextureFiles::new(file, options).slot(&mut builder, name));
     let material = match texture {
         Some(slot) => builder.material(header.texture.clone().unwrap_or_default(), [1.0; 4], slot),
         None => builder.default_material(has_colors),

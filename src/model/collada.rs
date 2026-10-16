@@ -9,18 +9,16 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 
 use roxmltree::Node;
 
-use super::builder::{Builder, Slot};
+use super::builder::{Builder, Slot, TextureFiles};
 use super::geometry::{self, DEFAULT_CREASE, IDENTITY, Mat4, NormalMatrix};
-use super::textures::{self, Alpha};
 use super::vector::normalize;
 use super::{LoadOptions, Model, ModelError, Vertex, flip_v, srgb_to_linear};
 
 pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
-    let (text, dir) = (String::from_utf8_lossy(bytes), super::folder(file));
+    let text = String::from_utf8_lossy(bytes);
     let parsing = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
     let doc = roxmltree::Document::parse_with_options(&text, parsing).map_err(|err| format!("Collada: {err}"))?;
     let root = doc.root_element();
@@ -49,11 +47,9 @@ pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<
 
     let mut reader = Reader {
         ids: &ids,
-        dir,
-        max_texture: options.max_texture,
         builder: Builder::default(),
         materials: HashMap::new(),
-        textures: HashMap::new(),
+        textures: TextureFiles::new(file, options),
         source_vertices: 0,
     };
     let scene = child(root, "scene")
@@ -170,13 +166,10 @@ impl Source {
 
 struct Reader<'a, 'input> {
     ids: &'a HashMap<&'input str, Node<'a, 'input>>,
-    dir: &'a Path,
-    max_texture: u32,
     builder: Builder,
     /// Material id → ours.
     materials: HashMap<String, u32>,
-    /// Image reference → what became of it.
-    textures: HashMap<String, Slot>,
+    textures: TextureFiles<'a>,
     source_vertices: u64,
 }
 
@@ -401,8 +394,8 @@ impl<'a, 'input> Reader<'a, 'input> {
             self.image_path(profile, sampler)
         });
         let slot = match image {
-            Some(path) if self.max_texture > 0 => self.texture(&path),
-            _ => Slot::None,
+            Some(path) => self.textures.slot(&mut self.builder, &path),
+            None => Slot::None,
         };
         let index = match (color, slot) {
             (None, Slot::None) => self.builder.default_material(vertex_colors),
@@ -440,16 +433,6 @@ impl<'a, 'input> Reader<'a, 'input> {
         let path = child(init, "ref").and_then(|r| r.text()).or_else(|| init.text())?.trim();
         let path = path.strip_prefix("file://").unwrap_or(path);
         Some(super::percent_decode(path))
-    }
-
-    fn texture(&mut self, path: &str) -> Slot {
-        if let Some(&slot) = self.textures.get(path) {
-            return slot;
-        }
-        let decoded = textures::from_file(self.dir, path, self.max_texture, Alpha::Guess);
-        let slot = self.builder.texture_slot(decoded.as_ref().map(Arc::as_ref));
-        self.textures.insert(path.to_owned(), slot);
-        slot
     }
 }
 

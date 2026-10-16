@@ -53,7 +53,7 @@ pub(super) fn parse(bytes: &[u8], path: &Path, options: &LoadOptions) -> Result<
         materials: HashMap::new(),
         textures: HashMap::new(),
         model_path: path,
-        model_dir: path.parent().unwrap_or(Path::new(".")),
+        model_dir: super::folder(path),
         max_texture: options.max_texture,
         texture_files: scene.texture_files.len(),
         has_uvs: mesh_nodes.iter().any(|node| node.mesh.as_ref().is_some_and(|mesh| mesh.vertex_uv.exists)),

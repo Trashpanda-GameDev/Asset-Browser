@@ -8,11 +8,9 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 
-use super::builder::{Builder, Slot};
+use super::builder::{Builder, Slot, TextureFiles};
 use super::geometry::{self, Smoothing};
-use super::textures::{self, Alpha};
 use super::vector::{cross, dot};
 use super::{LoadOptions, Model, ModelError, Vertex, flip_v, srgb_to_linear, z_up_to_y_up};
 
@@ -111,7 +109,6 @@ fn material_def(data: &[u8]) -> MaterialDef {
 }
 
 pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
-    let dir = super::folder(file);
     let main = chunks(bytes).next().filter(|chunk| chunk.id == MAIN).ok_or("not a 3DS file")?;
     let editors: Vec<Chunk> = chunks(main.data).filter(|chunk| chunk.id == EDITOR).collect();
     let defs: Vec<MaterialDef> = editors
@@ -125,9 +122,7 @@ pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<
         builder: Builder::default(),
         defs: &defs,
         materials: HashMap::new(),
-        textures: HashMap::new(),
-        dir,
-        max_texture: options.max_texture,
+        textures: TextureFiles::new(file, options),
         points: 0,
     };
     for object in editors.iter().flat_map(|editor| chunks(editor.data)).filter(|chunk| chunk.id == OBJECT) {
@@ -147,10 +142,7 @@ struct Reader<'a> {
     defs: &'a [MaterialDef],
     /// Material name → ours.
     materials: HashMap<String, u32>,
-    /// Texture file name → what became of it.
-    textures: HashMap<String, Slot>,
-    dir: &'a Path,
-    max_texture: u32,
+    textures: TextureFiles<'a>,
     points: u64,
 }
 
@@ -282,24 +274,14 @@ impl Reader<'_> {
             Some(def) => {
                 let [r, g, b] = def.color.unwrap_or([1.0; 3]);
                 let slot = match &def.texture {
-                    Some(texture) if self.max_texture > 0 => self.texture(texture),
-                    _ => Slot::None,
+                    Some(texture) => self.textures.slot(&mut self.builder, texture),
+                    None => Slot::None,
                 };
                 self.builder.material(def.name.clone(), [r, g, b, 1.0], slot)
             }
         };
         self.materials.insert(name.to_owned(), index);
         index
-    }
-
-    fn texture(&mut self, name: &str) -> Slot {
-        if let Some(&slot) = self.textures.get(name) {
-            return slot;
-        }
-        let decoded = textures::from_file(self.dir, name, self.max_texture, Alpha::Guess);
-        let slot = self.builder.texture_slot(decoded.as_ref().map(Arc::as_ref));
-        self.textures.insert(name.to_owned(), slot);
-        slot
     }
 }
 
