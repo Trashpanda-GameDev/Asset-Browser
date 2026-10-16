@@ -6,13 +6,16 @@
 //! choices and the library's folders.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use crossbeam_channel::Receiver;
 
 use rusqlite::Connection;
 
 use crate::db::{self, Durability};
-use crate::diag;
+use crate::work::{self, Wake};
+use crate::{diag, paths};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Part {
@@ -103,13 +106,75 @@ pub struct Usage {
     pub parts: HashMap<Part, PartUsage>,
     /// Collections and categories (Favorites isn't counted).
     pub groups: u64,
+    /// The app's log, and the updater's when there is one.
+    pub logs: Vec<LogFile>,
+}
+
+/// A log file and its size, for showing in its folder.
+#[derive(Clone, Debug)]
+pub struct LogFile {
+    pub name: &'static str,
+    pub path: PathBuf,
+    /// `None` when it isn't there (nothing has been logged yet).
+    pub bytes: Option<u64>,
+}
+
+/// Measuring both files on a thread of its own, and the last measure.
+#[derive(Default)]
+pub struct Measurement {
+    usage: Option<Result<Usage, String>>,
+    job: Option<Receiver<Result<Usage, String>>>,
+}
+
+impl Measurement {
+    /// Starts measuring, unless it's under way or done; `wake` once it's done.
+    pub fn start(&mut self, cache: PathBuf, user: PathBuf, wake: Wake) {
+        if self.usage.is_some() || self.job.is_some() {
+            return;
+        }
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let spawned = work::spawn("measure", move || {
+            // Fails only when the window has closed.
+            let _ = tx.send(measure(&cache, &user));
+            wake();
+        });
+        match spawned {
+            Some(_) => self.job = Some(rx),
+            None => self.usage = Some(Err("measuring couldn't start".to_owned())),
+        }
+    }
+
+    /// Takes in the measure once it's done.
+    pub fn poll(&mut self) {
+        if let Some(job) = &self.job
+            && let Ok(measured) = job.try_recv()
+        {
+            self.usage = Some(measured);
+            self.job = None;
+        }
+    }
+
+    pub fn usage(&self) -> Option<&Result<Usage, String>> {
+        self.usage.as_ref()
+    }
+
+    pub fn is_measuring(&self) -> bool {
+        self.job.is_some()
+    }
+
+    /// The files changed (parts were cleared): they're measured again when next shown.
+    pub fn forget(&mut self) {
+        self.usage = None;
+        self.job = None;
+    }
 }
 
 /// Measures both files. Reads every page of the cache, so it's for a background thread. Every
 /// failure is logged with the file and the step. Sizes that can't be read are left unknown, with
 /// the counts still given; only a file that can't be opened or counted fails.
 pub fn measure(cache: &Path, user: &Path) -> Result<Usage, String> {
-    let mut usage = Usage { cache_file: file_size(cache), user_file: file_size(user), ..Usage::default() };
+    let mut usage =
+        Usage { cache_file: file_size(cache), user_file: file_size(user), logs: log_files(), ..Usage::default() };
     let files = [(cache, &Part::CACHE[..], Durability::Cache), (user, &Part::USER[..], Durability::UserData)];
     for (path, parts, durability) in files {
         if !path.exists() {
@@ -162,6 +227,19 @@ fn rows(conn: &Connection, table: &str, filter: &str) -> Result<u64, String> {
         return Ok(0);
     }
     count(&format!("SELECT COUNT(*) FROM {table}{filter}")).map_err(|err| format!("counting {table}: {err}"))
+}
+
+/// The app's log, and the updater's when there is one.
+fn log_files() -> Vec<LogFile> {
+    let size = |path: &Path| std::fs::metadata(path).ok().map(|meta| meta.len());
+    let app = paths::log_file();
+    let mut logs = vec![LogFile { name: "App log", bytes: size(&app), path: app }];
+    if let Some(path) = paths::updater_log_file()
+        && let Some(bytes) = size(&path)
+    {
+        logs.push(LogFile { name: "Updater log", path, bytes: Some(bytes) });
+    }
+    logs
 }
 
 fn file_size(path: &Path) -> u64 {

@@ -37,6 +37,7 @@ use crate::groups::{Groups, Membership};
 use crate::library::Library;
 use crate::memory;
 use crate::rescan::ScanTotals;
+use crate::storage::Measurement;
 use crate::thumbs::ThumbService;
 use crate::ui::folders::FolderTree;
 use crate::ui::inspector::Inspector;
@@ -104,6 +105,8 @@ pub struct BrowserApp {
     memory_mb: u64,
     whats_new: Option<WhatsNew>,
     clearing: Option<Clearing>,
+    /// The Storage page's measure of the files.
+    storage: Measurement,
 
     /// Favorites, collections and categories, and where their members are in the library.
     groups: Groups,
@@ -194,6 +197,7 @@ impl BrowserApp {
             memory_mb: memory::DEFAULT_MB,
             whats_new: None,
             clearing: None,
+            storage: Measurement::default(),
             groups: Groups::open(&paths::user_data_file()),
             membership: Membership::default(),
             membership_dirty: true,

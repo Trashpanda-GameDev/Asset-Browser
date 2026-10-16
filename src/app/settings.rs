@@ -68,6 +68,7 @@ impl BrowserApp {
         if !self.settings.open {
             return;
         }
+        self.storage.poll();
         let (user_path, log_path) = (paths::user_data_file(), paths::log_file());
         let args = SettingsArgs {
             updates: &self.updates,
@@ -77,45 +78,56 @@ impl BrowserApp {
             cache_path: &self.db_path,
             user_path: &user_path,
             log_path: &log_path,
+            usage: self.storage.usage(),
+            measuring: self.storage.is_measuring(),
         };
-        let commands = self.settings.show(ctx, &args);
-        for command in commands {
-            match command {
-                Command::CheckForUpdates => self.updates.check_now(),
-                Command::RestartToUpdate => self.restart_to_update(),
-                Command::WhatsNew => {
-                    if let Ok(current) = semver::Version::parse(&self.updates.version()) {
-                        self.whats_new = Some(WhatsNew::every_version(current));
-                    }
+        for command in self.settings.show(ctx, &args) {
+            self.run_settings_command(ctx, command);
+        }
+    }
+
+    /// Does what the settings window asked for.
+    fn run_settings_command(&mut self, ctx: &egui::Context, command: Command) {
+        match command {
+            Command::CheckForUpdates => self.updates.check_now(),
+            Command::RestartToUpdate => self.restart_to_update(),
+            Command::WhatsNew => {
+                if let Ok(current) = semver::Version::parse(&self.updates.version()) {
+                    self.whats_new = Some(WhatsNew::every_version(current));
                 }
-                Command::SetShortcut(action, shortcut) => {
-                    self.settings.keys_note = self.keymap.set(action, shortcut).and_then(|other| {
-                        let shortcut = shortcut?.label(ctx);
-                        Some(format!("{shortcut} was for “{}”, which has no shortcut now.", other.label()))
-                    });
-                    self.save_settings();
+            }
+            Command::SetShortcut(action, shortcut) => {
+                self.settings.keys_note = self.keymap.set(action, shortcut).and_then(|other| {
+                    let shortcut = shortcut?.label(ctx);
+                    Some(format!("{shortcut} was for “{}”, which has no shortcut now.", other.label()))
+                });
+                self.save_settings();
+            }
+            Command::ResetShortcuts => {
+                self.keymap = Keymap::default();
+                self.settings.keys_note = None;
+                self.save_settings();
+            }
+            Command::Clear(parts) => self.clear(parts),
+            Command::SetMemory(mb) => {
+                self.memory_mb = mb.clamp(memory::MIN_MB, memory::MAX_MB);
+                self.apply_memory();
+                self.save_settings();
+            }
+            Command::Reveal(path) => {
+                if let Err(err) = platform::reveal(&path) {
+                    diag::report("Showing the file", err);
                 }
-                Command::ResetShortcuts => {
-                    self.keymap = Keymap::default();
-                    self.settings.keys_note = None;
-                    self.save_settings();
+            }
+            Command::OpenLink(url) => {
+                if let Err(err) = platform::open_link(&url) {
+                    diag::report("Opening the link", err);
                 }
-                Command::Clear(parts) => self.clear(parts),
-                Command::SetMemory(mb) => {
-                    self.memory_mb = mb.clamp(memory::MIN_MB, memory::MAX_MB);
-                    self.apply_memory();
-                    self.save_settings();
-                }
-                Command::Reveal(path) => {
-                    if let Err(err) = platform::reveal(&path) {
-                        diag::report("Showing the file", err);
-                    }
-                }
-                Command::OpenLink(url) => {
-                    if let Err(err) = platform::open_link(&url) {
-                        diag::report("Opening the link", err);
-                    }
-                }
+            }
+            Command::Measure => {
+                let ctx = ctx.clone();
+                let wake = std::sync::Arc::new(move || ctx.request_repaint());
+                self.storage.start(self.db_path.clone(), paths::user_data_file(), wake);
             }
         }
     }
@@ -143,7 +155,7 @@ impl BrowserApp {
         }
         let cache: Vec<Part> = parts.into_iter().filter(|part| !part.in_user_data()).collect();
         if cache.is_empty() {
-            self.settings.remeasure();
+            self.storage.forget();
             self.notify("Cleared".to_owned());
             return;
         }
@@ -163,7 +175,7 @@ impl BrowserApp {
         };
         let parts = clearing.parts.clone();
         self.clearing = None;
-        self.settings.remeasure();
+        self.storage.forget();
         if let Err(err) = result {
             diag::report("Clearing the cache", err);
             return;

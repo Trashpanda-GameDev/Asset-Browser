@@ -5,7 +5,6 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
-use crossbeam_channel::Receiver;
 use eframe::egui::{
     self, Align, Color32, CornerRadius, FontId, Frame, Id, Layout, Margin, Rect, RichText, Sense, Ui, UiBuilder, Vec2,
     pos2, vec2,
@@ -13,10 +12,9 @@ use eframe::egui::{
 use egui_phosphor::regular as icon;
 
 use crate::memory::{self, Shares};
-use crate::storage::{self, Part, Usage};
+use crate::storage::{Part, Usage};
 use crate::ui::keymap::{self, Action, Keymap, Shortcut};
 use crate::updates::{RELEASES, Status, Updates};
-use crate::work;
 
 use super::format::{format_age, format_size, grouped};
 use super::organize::plural;
@@ -70,6 +68,8 @@ pub enum Command {
     Reveal(PathBuf),
     /// Open a web page in the browser.
     OpenLink(String),
+    /// Measure the files for the Storage page.
+    Measure,
 }
 
 /// What the window shows, from the app.
@@ -82,6 +82,9 @@ pub struct SettingsArgs<'a> {
     pub cache_path: &'a Path,
     pub user_path: &'a Path,
     pub log_path: &'a Path,
+    /// The last measure of the files (`Command::Measure` asks for one), and whether one is under way.
+    pub usage: Option<&'a Result<Usage, String>>,
+    pub measuring: bool,
 }
 
 pub struct Settings {
@@ -91,9 +94,6 @@ pub struct Settings {
     capturing: Option<Action>,
     /// Said under the shortcuts after a change took a shortcut from another action.
     pub keys_note: Option<String>,
-    /// The last measure of the files, and one under way.
-    usage: Option<Result<Usage, String>>,
-    measuring: Option<Receiver<Result<Usage, String>>>,
     /// Parts ticked to clear, and whether "Clear?" is being asked.
     chosen: HashSet<Part>,
     confirming: bool,
@@ -106,8 +106,6 @@ impl Default for Settings {
             page: Page::Updates,
             capturing: None,
             keys_note: None,
-            usage: None,
-            measuring: None,
             chosen: HashSet::new(),
             confirming: false,
         }
@@ -124,12 +122,6 @@ impl Settings {
     /// next one), so none reach the assets behind it.
     pub fn wants_keys(&self) -> bool {
         self.open
-    }
-
-    /// The files changed (cleared): measure them again when they're next shown.
-    pub fn remeasure(&mut self) {
-        self.usage = None;
-        self.measuring = None;
     }
 
     pub fn show(&mut self, ctx: &egui::Context, args: &SettingsArgs<'_>) -> Vec<Command> {
@@ -296,26 +288,10 @@ impl Settings {
     #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn storage_page(&mut self, ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command>) {
         // Measured when first shown, and again after clearing.
-        if self.usage.is_none() && self.measuring.is_none() && !args.clearing {
-            let (cache, user) = (args.cache_path.to_path_buf(), args.user_path.to_path_buf());
-            let (tx, rx) = crossbeam_channel::bounded(1);
-            let ctx = ui.ctx().clone();
-            let spawned = work::spawn("measure", move || {
-                let _ = tx.send(storage::measure(&cache, &user));
-                ctx.request_repaint();
-            });
-            match spawned {
-                Some(_) => self.measuring = Some(rx),
-                None => self.usage = Some(Err("measuring couldn't start".to_owned())),
-            }
+        if args.usage.is_none() && !args.measuring && !args.clearing {
+            commands.push(Command::Measure);
         }
-        if let Some(rx) = &self.measuring
-            && let Ok(measured) = rx.try_recv()
-        {
-            self.usage = Some(measured);
-            self.measuring = None;
-        }
-        let usage = match &self.usage {
+        let usage = match args.usage {
             Some(Ok(usage)) => Some(usage.clone()),
             Some(Err(error)) => {
                 ui.colored_label(theme::ERROR, format!("Couldn't measure the files: {error}"));
@@ -323,7 +299,7 @@ impl Settings {
             }
             None => None,
         };
-        let measuring = self.measuring.is_some() || args.clearing;
+        let measuring = args.measuring || args.clearing;
 
         note(ui, "The cache is made again as it's needed; your data can't be. Tick what to clear.");
         let file_row = |ui: &mut Ui, label: &str, path: &Path, size: Option<u64>, commands: &mut Vec<Command>| {
@@ -373,13 +349,16 @@ impl Settings {
 
         ui.add_space(14.0);
         widgets::section_label(ui, "Logs");
-        let log_size = std::fs::metadata(args.log_path).ok().map(|meta| meta.len());
-        file_row(ui, "App log", args.log_path, log_size, commands);
-        note(ui, "Errors the app carried on after, and crashes. Attach it when reporting a problem.");
-        let updater_log = velopack_log();
-        if let Some(path) = updater_log.filter(|path| path.exists()) {
-            let size = std::fs::metadata(&path).ok().map(|meta| meta.len());
-            file_row(ui, "Updater log", &path, size, commands);
+        match &usage {
+            Some(usage) => {
+                for log in &usage.logs {
+                    file_row(ui, log.name, &log.path, log.bytes, commands);
+                    if log.name == "App log" {
+                        note(ui, "Errors the app carried on after, and crashes. Attach it when reporting a problem.");
+                    }
+                }
+            }
+            None => file_row(ui, "App log", args.log_path, None, commands),
         }
         if measuring {
             ui.ctx().request_repaint_after(Duration::from_millis(200));
@@ -637,10 +616,4 @@ fn share_row(ui: &mut Ui, name: &str, value: String) {
             ui.label(RichText::new(value).monospace().color(theme::TEXT));
         });
     });
-}
-
-/// Where Velopack's updater writes its log (`%LOCALAPPDATA%\velopack`).
-fn velopack_log() -> Option<PathBuf> {
-    let local = std::env::var_os("LOCALAPPDATA")?;
-    Some(PathBuf::from(local).join("velopack").join("velopack_TrashpandaAssetBrowser.log"))
 }

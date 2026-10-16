@@ -27,6 +27,13 @@ pub fn user_data_file() -> PathBuf {
         .join("user.sqlite")
 }
 
+/// Where the updater (Velopack) writes its log: on Windows, in its own folder under
+/// `%LOCALAPPDATA%`.
+pub fn updater_log_file() -> Option<PathBuf> {
+    let local = std::env::var_os("LOCALAPPDATA")?;
+    Some(PathBuf::from(local).join("velopack").join("velopack_TrashpandaAssetBrowser.log"))
+}
+
 /// The error log, next to the cache.
 pub fn log_file() -> PathBuf {
     cache_file().with_file_name("asset_browser.log")
