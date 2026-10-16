@@ -144,7 +144,7 @@ pub(super) fn companion(model: &Path, max: u32) -> Option<Arc<Decoded>> {
 /// (TGA has no signature).
 pub(super) fn from_bytes(bytes: &[u8], name: &str, max: u32, alpha: Alpha) -> Option<Decoded> {
     let start = Instant::now();
-    let decoded = decode_image(bytes, Path::new(name)).and_then(|(w, h, rgba)| finish(name, w, h, rgba, max, alpha));
+    let decoded = decode_image(bytes, Path::new(name)).and_then(|picture| finish(name, picture, max, alpha));
     DECODED.fetch_add(1, Ordering::Relaxed);
     DECODE_MICROS.fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
     decoded
@@ -248,15 +248,15 @@ mod tests {
         assert!(!is_cutout_mask(&pixels(&[0, 0, 0, 0])), "clear everywhere");
         assert!(!is_cutout_mask(&pixels(&[40, 90, 120, 200, 230, 10, 100, 60])), "packed data");
         // Ignored alpha is made opaque, unless the material says how to use it.
-        let decoded = finish("t", 2, 1, pixels(&[0, 0]), 256, Alpha::Guess).unwrap();
+        let decoded = finish("t", (2, 1, pixels(&[0, 0])), 256, Alpha::Guess).unwrap();
         assert_eq!(decoded.rgba[3], 255);
-        let kept = finish("t", 2, 1, pixels(&[0, 0]), 256, Alpha::Keep).unwrap();
+        let kept = finish("t", (2, 1, pixels(&[0, 0])), 256, Alpha::Keep).unwrap();
         assert_eq!(kept.rgba[3], 0);
     }
 
     #[test]
     fn large_textures_shrink_to_fit() {
-        let decoded = finish("t", 512, 128, vec![200; 512 * 128 * 4], 256, Alpha::Guess).unwrap();
+        let decoded = finish("t", (512, 128, vec![200; 512 * 128 * 4]), 256, Alpha::Guess).unwrap();
         assert_eq!((decoded.width, decoded.height), (256, 64));
         assert_eq!(decoded.rgba.len(), 256 * 64 * 4);
     }

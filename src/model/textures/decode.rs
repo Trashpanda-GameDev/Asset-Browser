@@ -12,11 +12,10 @@ pub(super) fn decode_file(path: &Path, max: u32, alpha: Alpha) -> Option<Decoded
     let name = path.file_name()?.to_string_lossy().into_owned();
     if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("psd")) {
         let sampled = crate::imaging::psd::read(path, max).ok()?;
-        return finish(&name, sampled.w, sampled.h, sampled.rgba, max, alpha);
+        return finish(&name, (sampled.w, sampled.h, sampled.rgba), max, alpha);
     }
     let bytes = std::fs::read(path).ok()?;
-    let (w, h, rgba) = decode_image(&bytes, path)?;
-    finish(&name, w, h, rgba, max, alpha)
+    finish(&name, decode_image(&bytes, path)?, max, alpha)
 }
 
 /// Trusts the content over the extension; TGA has no signature, so it falls back to the name.
@@ -37,9 +36,9 @@ pub(super) fn decode_image(bytes: &[u8], name: &Path) -> Option<(u32, u32, Vec<u
     Some((w, h, image.into_raw()))
 }
 
-/// Decides how alpha is used, then scales the picture to fit `max`.
-#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
-pub(super) fn finish(name: &str, w: u32, h: u32, mut rgba: Vec<u8>, max: u32, alpha: Alpha) -> Option<Decoded> {
+/// Decides how alpha is used, then scales the picture (width, height and RGBA, as `decode_image`
+/// gives it) to fit `max`.
+pub(super) fn finish(name: &str, (w, h, mut rgba): (u32, u32, Vec<u8>), max: u32, alpha: Alpha) -> Option<Decoded> {
     if w == 0 || h == 0 || rgba.len() != w as usize * h as usize * 4 {
         return None;
     }
