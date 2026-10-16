@@ -1,6 +1,7 @@
 //! The look: a quiet dark palette with one accent colour, the OS's own UI font, Phosphor icons,
 //! rounder and roomier widgets than egui's defaults.
 
+use crate::platform::SystemFonts;
 use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Shadow, Stroke, TextStyle,
     Visuals, style::ScrollStyle, vec2,
@@ -85,8 +86,9 @@ pub fn filled_icons() -> FontFamily {
     FontFamily::Name("phosphor-fill".into())
 }
 
-pub fn apply(ctx: &egui::Context) {
-    ctx.set_fonts(fonts());
+/// Sets the look up, with the OS's own UI fonts where they were found.
+pub fn apply(ctx: &egui::Context, system: SystemFonts) {
+    ctx.set_fonts(fonts(system));
     ctx.all_styles_mut(|style| {
         style.visuals = visuals();
         style.text_styles = [
@@ -169,23 +171,23 @@ fn visuals() -> Visuals {
 
 /// The OS's UI font when it can be found (Segoe UI on Windows), with Phosphor icons mixed in, and
 /// egui's own fonts behind them for anything else (emoji, rare scripts).
-fn fonts() -> FontDefinitions {
+fn fonts(system: SystemFonts) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let proportional = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let mut semibold_family = proportional.clone();
 
-    if let Some(bytes) = read_first(REGULAR_FONTS) {
+    if let Some(bytes) = system.regular {
         fonts.font_data.insert("ui".into(), FontData::from_owned(bytes).into());
         if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
             family.insert(0, "ui".into());
         }
         semibold_family.insert(0, "ui".into());
     }
-    if let Some(bytes) = read_first(SEMIBOLD_FONTS) {
+    if let Some(bytes) = system.semibold {
         fonts.font_data.insert("ui-semibold".into(), FontData::from_owned(bytes).into());
         semibold_family.insert(0, "ui-semibold".into());
     }
-    if let Some(bytes) = read_first(MONOSPACE_FONTS) {
+    if let Some(bytes) = system.monospace {
         fonts.font_data.insert("ui-mono".into(), FontData::from_owned(bytes).into());
         if let Some(family) = fonts.families.get_mut(&FontFamily::Monospace) {
             family.insert(0, "ui-mono".into());
@@ -197,39 +199,4 @@ fn fonts() -> FontDefinitions {
     semibold_family.insert(semibold_family.len().min(1), "phosphor".into());
     fonts.families.insert(semibold(), semibold_family);
     fonts
-}
-
-#[cfg(windows)]
-const REGULAR_FONTS: &[&str] = &["%WINDIR%/Fonts/segoeui.ttf"];
-#[cfg(windows)]
-const SEMIBOLD_FONTS: &[&str] = &["%WINDIR%/Fonts/seguisb.ttf", "%WINDIR%/Fonts/segoeuib.ttf"];
-#[cfg(windows)]
-const MONOSPACE_FONTS: &[&str] = &["%WINDIR%/Fonts/CascadiaMono.ttf", "%WINDIR%/Fonts/consola.ttf"];
-
-#[cfg(target_os = "macos")]
-const REGULAR_FONTS: &[&str] = &["/System/Library/Fonts/SFNS.ttf"];
-#[cfg(target_os = "macos")]
-const SEMIBOLD_FONTS: &[&str] = &[];
-#[cfg(target_os = "macos")]
-const MONOSPACE_FONTS: &[&str] = &["/System/Library/Fonts/SFNSMono.ttf"];
-
-#[cfg(not(any(windows, target_os = "macos")))]
-const REGULAR_FONTS: &[&str] = &[
-    "/usr/share/fonts/truetype/inter/Inter-Regular.ttf",
-    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-];
-#[cfg(not(any(windows, target_os = "macos")))]
-const SEMIBOLD_FONTS: &[&str] = &[
-    "/usr/share/fonts/truetype/inter/Inter-SemiBold.ttf",
-    "/usr/share/fonts/truetype/noto/NotoSans-SemiBold.ttf",
-    "/usr/share/fonts/noto/NotoSans-SemiBold.ttf",
-];
-#[cfg(not(any(windows, target_os = "macos")))]
-const MONOSPACE_FONTS: &[&str] = &["/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"];
-
-fn read_first(candidates: &[&str]) -> Option<Vec<u8>> {
-    let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_owned());
-    candidates.iter().find_map(|path| std::fs::read(path.replace("%WINDIR%", &windir)).ok())
 }

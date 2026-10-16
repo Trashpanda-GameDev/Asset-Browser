@@ -1,6 +1,6 @@
 //! The few things that work differently on each OS: opening and revealing files, copying them to
-//! the clipboard, deleting them to the Recycle Bin or Trash, the window's title bar and the
-//! process's memory. Nothing else in the app should call into a specific platform.
+//! the clipboard, deleting them to the Recycle Bin or Trash, the window's title bar, the UI fonts
+//! and the process's memory. Nothing else in the app should call into a specific platform.
 
 use std::cell::RefCell;
 use std::io;
@@ -174,6 +174,58 @@ pub fn color_title_bar(
         // Only Windows lets the title bar take colours.
         let _ = (window, caption, text, border);
     }
+}
+
+/// The OS's own UI fonts, as their files hold them; `None` where one isn't found (egui's own
+/// font stands in).
+pub struct SystemFonts {
+    pub regular: Option<Vec<u8>>,
+    pub semibold: Option<Vec<u8>>,
+    pub monospace: Option<Vec<u8>>,
+}
+
+/// Reads the OS's UI fonts from where it keeps them.
+pub fn system_fonts() -> SystemFonts {
+    SystemFonts {
+        regular: read_first(REGULAR_FONTS),
+        semibold: read_first(SEMIBOLD_FONTS),
+        monospace: read_first(MONOSPACE_FONTS),
+    }
+}
+
+#[cfg(windows)]
+const REGULAR_FONTS: &[&str] = &["%WINDIR%/Fonts/segoeui.ttf"];
+#[cfg(windows)]
+const SEMIBOLD_FONTS: &[&str] = &["%WINDIR%/Fonts/seguisb.ttf", "%WINDIR%/Fonts/segoeuib.ttf"];
+#[cfg(windows)]
+const MONOSPACE_FONTS: &[&str] = &["%WINDIR%/Fonts/CascadiaMono.ttf", "%WINDIR%/Fonts/consola.ttf"];
+
+#[cfg(target_os = "macos")]
+const REGULAR_FONTS: &[&str] = &["/System/Library/Fonts/SFNS.ttf"];
+#[cfg(target_os = "macos")]
+const SEMIBOLD_FONTS: &[&str] = &[];
+#[cfg(target_os = "macos")]
+const MONOSPACE_FONTS: &[&str] = &["/System/Library/Fonts/SFNSMono.ttf"];
+
+#[cfg(not(any(windows, target_os = "macos")))]
+const REGULAR_FONTS: &[&str] = &[
+    "/usr/share/fonts/truetype/inter/Inter-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+];
+#[cfg(not(any(windows, target_os = "macos")))]
+const SEMIBOLD_FONTS: &[&str] = &[
+    "/usr/share/fonts/truetype/inter/Inter-SemiBold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-SemiBold.ttf",
+    "/usr/share/fonts/noto/NotoSans-SemiBold.ttf",
+];
+#[cfg(not(any(windows, target_os = "macos")))]
+const MONOSPACE_FONTS: &[&str] = &["/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"];
+
+fn read_first(candidates: &[&str]) -> Option<Vec<u8>> {
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_owned());
+    candidates.iter().find_map(|path| std::fs::read(path.replace("%WINDIR%", &windir)).ok())
 }
 
 /// How much memory the app holds right now (its private bytes), where the OS says.

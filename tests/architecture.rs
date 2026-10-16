@@ -37,7 +37,7 @@ const LAYERS: [(&str, &[&str]); 5] = [
 ];
 
 /// Views that do what the app should: (file in src/, what it does).
-const VIEW_EXCEPTIONS: [(&str, Work); 1] = [("ui/theme.rs", Work::Files)];
+const VIEW_EXCEPTIONS: [(&str, Work); 0] = [];
 
 /// The crates a module below `ui` must not use.
 const UI_CRATES: [&str; 4] = ["egui", "eframe", "egui_phosphor", "wgpu"];

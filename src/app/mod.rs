@@ -44,7 +44,7 @@ use crate::ui::previews::Previews;
 use crate::ui::theme;
 use crate::updates::Updates;
 use crate::watch::Watch;
-use crate::{db, diag, paths, work};
+use crate::{db, diag, paths, platform, work};
 use deleting::Deletion;
 use library::Folders;
 use organizing::Organizing;
@@ -89,7 +89,7 @@ pub(super) struct Chrome {
 
 impl BrowserApp {
     pub fn new(cc: &eframe::CreationContext<'_>, start_root: Option<PathBuf>) -> Self {
-        theme::apply(&cc.egui_ctx);
+        theme::apply(&cc.egui_ctx, platform::system_fonts());
         theme::color_title_bar(&cc.egui_ctx, cc);
         let db_path = paths::cache_file();
         let conn = db::open_cache(&db_path)
