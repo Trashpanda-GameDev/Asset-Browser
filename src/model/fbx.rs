@@ -408,8 +408,7 @@ mod tests {
         assert_eq!(model.info.missing_textures, 1);
         assert_eq!(model.info.textures, 0);
         let a = model.materials.iter().find(|m| m.name == "A").unwrap();
-        let [r, g, b] = crate::model::shading::DEFAULT_ALBEDO;
-        assert_eq!(a.color, [r, g, b, 1.0], "white under a missing texture shows as clay");
+        assert_eq!(a.color, crate::model::Material::CLAY.color, "white under a missing texture shows as clay");
     }
 
     /// Three bones in a chain, in metres, with a 2-second animation and no mesh: what a Mixamo

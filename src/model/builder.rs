@@ -4,7 +4,7 @@
 
 use super::{
     Bounds, MAX_TRIANGLES, Material, Model, ModelError, ModelInfo, Part, Texture, Vertex, check_triangle_count,
-    shading, textures,
+    textures,
 };
 
 /// A material's base-colour texture, as a loader found it.
@@ -59,7 +59,7 @@ impl Builder {
             Slot::Found { index, cutout } => (Some(index), cutout.then_some(0.5), color),
             Slot::Missing => {
                 let white = color[..3].iter().all(|&c| c > 0.95);
-                let [r, g, b] = shading::DEFAULT_ALBEDO;
+                let [r, g, b, _] = Material::CLAY.color;
                 (None, None, if white { [r, g, b, color[3]] } else { color })
             }
         };
@@ -89,9 +89,8 @@ impl Builder {
         if let Some(index) = self.defaults[slot] {
             return index;
         }
-        let [r, g, b] = shading::DEFAULT_ALBEDO;
-        let color = if vertex_colors { [1.0; 4] } else { [r, g, b, 1.0] };
-        let index = self.add_material(Material { name: String::new(), color, texture: None, alpha_cutoff: None });
+        let material = if vertex_colors { Material { color: [1.0; 4], ..Material::CLAY } } else { Material::CLAY };
+        let index = self.add_material(material);
         self.defaults[slot] = Some(index);
         self.made_up.push(index);
         index
@@ -328,8 +327,7 @@ mod tests {
         let slot = builder.texture_slot(None);
         let index = builder.material("m".into(), [1.0; 4], slot);
         let material = &builder.materials[index as usize];
-        let [r, g, b] = shading::DEFAULT_ALBEDO;
-        assert_eq!(material.color, [r, g, b, 1.0]);
+        assert_eq!(material.color, Material::CLAY.color);
         assert_eq!(material.alpha_cutoff, None);
         assert_eq!(builder.missing_textures, 1);
         let red = builder.material("red".into(), [1.0, 0.0, 0.0, 1.0], slot);

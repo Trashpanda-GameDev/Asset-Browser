@@ -102,6 +102,16 @@ pub struct Material {
     pub alpha_cutoff: Option<f32>,
 }
 
+impl Material {
+    /// Clay: what surfaces the file gives no material of their own are drawn with.
+    pub const CLAY: Material = Material {
+        name: String::new(),
+        color: [shading::DEFAULT_ALBEDO[0], shading::DEFAULT_ALBEDO[1], shading::DEFAULT_ALBEDO[2], 1.0],
+        texture: None,
+        alpha_cutoff: None,
+    };
+}
+
 #[derive(Clone)]
 pub struct Texture {
     pub name: String,

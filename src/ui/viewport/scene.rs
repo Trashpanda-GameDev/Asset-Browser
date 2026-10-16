@@ -4,7 +4,7 @@
 use eframe::wgpu::{self, util::DeviceExt};
 
 use crate::detail::DetailModel;
-use crate::model::{Model, Vertex, shading};
+use crate::model::{Material, Model, Vertex};
 
 use super::gpu::{COLOR_FORMAT, Gpu, MaterialUniform};
 
@@ -61,20 +61,15 @@ fn material_parts(gpu: &Gpu, detail: &DetailModel) -> Vec<(std::ops::Range<u32>,
             (view, texture.width.max(texture.height) <= PIXEL_ART_MAX)
         })
         .collect();
-    let default_material = crate::model::Material {
-        name: String::new(),
-        color: [shading::DEFAULT_ALBEDO[0], shading::DEFAULT_ALBEDO[1], shading::DEFAULT_ALBEDO[2], 1.0],
-        texture: None,
-        alpha_cutoff: None,
-    };
+    let clay = Material::CLAY;
     if model.parts.is_empty() {
-        return vec![(0..model.indices.len() as u32, bind_material(gpu, &textures, &default_material))];
+        return vec![(0..model.indices.len() as u32, bind_material(gpu, &textures, &clay))];
     }
     model
         .parts
         .iter()
         .map(|part| {
-            let material = model.materials.get(part.material as usize).unwrap_or(&default_material);
+            let material = model.materials.get(part.material as usize).unwrap_or(&clay);
             (part.first..part.first + part.count, bind_material(gpu, &textures, material))
         })
         .collect()
