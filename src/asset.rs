@@ -1,7 +1,5 @@
 //! What kind of asset a file is, decided by its extension.
 
-use eframe::egui::Color32;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AssetKind {
     Image,
@@ -60,22 +58,6 @@ impl AssetKind {
             Self::Image => "Image",
             Self::Audio => "Sound",
             Self::Model => "Model",
-        }
-    }
-
-    pub fn color(self) -> Color32 {
-        match self {
-            Self::Image => Color32::from_rgb(92, 168, 255),
-            Self::Audio => Color32::from_rgb(255, 176, 72),
-            Self::Model => Color32::from_rgb(84, 210, 146),
-        }
-    }
-
-    pub fn icon(self) -> &'static str {
-        match self {
-            Self::Image => egui_phosphor::regular::IMAGE,
-            Self::Audio => egui_phosphor::regular::WAVEFORM,
-            Self::Model => egui_phosphor::regular::CUBE,
         }
     }
 }

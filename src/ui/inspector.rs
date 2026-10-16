@@ -182,7 +182,7 @@ impl Inspector {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                 let several = selection.len() > 1 && selection.contains(focus);
-                let hint = crate::keymap::hint(ui.ctx(), crate::keymap::Action::Open);
+                let hint = crate::ui::keymap::hint(ui.ctx(), crate::ui::keymap::Action::Open);
                 if widgets::button(ui, icon::ARROW_SQUARE_OUT, "Open")
                     .on_hover_text(format!("Open in its default app{hint}"))
                     .clicked()
@@ -193,7 +193,7 @@ impl Inspector {
                     output.action = Some(MenuAction::Reveal);
                 }
                 let files = if several { format!("Copy {} files", selection.len()) } else { "Copy file".to_owned() };
-                let hint = crate::keymap::hint(ui.ctx(), crate::keymap::Action::CopyFiles);
+                let hint = crate::ui::keymap::hint(ui.ctx(), crate::ui::keymap::Action::CopyFiles);
                 if widgets::button(ui, icon::FILES, &files)
                     .on_hover_text(format!("To paste into a folder or another app{hint}"))
                     .clicked()
@@ -510,8 +510,8 @@ fn pending() -> RichText {
 fn title(ui: &mut Ui, library: &Library, entry: &Entry) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        let kind = format!("{} {}", entry.kind.icon(), entry.kind.singular().to_uppercase());
-        widgets::badge_widget(ui, &kind, entry.kind.color());
+        let kind = format!("{} {}", theme::kind_icon(entry.kind), entry.kind.singular().to_uppercase());
+        widgets::badge_widget(ui, &kind, theme::kind_color(entry.kind));
         widgets::badge_widget(ui, &entry.extension().to_uppercase(), theme::TEXT_WEAK);
     });
     ui.add(
@@ -602,7 +602,7 @@ fn empty_state(ui: &mut Ui, totals: [u32; 3], kinds: [bool; 3]) {
             let count = totals[kind.index()];
             let noun = if count == 1 { kind.singular() } else { kind.label() }.to_lowercase();
             ui.label(
-                RichText::new(format!("{}  {} {noun}", kind.icon(), grouped(count as usize)))
+                RichText::new(format!("{}  {} {noun}", theme::kind_icon(kind), grouped(count as usize)))
                     .size(12.5)
                     .color(if count > 0 { theme::TEXT_WEAK } else { theme::TEXT_FAINT }),
             );
@@ -681,7 +681,7 @@ fn favorite_button(ui: &mut Ui, favorite: bool) -> egui::Response {
     );
     painter.galley(pos2(rect.left() + 32.0, rect.center().y - galley.size().y / 2.0), galley, theme::TEXT);
     let tip = if favorite { "Remove from Favorites" } else { "Add to Favorites" };
-    let hint = crate::keymap::hint(&response.ctx, crate::keymap::Action::Favorite);
+    let hint = crate::ui::keymap::hint(&response.ctx, crate::ui::keymap::Action::Favorite);
     response.on_hover_text(format!("{tip}{hint}"))
 }
 

@@ -4,11 +4,11 @@
 use eframe::egui::{self, Align, Frame, Layout, Margin, RichText, vec2};
 use egui_phosphor::regular as icon;
 
-use crate::keymap::{self, Action};
 use crate::library::folder_name;
 use crate::platform;
 use crate::ui::folders::FolderAction;
 use crate::ui::format::grouped;
+use crate::ui::keymap::{self, Action};
 use crate::ui::mode::{Layout as ViewLayout, Mode};
 use crate::ui::{theme, widgets};
 

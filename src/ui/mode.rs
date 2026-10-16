@@ -63,12 +63,12 @@ impl Mode {
     pub fn glyph(self) -> &'static str {
         match self.kind() {
             None => icon::SQUARES_FOUR,
-            Some(kind) => kind.icon(),
+            Some(kind) => theme::kind_icon(kind),
         }
     }
 
     pub fn color(self) -> Color32 {
-        self.kind().map_or(theme::ACCENT, AssetKind::color)
+        self.kind().map_or(theme::ACCENT, theme::kind_color)
     }
 
     /// Name in the settings table.

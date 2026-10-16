@@ -34,12 +34,12 @@ use eframe::egui_wgpu::RenderState;
 use rusqlite::Connection;
 
 use crate::groups::{Groups, Membership};
-use crate::keymap::{self, Keymap};
 use crate::library::Library;
 use crate::memory;
 use crate::thumbs::ThumbService;
 use crate::ui::folders::FolderTree;
 use crate::ui::inspector::Inspector;
+use crate::ui::keymap::{self, Keymap};
 use crate::ui::mode::{Mode, ModeView};
 use crate::ui::organize::{self, GroupEdit};
 use crate::ui::previews::Previews;

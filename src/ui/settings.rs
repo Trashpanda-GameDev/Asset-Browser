@@ -12,9 +12,9 @@ use eframe::egui::{
 };
 use egui_phosphor::regular as icon;
 
-use crate::keymap::{self, Action, Keymap, Shortcut};
 use crate::memory::{self, Shares};
 use crate::storage::{self, Part, Usage};
+use crate::ui::keymap::{self, Action, Keymap, Shortcut};
 use crate::updates::{RELEASES, Status, Updates};
 
 use super::format::{format_age, format_size, grouped};

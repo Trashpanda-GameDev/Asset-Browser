@@ -7,11 +7,11 @@ use crossbeam_channel::Receiver;
 use eframe::egui;
 
 use crate::changelog;
-use crate::keymap::Keymap;
 use crate::library::SortBy;
 use crate::memory;
 use crate::storage::Part;
 use crate::ui::image_view::{Backdrop, ImageView};
+use crate::ui::keymap::Keymap;
 use crate::ui::mode::{Layout as ViewLayout, Mode, ModeView};
 use crate::ui::settings::{Command, SettingsArgs};
 use crate::ui::whats_new::WhatsNew;

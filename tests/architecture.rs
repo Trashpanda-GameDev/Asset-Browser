@@ -29,15 +29,12 @@ const LAYERS: [(&str, &[&str]); 5] = [
         ],
     ),
     ("services", &["thumbs", "audio", "detail", "deletion", "updates", "watch", "storage", "memory"]),
-    ("ui", &["ui", "keymap"]),
+    ("ui", &["ui"]),
     ("app", &["app"]),
 ];
 
 /// A module using one in a higher layer: (module, the module it uses).
 const UPWARD_EXCEPTIONS: [(&str, &str); 3] = [("db", "asset"), ("db", "model"), ("db", "scan")];
-
-/// Modules below `ui` that use egui.
-const EGUI_EXCEPTIONS: [&str; 1] = ["asset"];
 
 /// Views that do what the app should: (file in src/, what it does).
 const VIEW_EXCEPTIONS: [(&str, Work); 3] =
@@ -108,7 +105,7 @@ fn nothing_below_ui_uses_egui() {
     let ui = layer("ui");
     let found: BTreeSet<String> = sources()
         .into_iter()
-        .filter(|source| layer(&source.module) < ui && !EGUI_EXCEPTIONS.contains(&source.module.as_str()))
+        .filter(|source| layer(&source.module) < ui)
         .filter(|source| UI_CRATES.iter().any(|name| uses_path(&source.code, &format!("{name}::"))))
         .map(|source| source.path)
         .collect();
@@ -125,23 +122,11 @@ fn views_read_no_files_start_no_threads_and_open_no_databases() {
 #[test]
 fn every_exception_is_still_needed() {
     let uses = module_uses();
-    let sources = sources();
     let view_work = view_work();
     let fixed: Vec<String> = UPWARD_EXCEPTIONS
         .iter()
         .filter(|(module, target)| !uses.get(*module).is_some_and(|used| used.contains(*target)))
         .map(|(module, target)| format!("{module} uses {target}"))
-        .chain(
-            EGUI_EXCEPTIONS
-                .iter()
-                .filter(|module| {
-                    !sources.iter().any(|source| {
-                        source.module == **module
-                            && UI_CRATES.iter().any(|name| uses_path(&source.code, &format!("{name}::")))
-                    })
-                })
-                .map(|module| format!("{module} uses egui")),
-        )
         .chain(
             VIEW_EXCEPTIONS
                 .iter()

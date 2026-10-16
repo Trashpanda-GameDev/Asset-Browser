@@ -4,9 +4,9 @@
 use eframe::egui;
 
 use crate::asset::AssetKind;
-use crate::keymap::Action;
 use crate::library::folder_name;
 use crate::ui::browse::MenuAction;
+use crate::ui::keymap::Action;
 use crate::ui::mode::{Layout as ViewLayout, Mode};
 use crate::ui::organize::{GroupCommand, Targets, plural};
 use crate::{diag, platform};

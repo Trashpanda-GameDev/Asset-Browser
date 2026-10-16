@@ -278,7 +278,7 @@ fn item_response(browse: &Browse<'_>, index: u32, response: &egui::Response, out
         } else {
             format!("{}  Copy file", icon::FILES)
         };
-        let hint = crate::keymap::hint(ui.ctx(), crate::keymap::Action::CopyFiles);
+        let hint = crate::ui::keymap::hint(ui.ctx(), crate::ui::keymap::Action::CopyFiles);
         if ui.button(files).on_hover_text(format!("To paste into a folder or another app{hint}")).clicked() {
             output.menu = Some(MenuAction::CopyFiles);
             ui.close();
@@ -332,7 +332,7 @@ fn star_button(ui: &Ui, browse: &Browse<'_>, index: u32, center: Pos2, show_outl
     painter.circle_filled(rect.center(), 10.0, Color32::from_black_alpha(if favorite { 110 } else { 80 }));
     painter.text(rect.center(), Align2::CENTER_CENTER, icon::STAR, FontId::new(14.0, family), color);
     let tip = if favorite { "Remove from Favorites" } else { "Add to Favorites" };
-    let hint = crate::keymap::hint(&response.ctx, crate::keymap::Action::Favorite);
+    let hint = crate::ui::keymap::hint(&response.ctx, crate::ui::keymap::Action::Favorite);
     let clicked = response.on_hover_text(format!("{tip}{hint}")).clicked();
     let path = browse.library.path_of(&browse.library.entries[index as usize]);
     clicked.then(|| GroupCommand::ToggleFavorite(Targets::Paths(vec![path])))
@@ -371,7 +371,7 @@ impl Tile<'_, '_> {
                 card.left_top() + vec2(6.0, 6.0),
                 Align2::LEFT_TOP,
                 &entry.extension().to_uppercase(),
-                entry.kind.color(),
+                theme::kind_color(entry.kind),
             );
         }
 
@@ -433,7 +433,7 @@ pub fn draw_preview(
         let backdrop = (entry.kind == AssetKind::Image).then_some(look.backdrop);
         draw_texture(painter, rect, texture, previews.checker.id(), backdrop, look.pixels_per_point);
     } else if let Some(waveform) = previews.waveforms.get(&entry.key) {
-        let color = entry.kind.color();
+        let color = theme::kind_color(entry.kind);
         let progress = playing.map(|now| {
             let total = now.duration.unwrap_or(waveform.duration as f64).max(f64::EPSILON);
             (now.position / total) as f32
@@ -472,9 +472,9 @@ pub fn draw_preview(
         painter.text(
             rect.center(),
             Align2::CENTER_CENTER,
-            entry.kind.icon(),
+            theme::kind_icon(entry.kind),
             FontId::proportional(size),
-            entry.kind.color().gamma_multiply(0.35),
+            theme::kind_color(entry.kind).gamma_multiply(0.35),
         );
     }
 }
@@ -749,7 +749,7 @@ impl ListRow<'_, '_> {
                             Align2::CENTER_CENTER,
                             glyph,
                             FontId::proportional(15.0),
-                            entry.kind.color(),
+                            theme::kind_color(entry.kind),
                         );
                     } else {
                         draw_preview(painter, thumb.shrink(1.0), entry, self.previews, None, self.look, false);
@@ -776,7 +776,7 @@ impl ListRow<'_, '_> {
                         anchor,
                         Align2::LEFT_CENTER,
                         &entry.extension().to_uppercase(),
-                        entry.kind.color(),
+                        theme::kind_color(entry.kind),
                     );
                 }
                 Column::Details => weak(self.details()),
@@ -789,7 +789,7 @@ impl ListRow<'_, '_> {
                             let total = now.duration.unwrap_or(waveform.duration as f64).max(f64::EPSILON);
                             (now.position / total) as f32
                         });
-                        let color = entry.kind.color();
+                        let color = theme::kind_color(entry.kind);
                         let wave = cell.shrink2(vec2(4.0, 7.0));
                         draw_waveform(painter, wave, waveform, color.gamma_multiply(0.5), color, progress);
                     }

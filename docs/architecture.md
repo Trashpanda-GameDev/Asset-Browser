@@ -15,7 +15,7 @@ the core can be tested, measured and reused without a window.
 | Layer | Its job | Modules |
 |---|---|---|
 | app | The window's state and what happens each frame: takes in what the services finished, applies what the views asked for | `app` |
-| ui | Draws the window from the state it's given, and returns what the user asked for | `ui`, `keymap` |
+| ui | Draws the window from the state it's given, and returns what the user asked for; the keyboard shortcuts | `ui` |
 | services | Slow work on background threads, behind a handle | `thumbs`, `audio`, `detail`, `deletion`, `updates`, `watch`, `storage`, `memory` |
 | domain | What assets are and how to read them; the library and the user's organizing | `asset`, `library`, `scan`, `groups`, `sheets`, `model`, `imaging`, `preview_key`, `animated`, `psd_composite`, `changelog` |
 | foundation | Plumbing: where files go, the databases, the log, calls into the OS | `paths`, `db`, `diag`, `platform` |
@@ -90,7 +90,7 @@ Not checked by a tool, but expected:
   `src/thumbs.rs`.
 - **A model format:** a loader in `src/model/` with `load(path, options)`, and a `parse` of the file's bytes for the
   tests, called from `model::load`.
-- **A keyboard shortcut:** an `Action` in `src/keymap.rs` with its id (it's saved, so it never changes), label, group
+- **A keyboard shortcut:** an `Action` in `src/ui/keymap.rs` with its id (it's saved, so it never changes), label, group
   and default; what it does goes in `handle_keys` (`src/app/actions.rs`).
 - **A setting:** `load_settings` and `save_settings` in `src/app/settings.rs`, under a key of its own.
 - **A settings page:** a `Page` in `src/ui/settings.rs`.

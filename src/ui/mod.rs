@@ -5,6 +5,7 @@ pub mod folders;
 pub mod format;
 pub mod image_view;
 pub mod inspector;
+pub mod keymap;
 pub mod mode;
 pub mod organize;
 pub mod previews;

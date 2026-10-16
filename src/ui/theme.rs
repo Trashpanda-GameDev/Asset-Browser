@@ -6,6 +6,8 @@ use eframe::egui::{
     Visuals, style::ScrollStyle, vec2,
 };
 
+use crate::asset::AssetKind;
+
 /// Behind the browsed assets.
 pub const BG: Color32 = Color32::from_rgb(15, 16, 19);
 /// Header, sidebars, status bar.
@@ -37,6 +39,24 @@ pub const CATEGORY_COLORS: [Color32; 8] = [
     Color32::from_rgb(167, 123, 240),
     Color32::from_rgb(236, 112, 178),
 ];
+
+/// Each kind of asset's colour: tile accents, waveforms, badges.
+pub fn kind_color(kind: AssetKind) -> Color32 {
+    match kind {
+        AssetKind::Image => Color32::from_rgb(92, 168, 255),
+        AssetKind::Audio => Color32::from_rgb(255, 176, 72),
+        AssetKind::Model => Color32::from_rgb(84, 210, 146),
+    }
+}
+
+/// Each kind of asset's icon.
+pub fn kind_icon(kind: AssetKind) -> &'static str {
+    match kind {
+        AssetKind::Image => egui_phosphor::regular::IMAGE,
+        AssetKind::Audio => egui_phosphor::regular::WAVEFORM,
+        AssetKind::Model => egui_phosphor::regular::CUBE,
+    }
+}
 
 pub const RADIUS: u8 = 6;
 pub const CARD_RADIUS: u8 = 8;

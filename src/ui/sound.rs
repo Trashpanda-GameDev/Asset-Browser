@@ -143,9 +143,9 @@ pub fn transport(ui: &mut Ui, sound: &mut Sound, library: &Library, index: u32, 
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let (glyph, tip) = if audible { (icon::PAUSE, "Pause") } else { (icon::PLAY, "Play") };
-            let hint = |action| crate::keymap::hint(ui.ctx(), action);
+            let hint = |action| crate::ui::keymap::hint(ui.ctx(), action);
             let (play_hint, stop_hint) =
-                (hint(crate::keymap::Action::PlayPause), hint(crate::keymap::Action::StopOrClear));
+                (hint(crate::ui::keymap::Action::PlayPause), hint(crate::ui::keymap::Action::StopOrClear));
             if play_button(ui, glyph).on_hover_text(format!("{tip}{play_hint}")).clicked() {
                 sound.toggle(library, index);
             }
@@ -242,7 +242,7 @@ pub fn scrubber(
         (Some(now), Some(total)) if total > 0.0 => Some((now.position / total) as f32),
         _ => None,
     };
-    let color = entry.kind.color();
+    let color = theme::kind_color(entry.kind);
     if let Some(waveform) = waveform {
         draw_waveform(&painter, rect.shrink2(vec2(8.0, 10.0)), waveform, color.gamma_multiply(0.45), color, progress);
     } else {

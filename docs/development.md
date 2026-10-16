@@ -52,7 +52,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/diag.rs` | Error log and panic hook (release builds have no console) |
 | `src/updates.rs` | Updates through Velopack: checking the releases, downloading, installing on a restart or on closing |
 | `src/ui/updates.rs` | The version and the updater's news at the end of the status bar |
-| `src/keymap.rs` | The keyboard shortcuts: defaults, changing them, matching key presses |
+| `src/ui/keymap.rs` | The keyboard shortcuts: defaults, changing them, matching key presses |
 | `src/memory.rs` | The memory setting, shared out among decoding, GPU thumbnails, read-ahead, textures and GIF frames |
 | `src/storage.rs` | Measuring the cache and user data part by part, and clearing parts of the cache |
 | `src/changelog.rs`, `CHANGELOG.md` | What's new in each version, built into the app; the release's notes too |
