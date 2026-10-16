@@ -207,6 +207,7 @@ fn counts(kind: &EventKind, path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
     use notify::event::{AccessKind, CreateKind, DataChange, RemoveKind};
 
     #[test]
@@ -240,10 +241,9 @@ mod tests {
     /// The OS's own events, for real: a picture dropped in is noticed, a text file isn't.
     #[test]
     fn notices_a_new_asset() {
-        let dir = std::env::temp_dir().join(format!("asset_browser_watch_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("sub")).unwrap();
-        let dir = std::path::absolute(&dir).unwrap();
+        let temp = TempDir::new("watch");
+        std::fs::create_dir_all(temp.path().join("sub")).unwrap();
+        let dir = std::path::absolute(temp.path()).unwrap();
         let mut watch = Watch::start(|_| {});
         watch.sync(std::slice::from_ref(&dir));
         let changed = |watch: &mut Watch| {
@@ -268,6 +268,5 @@ mod tests {
         assert!(watch.poll().is_empty(), "a file the library leaves out changes nothing");
 
         watch.sync(&[]);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

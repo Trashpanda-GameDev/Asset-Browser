@@ -461,7 +461,8 @@ fn is_cutout_mask(rgba: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::test_files::{TempDir, png_2x2};
+    use crate::model::test_files::png_2x2;
+    use crate::test_support::TempDir;
 
     #[test]
     fn probes_relative_path_then_name_in_texture_folders() {
@@ -485,7 +486,7 @@ mod tests {
     fn finds_texture_beside_and_reuses_it() {
         let dir = TempDir::new("textures");
         dir.write("Textures/atlas.png", &png_2x2());
-        let models = dir.0.join("Models");
+        let models = dir.path().join("Models");
         std::fs::create_dir_all(&models).unwrap();
         let first = from_file(&models, "D:/work/atlas.png", 256, Alpha::Guess).expect("found in ../Textures");
         assert_eq!((first.width, first.height), (2, 2));
@@ -505,7 +506,7 @@ mod tests {
         dir.write("Pack/Textures/Polygon_Fantasy_Characters_Texture_02_B.png", &png_2x2());
         dir.write("Pack/Textures/Polygon_Fantasy_Characters_Texture_02_A_Normals.png", &png_2x2());
         dir.write("Pack/Models/wood.png", &png_2x2());
-        let models = dir.0.join("Pack/Models");
+        let models = dir.path().join("Pack/Models");
         // A renamed pack: the name differs only in the middle.
         let renamed = from_file(&models, "..\\..\\Texture\\PolygonCity_Texture_02_A.png", 64, Alpha::Guess).unwrap();
         assert_eq!(renamed.name, "Polygon_Fantasy_Characters_Texture_02_A.png");
@@ -530,7 +531,7 @@ mod tests {
         dir.write("Pack/PNG/coinA.png", &png_2x2());
         dir.write("Pack/FBX/build_texture.png", &png_2x2());
         dir.write("Pack/FBX/build_texture_nrm.png", &png_2x2());
-        let fbx = dir.0.join("Pack/FBX");
+        let fbx = dir.path().join("Pack/FBX");
         for (model, texture) in [
             ("chestA.fbx", "chestA.png"),
             ("egg02.fbx", "eggB.png"),

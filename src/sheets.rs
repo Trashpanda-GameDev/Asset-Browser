@@ -559,6 +559,7 @@ impl SheetStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
 
     /// A `frames` × 1 strip of `size` × `size` frames, each a dot in the middle with clear
     /// columns between, in `rows` rows; `empty` cells (row, column) are left blank.
@@ -662,8 +663,8 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let path = std::env::temp_dir().join(format!("asset_browser_sheets_{}.sqlite", std::process::id()));
-        let store = SheetStore::open(&path);
+        let dir = TempDir::new("sheets");
+        let store = SheetStore::open(&dir.path().join("user.sqlite"));
         let saved = Saved {
             animate: true,
             grid: Some(Grid { columns: 8, rows: 2, margin: 1, spacing: 2, split: Split::Columns }),
@@ -675,21 +676,12 @@ mod tests {
         store.set("f:/a/idle.png", &default_speed);
         assert_eq!(store.get("f:/a/idle.png"), Some(default_speed));
         assert_eq!(store.get("f:/a/other.png"), None);
-        drop(store);
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
-        }
     }
 
     #[test]
     fn the_old_default_speed_becomes_the_default() {
-        let path = std::env::temp_dir().join(format!("asset_browser_sheets_old_{}.sqlite", std::process::id()));
-        let clean = || {
-            for suffix in ["", "-wal", "-shm"] {
-                let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
-            }
-        };
-        clean();
+        let dir = TempDir::new("sheets_old");
+        let path = dir.path().join("user.sqlite");
         {
             // A file from before: the default speed (12) saved as a number.
             let conn = Connection::open(&path).unwrap();
@@ -707,6 +699,5 @@ mod tests {
         store.set("a", &Saved { animate: true, grid: None, fps: Some(12.0) });
         drop(store);
         assert_eq!(SheetStore::open(&path).get("a").unwrap().fps, Some(12.0));
-        clean();
     }
 }

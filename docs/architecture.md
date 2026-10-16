@@ -77,6 +77,8 @@ Not checked by a tool, but expected:
 ## Tests
 
 - Tests sit next to the code, in a `mod tests` at the end of the file.
+- Files a test makes go in a `test_support::TempDir`: a new folder of its own, removed when the test ends, even when
+  it fails.
 - They never touch the user's own folders, settings or data, the network or the clipboard. A test that has to is
   `#[ignore]`d and says how to run it.
 - Code without tests gets them before it's changed.

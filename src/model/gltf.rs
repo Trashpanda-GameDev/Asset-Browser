@@ -489,7 +489,8 @@ fn base64(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::test_files::{TempDir, png_2x2};
+    use crate::model::test_files::png_2x2;
+    use crate::test_support::TempDir;
 
     /// A unit quad in the XY plane facing +Z, as two triangles: positions, then normals, then UVs,
     /// then u16 indices.

@@ -25,3 +25,6 @@ pub mod thumbs;
 pub mod ui;
 pub mod updates;
 pub mod watch;
+
+#[cfg(test)]
+mod test_support;

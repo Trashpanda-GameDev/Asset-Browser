@@ -47,13 +47,13 @@ fn sort_out(paths: Vec<PathBuf>, result: Result<(), String>) -> Deleted {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
 
     #[test]
     fn what_is_still_there_was_kept() {
-        let dir = std::env::temp_dir().join(format!("asset_browser_deletion_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let (here, gone) = (dir.join("here.png"), dir.join("gone.png"));
-        std::fs::write(&here, b"x").unwrap();
+        let dir = TempDir::new("deletion");
+        let here = dir.write("here.png", b"x");
+        let gone = dir.path().join("gone.png");
 
         let deleted = sort_out(vec![here.clone(), gone.clone()], Err("Access is denied".to_owned()));
         assert_eq!(deleted.gone, std::slice::from_ref(&gone));
@@ -66,6 +66,5 @@ mod tests {
         assert!(deleted.error.is_none(), "an error after everything went is no failure");
         let deleted = sort_out(vec![here.clone()], Ok(()));
         assert!(deleted.error.is_some(), "a success that left the file behind is still a failure");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

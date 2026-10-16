@@ -485,28 +485,13 @@ mod tests {
     use super::*;
     use crate::asset::AssetKind;
     use crate::scan::ScannedFile;
+    use crate::test_support::TempDir;
 
-    struct TempDb(PathBuf);
-
-    impl TempDb {
-        fn new(name: &str) -> Self {
-            let path = std::env::temp_dir().join(format!("asset_browser_groups_{name}_{}.sqlite", std::process::id()));
-            let db = Self(path);
-            db.clean();
-            db
-        }
-
-        fn clean(&self) {
-            for suffix in ["", "-wal", "-shm"] {
-                let _ = std::fs::remove_file(format!("{}{suffix}", self.0.display()));
-            }
-        }
-    }
-
-    impl Drop for TempDb {
-        fn drop(&mut self) {
-            self.clean();
-        }
+    /// The user data file, in a folder of its own.
+    fn user_data(name: &str) -> (TempDir, PathBuf) {
+        let dir = TempDir::new(name);
+        let path = dir.path().join("user.sqlite");
+        (dir, path)
     }
 
     #[test]
@@ -518,9 +503,9 @@ mod tests {
 
     #[test]
     fn groups_persist_and_favorites_stay() {
-        let db = TempDb::new("persist");
+        let (_dir, db) = user_data("groups_persist");
         let (collection, category) = {
-            let mut groups = Groups::open(&db.0);
+            let mut groups = Groups::open(&db);
             assert_eq!(groups.all().len(), 1, "a new file has just Favorites");
             let collection = groups.create(GroupKind::Collection, "Forest props").unwrap();
             let category = groups.create(GroupKind::Category, "Footsteps").unwrap();
@@ -535,7 +520,7 @@ mod tests {
             groups.set_color(category, 5);
             (collection, category)
         };
-        let groups = Groups::open(&db.0);
+        let groups = Groups::open(&db);
         let kinds: Vec<GroupKind> = groups.all().iter().map(|group| group.kind).collect();
         assert_eq!(kinds, [GroupKind::Favorites, GroupKind::Collection, GroupKind::Category]);
         assert_eq!(groups.get(collection).unwrap().name, "Forest level");
@@ -549,15 +534,15 @@ mod tests {
 
     #[test]
     fn deleting_a_group_leaves_the_others() {
-        let db = TempDb::new("delete");
-        let mut groups = Groups::open(&db.0);
+        let (_dir, db) = user_data("groups_delete");
+        let mut groups = Groups::open(&db);
         let a = groups.create(GroupKind::Collection, "A").unwrap();
         let b = groups.create(GroupKind::Collection, "B").unwrap();
         groups.add(a, &[PathBuf::from("/x/1.png")]);
         groups.add(b, &[PathBuf::from("/x/1.png")]);
         assert!(groups.delete(a));
         drop(groups);
-        let groups = Groups::open(&db.0);
+        let groups = Groups::open(&db);
         assert!(groups.get(a).is_none());
         assert!(groups.contains(b, "/x/1.png"));
         assert_eq!(groups.unused_name(GroupKind::Collection), "New collection");
@@ -565,7 +550,7 @@ mod tests {
 
     #[test]
     fn membership_finds_members_in_the_library() {
-        let db = TempDb::new("membership");
+        let (_dir, db) = user_data("groups_membership");
         let file = |rel: &str, kind| ScannedFile { rel: rel.to_owned(), kind, size: 1, mtime: 1 };
         let root = std::env::temp_dir().join("asset_browser_membership_root");
         let library = Library::build(vec![(
@@ -576,7 +561,7 @@ mod tests {
                 file("rock.fbx", AssetKind::Model),
             ],
         )]);
-        let mut groups = Groups::open(&db.0);
+        let mut groups = Groups::open(&db);
         let footsteps = groups.create(GroupKind::Category, "Footsteps").unwrap();
         let path = |entry: usize| library.path_of(&library.entries[entry]);
         let step = library.find(0, "sfx/step.wav").unwrap();

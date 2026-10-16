@@ -679,6 +679,7 @@ pub fn cache_key(root: &str, rel: &str, size: u64, mtime: i64, kind: AssetKind) 
 mod tests {
     use super::*;
     use crate::model::ModelInfo;
+    use crate::test_support::TempDir;
 
     #[test]
     fn big_decodes_take_turns() {
@@ -740,11 +741,8 @@ mod tests {
 
     #[test]
     fn model_preview_round_trips_through_the_cache() {
-        let path = std::env::temp_dir().join(format!("asset_browser_model_cache_{}.sqlite", std::process::id()));
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
-        }
-        let mut conn = db::open(&path).unwrap();
+        let dir = TempDir::new("model_cache");
+        let mut conn = db::open(&dir.path().join("library.sqlite")).unwrap();
         let info = ModelInfo {
             format: "FBX 7.4 binary".into(),
             vertices: 1234,
@@ -779,9 +777,5 @@ mod tests {
         assert_eq!(message, "there are no meshes in this file");
         let unknown = ThumbJob { key: 9, path: PathBuf::from("c.fbx"), kind: AssetKind::Model };
         assert!(cached_preview(&conn, &unknown).is_none());
-        drop(conn);
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
-        }
     }
 }

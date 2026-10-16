@@ -353,7 +353,8 @@ impl Source<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::test_files::{TempDir, png_2x2};
+    use crate::model::test_files::png_2x2;
+    use crate::test_support::TempDir;
 
     #[test]
     fn obj_with_mtl_colour_and_texture() {
@@ -368,7 +369,7 @@ mod tests {
         );
         dir.write("quad.mtl", b"newmtl Red\nKd 1 0.5 0\nnewmtl Wood\nKd 1 1 1\nmap_Kd C:\\art\\wood.png\n");
         dir.write("Textures/wood.png", &png_2x2());
-        let model = load(&dir.0.join("quad.obj"), &LoadOptions { max_texture: 64 }).unwrap();
+        let model = load(&dir.path().join("quad.obj"), &LoadOptions { max_texture: 64 }).unwrap();
         assert_eq!(model.info.format, "OBJ");
         assert_eq!(model.info.triangles, 4, "quads are split in two");
         assert_eq!(model.info.vertices, 6);
@@ -401,7 +402,7 @@ mod tests {
         let dir = TempDir::new("obj_missing");
         dir.write("tri.obj", b"mtllib tri.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl A\nf 1 2 3\nusemtl B\nf 1 3 2\n");
         dir.write("tri.mtl", b"newmtl A\nKd 1 1 1\nmap_Kd gone.png\nnewmtl B\nKd 0 0 1\nmap_Kd gone.png\n");
-        let model = load(&dir.0.join("tri.obj"), &LoadOptions { max_texture: 64 }).unwrap();
+        let model = load(&dir.path().join("tri.obj"), &LoadOptions { max_texture: 64 }).unwrap();
         assert_eq!(model.info.missing_textures, 1);
         assert_eq!(model.info.textures, 0);
         let a = model.materials.iter().find(|m| m.name == "A").unwrap();

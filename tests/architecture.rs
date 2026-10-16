@@ -157,15 +157,17 @@ fn src() -> PathBuf {
 
 /// The top-level modules src/lib.rs declares.
 fn declared_modules() -> BTreeSet<String> {
-    let lib = fs::read_to_string(src().join("lib.rs")).expect("read src/lib.rs");
+    let lib = without_tests(&fs::read_to_string(src().join("lib.rs")).expect("read src/lib.rs"));
     lib.lines()
         .filter_map(|line| line.trim().strip_prefix("pub mod ").or_else(|| line.trim().strip_prefix("mod ")))
         .map(|rest| rest.trim_end_matches(';').to_owned())
         .collect()
 }
 
-/// Every file of the library (not the programs), with comments and tests taken out.
+/// Every file of the library's modules (not the programs, and not the modules only tests have), with comments and
+/// tests taken out.
 fn sources() -> Vec<Source> {
+    let declared = declared_modules();
     let mut files = Vec::new();
     collect_rs_files(&src(), &mut files);
     files
@@ -173,7 +175,7 @@ fn sources() -> Vec<Source> {
         .filter_map(|file| {
             let path = file.strip_prefix(src()).ok()?.to_string_lossy().replace('\\', "/");
             let module = path.split('/').next()?.trim_end_matches(".rs").to_owned();
-            if ["lib", "main", "bin"].contains(&module.as_str()) {
+            if !declared.contains(&module) {
                 return None;
             }
             let code = without_tests(&fs::read_to_string(&file).ok()?);

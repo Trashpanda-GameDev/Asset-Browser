@@ -468,7 +468,8 @@ impl<'a, 'input> Reader<'a, 'input> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::test_files::{TempDir, png_2x2};
+    use crate::model::test_files::png_2x2;
+    use crate::test_support::TempDir;
 
     /// A unit quad (Z up, centimetres) as a polylist with one textured material, placed by a
     /// translated node.

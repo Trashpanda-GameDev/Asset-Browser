@@ -363,15 +363,14 @@ pub fn set_settings(conn: &Connection, settings: &[(&str, &str)]) -> rusqlite::R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
 
     /// The app's first launch: the UI opens a brand-new database, then the scan thread, the
     /// thumbnail writer and every worker open it at the same moment.
     #[test]
     fn first_launch_opens_from_many_threads() {
-        let path = std::env::temp_dir().join(format!("asset_browser_test_{}.sqlite", std::process::id()));
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
-        }
+        let dir = TempDir::new("first_launch");
+        let path = dir.path().join("library.sqlite");
         let ui = open(&path).expect("UI connection");
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(21));
         let threads: Vec<_> = (0..21)
@@ -393,21 +392,12 @@ mod tests {
         assert_eq!(get_setting(&ui, "last_root").as_deref(), Some("X"));
         remove_setting(&ui, "last_root").expect("remove setting");
         assert_eq!(get_setting(&ui, "last_root"), None);
-        drop(ui);
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
-        }
     }
 
     #[test]
     fn library_folders_keep_their_order() {
-        let path = std::env::temp_dir().join(format!("asset_browser_roots_{}.sqlite", std::process::id()));
-        let clean = || {
-            for suffix in ["", "-wal", "-shm"] {
-                let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
-            }
-        };
-        clean();
+        let dir = TempDir::new("roots");
+        let path = dir.path().join("user.sqlite");
         let conn = open_user(&path).expect("user data");
         assert!(load_roots(&conn).unwrap().is_empty());
         let roots = [PathBuf::from("F:\\Resources"), PathBuf::from("D:\\Audio"), PathBuf::from("C:\\Art")];
@@ -416,7 +406,5 @@ mod tests {
         drop(conn);
         let conn = open_user(&path).expect("user data again");
         assert_eq!(load_roots(&conn).unwrap(), roots[1..], "saving replaces the list");
-        drop(conn);
-        clean();
     }
 }

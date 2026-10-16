@@ -443,35 +443,7 @@ impl Builder {
 
 #[cfg(test)]
 mod test_files {
-    //! Scratch folders for loader tests that need real files (external buffers, textures).
-
-    use std::path::PathBuf;
-
-    pub struct TempDir(pub PathBuf);
-
-    impl TempDir {
-        pub fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("asset_browser_{name}_{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).expect("create test folder");
-            Self(dir)
-        }
-
-        pub fn write(&self, name: &str, bytes: &[u8]) -> PathBuf {
-            let path = self.0.join(name);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).expect("create test subfolder");
-            }
-            std::fs::write(&path, bytes).expect("write test file");
-            path
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    //! Files for the loader tests: damaged copies to survive, and a small texture.
 
     /// Damaged copies of a good file, for parsers to survive: cut short at many points, and with
     /// bytes overwritten at random (a fixed seed, so a failure repeats).

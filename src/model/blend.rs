@@ -238,7 +238,7 @@ impl<R: Read> Read for ZstdFrames<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::test_files::TempDir;
+    use crate::test_support::TempDir;
     use std::io::Write;
 
     /// A legacy .blend: header, a REND block, the TEST preview (2 × 2, bottom row first), GLOB.

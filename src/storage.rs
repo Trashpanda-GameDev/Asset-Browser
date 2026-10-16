@@ -206,12 +206,12 @@ pub fn clear_cache(conn: &mut Connection, parts: &[Part]) -> rusqlite::Result<()
 mod tests {
     use super::*;
     use crate::db::{self, CacheWrite, StoredThumb};
+    use crate::test_support::TempDir;
 
     #[test]
     fn measures_and_clears_parts_of_the_cache() {
-        let dir = std::env::temp_dir().join(format!("asset_browser_storage_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let temp = TempDir::new("storage");
+        let dir = temp.path();
         let path = dir.join("library.sqlite");
         let mut conn = db::open(&path).unwrap();
         let thumb = || StoredThumb {
@@ -244,7 +244,5 @@ mod tests {
             usage.cache_file,
             after.cache_file
         );
-        drop(conn);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
