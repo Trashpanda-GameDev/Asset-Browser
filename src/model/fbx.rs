@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::geometry::normalize;
 use super::textures::{self, Alpha};
+use super::vector::normalize;
 use super::{Builder, LoadOptions, Model, Slot, Vertex, srgb_to_linear};
 
 /// ufbx's working memory per file. Only there to stop a corrupt file from exhausting memory: the

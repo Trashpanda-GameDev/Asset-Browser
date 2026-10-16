@@ -20,6 +20,7 @@ pub mod shading;
 mod stl;
 mod textures;
 mod three_ds;
+pub mod vector;
 
 pub use textures::{TextureStats, set_cache_budget as set_texture_cache_budget, texture_stats};
 

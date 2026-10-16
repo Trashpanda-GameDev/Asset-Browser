@@ -10,6 +10,7 @@ use std::io;
 use std::path::Path;
 
 use asset_browser::groups::{FAVORITES, GroupKind, Groups};
+use asset_browser::model::vector::{cross, dot, normalize, sub};
 use asset_browser::paths;
 
 /// Left in a folder holding the library, so it can be written there again.
@@ -1240,23 +1241,6 @@ fn wav(path: &Path, samples: Vec<f32>) -> io::Result<()> {
 // Models -----------------------------------------------------------------------------------------
 
 type Vec3 = [f32; 3];
-
-fn sub(a: Vec3, b: Vec3) -> Vec3 {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn cross(a: Vec3, b: Vec3) -> Vec3 {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
-
-fn dot(a: Vec3, b: Vec3) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn normalize(v: Vec3) -> Vec3 {
-    let len = dot(v, v).sqrt().max(1e-9);
-    [v[0] / len, v[1] / len, v[2] / len]
-}
 
 /// Triangles, each with its own corners (so each face is shaded flat), and their materials.
 #[derive(Default)]

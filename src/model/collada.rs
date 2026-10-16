@@ -13,8 +13,9 @@ use std::sync::Arc;
 
 use roxmltree::Node;
 
-use super::geometry::{self, DEFAULT_CREASE, IDENTITY, Mat4, NormalMatrix, normalize};
+use super::geometry::{self, DEFAULT_CREASE, IDENTITY, Mat4, NormalMatrix};
 use super::textures::{self, Alpha};
+use super::vector::normalize;
 use super::{Builder, LoadOptions, Model, Slot, Vertex, srgb_to_linear};
 
 pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {

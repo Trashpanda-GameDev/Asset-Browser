@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use super::geometry::{self, DEFAULT_CREASE};
 use super::textures::{self, Alpha};
+use super::vector;
 use super::{Builder, LoadOptions, Model, Vertex, z_up_to_y_up};
 
 pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
@@ -235,7 +236,7 @@ fn parse(bytes: &[u8], dir: &Path, options: &LoadOptions) -> Result<Model, Strin
                     let uv = uv.map(get);
                     vertices.push(Vertex {
                         position: z_up_to_y_up(position.map(get)),
-                        normal: if has_normals { geometry::normalize(z_up_to_y_up(normal.map(get))) } else { [0.0; 3] },
+                        normal: if has_normals { vector::normalize(z_up_to_y_up(normal.map(get))) } else { [0.0; 3] },
                         uv: [uv[0], 1.0 - uv[1]],
                         color,
                     });

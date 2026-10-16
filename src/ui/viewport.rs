@@ -13,6 +13,7 @@ use eframe::egui_wgpu::{self, RenderState};
 use eframe::wgpu::{self, util::DeviceExt};
 use egui_phosphor::regular as icon;
 
+use crate::model::vector::{cross, dot, normalize};
 use crate::model::{Model, Vertex, shading};
 
 use super::{theme, widgets};
@@ -717,6 +718,8 @@ fn camera_axes(orbit: &Orbit) -> ([f32; 3], [f32; 3], [f32; 3]) {
     let (sin_pitch, cos_pitch) = orbit.pitch.sin_cos();
     let back = [cos_pitch * sin_yaw, sin_pitch, cos_pitch * cos_yaw];
     let right = normalize(cross([0.0, 1.0, 0.0], back));
+    // Looking straight up or down, the up axis gives no right; any level direction will do.
+    let right = if right == [0.0; 3] { [1.0, 0.0, 0.0] } else { right };
     let up = cross(back, right);
     (right, up, back)
 }
@@ -761,19 +764,6 @@ fn multiply(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
         }
     }
     out
-}
-
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
-
-fn normalize(v: [f32; 3]) -> [f32; 3] {
-    let length = dot(v, v).sqrt();
-    if length > 1e-12 { v.map(|c| c / length) } else { [1.0, 0.0, 0.0] }
 }
 
 /// The WGSL, with the shared lighting constants filled in.

@@ -10,8 +10,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use super::geometry::{self, Smoothing, cross, dot};
+use super::geometry::{self, Smoothing};
 use super::textures::{self, Alpha};
+use super::vector::{cross, dot};
 use super::{Builder, LoadOptions, Model, Slot, Vertex, srgb_to_linear, z_up_to_y_up};
 
 const MAIN: u16 = 0x4D4D;

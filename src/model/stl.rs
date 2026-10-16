@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use super::geometry::{cross, normalize, sub};
+use super::vector::{cross, normalize, sub};
 use super::{Builder, Model, Vertex, z_up_to_y_up};
 
 pub(super) fn load(path: &Path) -> Result<Model, String> {

@@ -15,7 +15,7 @@
 
 use std::sync::OnceLock;
 
-use super::geometry::{cross, dot, normalize, sub};
+use super::vector::{cross, dot, normalize, sub};
 use super::{Material, Model, Part, Texture, shading};
 
 /// Samples per pixel along each axis.

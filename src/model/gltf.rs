@@ -14,8 +14,9 @@ use ::gltf::accessor::{DataType, Dimensions};
 use ::gltf::mesh::Mode;
 use ::gltf::{Accessor, Document, Semantic};
 
-use super::geometry::{self, IDENTITY, Mat4, NormalMatrix, normalize};
+use super::geometry::{self, IDENTITY, Mat4, NormalMatrix};
 use super::textures::{self, Alpha};
+use super::vector::normalize;
 use super::{Builder, LoadOptions, Model, Slot, Vertex, percent_decode};
 
 pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
@@ -490,6 +491,7 @@ fn base64(text: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::model::test_files::png_2x2;
+    use crate::model::vector;
     use crate::test_support::TempDir;
 
     /// A unit quad in the XY plane facing +Z, as two triangles: positions, then normals, then UVs,
@@ -656,8 +658,8 @@ mod tests {
         let model = load_bytes(&glb(&json, &quad_buffer()), Path::new("."), &options()).unwrap();
         for triangle in model.indices.as_chunks::<3>().0 {
             let [a, b, c] = triangle.map(|i| model.vertices[i as usize]);
-            let winding = geometry::cross(geometry::sub(b.position, a.position), geometry::sub(c.position, a.position));
-            assert!(geometry::dot(winding, a.normal) > 0.0, "winding and normal agree");
+            let winding = vector::cross(vector::sub(b.position, a.position), vector::sub(c.position, a.position));
+            assert!(vector::dot(winding, a.normal) > 0.0, "winding and normal agree");
         }
         assert_eq!(model.bounds.min[0], -1.0);
     }
