@@ -223,11 +223,11 @@ impl BrowserApp {
         match (&self.library, &library) {
             (Some(old), Some(new)) => {
                 let new_index = new.index_by_key();
-                let old_keys: Vec<i64> = old.entries.iter().map(|entry| entry.key).collect();
+                let old_keys: Vec<i64> = old.entries().iter().map(|entry| entry.key).collect();
                 for view in &mut self.modes {
                     view.selection.remap(&old_keys, &new_index);
                 }
-                let dir = old.dirs.get(self.selected_dir as usize).and_then(|dir| new.find_dir(&dir.key));
+                let dir = old.dirs().get(self.selected_dir as usize).and_then(|dir| new.find_dir(&dir.key));
                 // The top only shows with several folders.
                 self.selected_dir = dir.unwrap_or(new.home()).max(new.home());
                 self.sound.remap(&new_index);

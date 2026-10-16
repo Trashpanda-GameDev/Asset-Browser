@@ -54,7 +54,7 @@ impl Sound {
 
     pub fn play(&mut self, library: &Library, index: u32) {
         let Some(player) = &self.player else { return };
-        let entry = &library.entries[index as usize];
+        let entry = library.entry(index);
         let source = match self.read_ahead.get(entry.key) {
             Some(bytes) => Source::Memory(bytes),
             None => Source::File(library.path_of(entry)),
@@ -65,7 +65,7 @@ impl Sound {
 
     /// Plays `index` from `seconds` in, or jumps there if it's already playing.
     fn play_from(&mut self, library: &Library, index: u32, seconds: f64) {
-        let key = library.entries[index as usize].key;
+        let key = library.entry(index).key;
         if self.now_for(key).is_none() {
             self.play(library, index);
         }
@@ -76,7 +76,7 @@ impl Sound {
 
     /// Pauses or resumes `index`, or starts it if it isn't the one playing.
     pub fn toggle(&mut self, library: &Library, index: u32) {
-        let key = library.entries[index as usize].key;
+        let key = library.entry(index).key;
         match (&self.player, self.now_for(key)) {
             (Some(player), Some(now)) => player.set_paused(!now.paused),
             _ => self.play(library, index),
@@ -105,13 +105,13 @@ impl Sound {
     /// starts without a disk wait.
     pub fn read_ahead_around(&self, library: &Library, view: &[u32], index: u32) {
         let Some(position) = view.iter().position(|&i| i == index) else { return };
-        let is_sound = |&&i: &&u32| library.entries[i as usize].kind == AssetKind::Audio;
+        let is_sound = |&&i: &&u32| library.entry(i).kind == AssetKind::Audio;
         let after = view[position + 1..].iter().filter(is_sound).take(READ_AHEAD_SOUNDS);
         let before = view[..position].iter().rev().filter(is_sound).take(1);
         let files = after
             .chain(before)
             .map(|&i| {
-                let entry = &library.entries[i as usize];
+                let entry = library.entry(i);
                 (entry.key, library.path_of(entry), entry.size)
             })
             .collect();
@@ -132,7 +132,7 @@ impl Sound {
 
 /// Play/pause, stop, loop, the time and the volume for the sound `index`.
 pub fn transport(ui: &mut Ui, sound: &mut Sound, library: &Library, index: u32, duration: Option<f64>) {
-    let entry = &library.entries[index as usize];
+    let entry = library.entry(index);
     if sound.player.is_none() {
         ui.colored_label(theme::ERROR, "No sound output. See the error in the status bar.");
         return;
@@ -232,7 +232,7 @@ pub fn scrubber(
     waveform: Option<&Waveform>,
     failed: bool,
 ) {
-    let entry = &library.entries[index as usize];
+    let entry = library.entry(index);
     let now = sound.now_for(entry.key);
     let duration = now.as_ref().and_then(|now| now.duration).or(waveform.map(|w| w.duration as f64));
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
@@ -320,7 +320,7 @@ pub fn draw_waveform(
 pub fn now_playing_chip(ui: &mut Ui, sound: &mut Sound, library: &Library) -> Option<u32> {
     let (index, key) = sound.playing?;
     let now = sound.now_for(key)?;
-    let entry = library.entries.get(index as usize).filter(|entry| entry.key == key)?;
+    let entry = library.entries().get(index as usize).filter(|entry| entry.key == key)?;
     let glyph = if now.paused { icon::PLAY } else { icon::PAUSE };
     if widgets::icon_button_sized(ui, glyph, "Play or pause", false, 22.0).clicked() {
         sound.toggle(library, index);

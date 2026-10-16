@@ -38,7 +38,7 @@ impl BrowserApp {
                     widgets::divider(ui);
                 }
                 if let Some(library) = &self.library {
-                    ui.label(small(format!("{} assets", grouped(library.entries.len()))));
+                    ui.label(small(format!("{} assets", grouped(library.entries().len()))));
                     widgets::divider(ui);
                 }
                 if self.deleting.is_some() {
@@ -122,7 +122,7 @@ impl BrowserApp {
                 };
                 let totals = match self.group {
                     Some(id) => self.membership.totals(id),
-                    None => library.dirs.get(self.selected_dir as usize).map_or([0; 3], |dir| dir.totals),
+                    None => library.dirs().get(self.selected_dir as usize).map_or([0; 3], |dir| dir.totals),
                 };
                 let args = InspectorArgs {
                     library,
@@ -156,15 +156,14 @@ impl BrowserApp {
     /// The sound controls at the bottom, for when the preview pane is hidden.
     pub(super) fn player_bar(&mut self, ui: &mut egui::Ui) {
         let Some(library) = &self.library else { return };
-        let focus =
-            self.mode_view().selection.focus.filter(|&index| library.entries[index as usize].kind == AssetKind::Audio);
+        let focus = self.mode_view().selection.focus.filter(|&index| library.entry(index).kind == AssetKind::Audio);
         let Some(index) = focus.or(self.sound.playing.map(|(index, _)| index)) else { return };
-        if index as usize >= library.entries.len() {
+        if index as usize >= library.entries().len() {
             return;
         }
         let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin::symmetric(12, 8));
         egui::Panel::bottom("player").frame(frame).show(ui, |ui| {
-            let entry = &library.entries[index as usize];
+            let entry = library.entry(index);
             let waveform = self.previews.waveforms.get(&entry.key).map(|waveform| waveform.as_ref());
             ui.label(RichText::new(entry.name()).font(egui::FontId::new(13.0, theme::semibold())));
             sound::scrubber(
@@ -211,7 +210,7 @@ impl BrowserApp {
                 // A folder that's empty only because its first scan hasn't finished.
                 let scanning = self.scans > 0
                     && self.group.is_none()
-                    && library.dirs.get(self.selected_dir as usize).is_some_and(|dir| dir.totals == [0; 3]);
+                    && library.dirs().get(self.selected_dir as usize).is_some_and(|dir| dir.totals == [0; 3]);
                 ui.centered_and_justified(|ui| {
                     let what = self.mode.kind().map_or("assets", |kind| match kind {
                         AssetKind::Image => "images",

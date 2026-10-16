@@ -26,7 +26,7 @@ pub struct Membership {
 impl Membership {
     pub fn build(library: &Library, groups: &Groups) -> Self {
         let mut membership = Membership::default();
-        let mut categorized = vec![false; library.entries.len()];
+        let mut categorized = vec![false; library.entries().len()];
         for group in groups.all() {
             let mut entries = Vec::new();
             let mut totals = [0u32; 3];
@@ -34,7 +34,7 @@ impl Membership {
                 match library.locate(&member.key) {
                     Located::Found(index) => {
                         entries.push(index);
-                        totals[library.entries[index as usize].kind.index()] += 1;
+                        totals[library.entry(index).kind.index()] += 1;
                         membership.of_entry.entry(index).or_default().push(group.id);
                         if group.kind == GroupKind::Category {
                             categorized[index as usize] = true;
@@ -49,9 +49,9 @@ impl Membership {
         }
         // Uncategorized: what no category holds, in library order.
         let mut totals = [0u32; 3];
-        let uncategorized: Vec<u32> = (0..library.entries.len() as u32)
+        let uncategorized: Vec<u32> = (0..library.entries().len() as u32)
             .filter(|&index| !categorized[index as usize])
-            .inspect(|&index| totals[library.entries[index as usize].kind.index()] += 1)
+            .inspect(|&index| totals[library.entry(index).kind.index()] += 1)
             .collect();
         membership.entries.insert(UNCATEGORIZED, uncategorized);
         membership.totals.insert(UNCATEGORIZED, totals);

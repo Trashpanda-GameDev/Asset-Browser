@@ -52,7 +52,7 @@ impl BrowserApp {
             self.view.clear();
             return;
         };
-        if self.selected_dir as usize >= library.dirs.len() {
+        if self.selected_dir as usize >= library.dirs().len() {
             self.selected_dir = library.home();
         }
         let in_group_order = self.in_group_order();
@@ -139,14 +139,14 @@ impl BrowserApp {
     pub(super) fn source_totals(&self) -> [u32; 3] {
         match (self.group, &self.library) {
             (Some(id), _) => self.membership.totals(id),
-            (None, Some(library)) => library.dirs.get(self.selected_dir as usize).map_or([0; 3], |dir| dir.totals),
+            (None, Some(library)) => library.dirs().get(self.selected_dir as usize).map_or([0; 3], |dir| dir.totals),
             (None, None) => [0; 3],
         }
     }
 
     pub(super) fn paths_of(&self, indices: &[u32]) -> Vec<PathBuf> {
         let Some(library) = &self.library else { return Vec::new() };
-        indices.iter().map(|&index| library.path_of(&library.entries[index as usize])).collect()
+        indices.iter().map(|&index| library.path_of(library.entry(index))).collect()
     }
 
     pub(super) fn resolve(&self, targets: Targets) -> Vec<PathBuf> {
@@ -160,7 +160,7 @@ impl BrowserApp {
     /// sounds after it are read into memory so moving on to them starts without a disk wait.
     pub(super) fn focused(&mut self, index: u32) {
         let Some(library) = &self.library else { return };
-        if library.entries[index as usize].kind == AssetKind::Audio && self.sound.autoplay {
+        if library.entry(index).kind == AssetKind::Audio && self.sound.autoplay {
             self.sound.play(library, index);
         }
         self.sound.read_ahead_around(library, &self.view, index);
@@ -227,7 +227,7 @@ impl BrowserApp {
     /// Shows and selects `index`, switching mode, folder and search as needed.
     pub(super) fn reveal(&mut self, index: u32) {
         let Some(library) = &self.library else { return };
-        let entry = &library.entries[index as usize];
+        let entry = library.entry(index);
         let (kind, dir) = (entry.kind, entry.dir);
         let in_folder = library.dir_chain(dir).contains(&self.selected_dir);
         let query = self.query.to_lowercase();

@@ -70,7 +70,7 @@ impl BrowserApp {
         });
         let folder = (self.library.as_ref().zip(view.folder)).and_then(|(library, folder)| {
             let lower = folder.to_lowercase();
-            library.dirs.iter().position(|dir| dir.root == Some(0) && dir.lower == lower)
+            library.dirs().iter().position(|dir| dir.root == Some(0) && dir.lower == lower)
         });
         match (group, folder) {
             (Some(id), _) => self.show_group(Some(id)),
@@ -85,7 +85,7 @@ impl BrowserApp {
             self.mode_view_mut().set_order(in_group, sort, false);
         }
         let found = (self.library.as_ref().zip(view.file))
-            .and_then(|(library, file)| library.entries.iter().position(|entry| entry.rel.ends_with(file)));
+            .and_then(|(library, file)| library.entries().iter().position(|entry| entry.rel.ends_with(file)));
         let selection = &mut self.mode_view_mut().selection;
         match found {
             Some(index) => selection.only(index as u32),

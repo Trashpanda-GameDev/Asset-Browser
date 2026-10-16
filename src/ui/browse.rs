@@ -61,8 +61,7 @@ impl Browse<'_> {
     /// Lets the asset be dragged onto a collection or category (with the rest of the selection).
     fn drag_source(&self, index: u32, response: &egui::Response) {
         if response.drag_started() {
-            let paths =
-                self.targets(index).iter().map(|&i| self.library.path_of(&self.library.entries[i as usize])).collect();
+            let paths = self.targets(index).iter().map(|&i| self.library.path_of(self.library.entry(i))).collect();
             response.dnd_set_drag_payload(DraggedAssets(paths));
         }
     }
@@ -151,7 +150,7 @@ pub fn grid(
             let (row_rect, _) = ui.allocate_exact_size(vec2(width, cell.y), Sense::hover());
             for column in 0..columns {
                 let Some(&index) = browse.view.get(row * columns + column) else { break };
-                let entry = &browse.library.entries[index as usize];
+                let entry = browse.library.entry(index);
                 let x = row_rect.left() + GAP + column as f32 * cell.x + (cell.x - GAP - tile) / 2.0;
                 let rect = Rect::from_min_size(pos2(x, row_rect.top() + GAP), vec2(tile, tile + LABEL_HEIGHT));
                 let tile_ui = Tile { browse, entry, index, previews, look };
@@ -210,7 +209,7 @@ pub fn list(ui: &mut Ui, browse: &Browse<'_>, previews: &mut Previews, scroll: &
         visible = row_range.clone();
         for position in row_range {
             let index = browse.view[position];
-            let entry = &browse.library.entries[index as usize];
+            let entry = browse.library.entry(index);
             let (rect, response) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::click_and_drag());
             let row = ListRow { browse, entry, index, previews, look };
             if let Some(command) = row.show(ui, rect, &response, &layout) {
@@ -334,7 +333,7 @@ fn star_button(ui: &Ui, browse: &Browse<'_>, index: u32, center: Pos2, show_outl
     let tip = if favorite { "Remove from Favorites" } else { "Add to Favorites" };
     let hint = crate::ui::keymap::hint(&response.ctx, crate::ui::keymap::Action::Favorite);
     let clicked = response.on_hover_text(format!("{tip}{hint}")).clicked();
-    let path = browse.library.path_of(&browse.library.entries[index as usize]);
+    let path = browse.library.path_of(browse.library.entry(index));
     clicked.then(|| GroupCommand::ToggleFavorite(Targets::Paths(vec![path])))
 }
 

@@ -143,7 +143,7 @@ impl Inspector {
         let mut output = InspectorOutput::default();
         let InspectorArgs { library, selection, previews, sound, render_state, totals, kinds, groups, membership } =
             args;
-        let Some(focus) = selection.focus.filter(|&focus| (focus as usize) < library.entries.len()) else {
+        let Some(focus) = selection.focus.filter(|&focus| (focus as usize) < library.entries().len()) else {
             self.viewport.release();
             empty_state(ui, totals, kinds);
             return output;
@@ -156,7 +156,7 @@ impl Inspector {
         } else {
             vec![focus]
         };
-        let entry = &library.entries[focus as usize];
+        let entry = library.entry(focus);
         previews.want(focus);
         self.want_detail(library, entry, previews);
         if entry.kind != AssetKind::Model {
@@ -229,7 +229,7 @@ impl Inspector {
             widgets::property(ui, "File size", format_size(entry.size));
             widgets::property(ui, "Modified", format_age(entry.mtime));
             // From the library folder it's in.
-            let root = &library.roots[entry.root as usize].name;
+            let root = &library.root(entry.root).name;
             let folder = if entry.folder().is_empty() {
                 root.clone()
             } else {
@@ -455,7 +455,7 @@ fn metres(value: f32) -> String {
 }
 
 fn sound_section(ui: &mut Ui, library: &Library, focus: u32, previews: &Previews, sound: &mut Sound) {
-    let entry = &library.entries[focus as usize];
+    let entry = library.entry(focus);
     let waveform = previews.waveforms.get(&entry.key).map(|waveform| waveform.as_ref());
     sound::scrubber(ui, 120.0, sound, library, focus, waveform, previews.failed.contains_key(&entry.key));
     let duration =
@@ -536,11 +536,11 @@ fn selection_strip(
 ) -> Option<u32> {
     let mut items: Vec<u32> = selection.items.iter().copied().collect();
     items.sort_unstable();
-    let total: u64 = items.iter().map(|&index| library.entries[index as usize].size).sum();
+    let total: u64 = items.iter().map(|&index| library.entry(index).size).sum();
     widgets::section_label(ui, &format!("{} selected · {}", grouped(items.len()), format_size(total)));
     let mut counts = [0usize; 3];
     for &index in &items {
-        counts[library.entries[index as usize].kind.index()] += 1;
+        counts[library.entry(index).kind.index()] += 1;
     }
     let summary: Vec<String> = AssetKind::ALL
         .into_iter()
@@ -554,7 +554,7 @@ fn selection_strip(
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
         for &index in items.iter().take(STRIP_MAX) {
-            let entry = &library.entries[index as usize];
+            let entry = library.entry(index);
             let (rect, response) = ui.allocate_exact_size(vec2(side, side), Sense::click());
             let focused = selection.focus == Some(index);
             ui.painter().rect_filled(

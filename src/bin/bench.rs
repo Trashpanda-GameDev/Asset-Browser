@@ -104,7 +104,7 @@ fn main() {
     );
     let start = Instant::now();
     let library = Library::build(vec![(root.clone(), loaded)]);
-    println!("Build library: {:.0} ms ({} folders with assets)", ms(start.elapsed()), grouped(library.dirs.len()));
+    println!("Build library: {:.0} ms ({} folders with assets)", ms(start.elapsed()), grouped(library.dirs().len()));
     let start = Instant::now();
     let shown = library.filter(0, KindSet::ALL, "png");
     println!("Search 'png':  {:.1} ms ({} matches)", start.elapsed().as_secs_f64() * 1000.0, grouped(shown.len()));
@@ -138,7 +138,7 @@ fn main() {
 /// once the file is read, and the biggest sheet of frames it makes.
 fn gif_frames(library: &Library, options: &Options) {
     let gifs: Vec<&Entry> = library
-        .entries
+        .entries()
         .iter()
         .filter(|entry| entry.extension().eq_ignore_ascii_case("gif") && entry.lower.contains(&options.only))
         .collect();
@@ -196,7 +196,7 @@ fn spread<'a>(library: &'a Library, kind: AssetKind, options: &Options, count: u
         return Vec::new();
     }
     let all: Vec<_> =
-        library.entries.iter().filter(|entry| entry.kind == kind && entry.lower.contains(&options.only)).collect();
+        library.entries().iter().filter(|entry| entry.kind == kind && entry.lower.contains(&options.only)).collect();
     let step = (all.len() / count).max(1);
     let skip = (options.offset + shift * step.div_ceil(2)) % step;
     all.into_iter().skip(skip).step_by(step).take(count).collect()

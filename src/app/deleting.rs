@@ -65,13 +65,13 @@ impl BrowserApp {
         if items.is_empty() {
             return;
         }
-        let entry = |index: u32| &library.entries[index as usize];
+        let entry = |index: u32| library.entry(index);
         let paths: Vec<PathBuf> = items.iter().map(|&index| library.path_of(entry(index))).collect();
         let names: Vec<&str> = items.iter().take(3).map(|&index| entry(index).name()).collect();
         // One file is named in the question, so this says where it is; several are listed.
         let details = match items.as_slice() {
             &[index] => {
-                let root = &library.roots[entry(index).root as usize].name;
+                let root = &library.root(entry(index).root).name;
                 let folder = entry(index).folder();
                 if folder.is_empty() {
                     format!("In {root}")
@@ -116,13 +116,14 @@ impl BrowserApp {
             return;
         }
         let Some(library) = &self.library else { return };
-        let Some(node) = library.dirs.get(dir as usize).filter(|node| node.root.is_some() && !node.lower.is_empty())
+        let Some(node) = library.dirs().get(dir as usize).filter(|node| node.root.is_some() && !node.lower.is_empty())
         else {
             return;
         };
         let Some(path) = library.dir_path(dir) else { return };
         let assets: u32 = node.totals.iter().sum();
-        let parent = node.parent.and_then(|parent| library.dirs.get(parent as usize)).map(|parent| parent.key.clone());
+        let parent =
+            node.parent.and_then(|parent| library.dirs().get(parent as usize)).map(|parent| parent.key.clone());
         let what = format!("the folder \u{201c}{}\u{201d}", node.name);
         self.confirm_files = Some(DeleteRequest {
             title: format!("Delete {what}?"),
@@ -200,7 +201,7 @@ impl BrowserApp {
     fn start_deleting(&mut self, request: DeleteRequest) {
         // A sound that's being deleted stops first.
         if let (Some(library), Some((index, _))) = (&self.library, self.sound.playing)
-            && let Some(entry) = library.entries.get(index as usize)
+            && let Some(entry) = library.entries().get(index as usize)
         {
             let playing = library.path_of(entry);
             if request.paths.iter().any(|path| library::is_within(&playing, path)) {
@@ -231,7 +232,7 @@ impl BrowserApp {
         if !deleted.gone.is_empty() {
             // Browsing the deleted folder, or one inside it: its parent is shown instead.
             let browsing_it = job.after.folder.as_ref().is_some_and(|folder| {
-                let shown = self.library.as_ref().and_then(|library| library.dirs.get(self.selected_dir as usize));
+                let shown = self.library.as_ref().and_then(|library| library.dirs().get(self.selected_dir as usize));
                 self.group.is_none()
                     && shown.is_some_and(|dir| dir.key == *folder || dir.key.starts_with(&format!("{folder}/")))
             });
@@ -249,7 +250,7 @@ impl BrowserApp {
             }
             let next = job.after.next.and_then(|key| {
                 let library = self.library.as_ref()?;
-                library.entries.iter().position(|entry| entry.key == key).map(|index| index as u32)
+                library.entries().iter().position(|entry| entry.key == key).map(|index| index as u32)
             });
             if self.mode_view().selection.is_empty()
                 && let Some(index) = next.filter(|index| self.view.contains(index))
@@ -291,7 +292,7 @@ impl BrowserApp {
         }
         let fresh: Vec<(PathBuf, Vec<ScannedFile>)> = by_root
             .iter()
-            .map(|(root, rels)| (library.roots[*root as usize].path.clone(), library.files_without(*root, rels)))
+            .map(|(root, rels)| (library.root(*root).path.clone(), library.files_without(*root, rels)))
             .collect();
         if fresh.is_empty() {
             return;

@@ -60,7 +60,7 @@ fn is_root(node: &DirNode) -> bool {
 
 impl FolderTree {
     fn is_open(&self, library: &Library, dir: u32) -> bool {
-        let node = &library.dirs[dir as usize];
+        let node = library.dir(dir);
         if dir == library.home() {
             true
         } else if is_root(node) {
@@ -71,7 +71,7 @@ impl FolderTree {
     }
 
     fn set_open(&mut self, library: &Library, dir: u32, open: bool) {
-        let node = &library.dirs[dir as usize];
+        let node = library.dir(dir);
         let (set, insert) = if is_root(node) { (&mut self.collapsed, !open) } else { (&mut self.expanded, open) };
         if insert {
             set.insert(node.key.clone());
@@ -102,7 +102,7 @@ impl FolderTree {
             rows.len(),
             |ui, range| {
                 for row in &rows[range] {
-                    let node = &library.dirs[row.dir as usize];
+                    let node = library.dir(row.dir);
                     let (rect, response) =
                         ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
                     let is_selected = row.dir == selected;
@@ -185,9 +185,9 @@ impl FolderTree {
                         action = Some(asked);
                     }
                     response.on_hover_text(match node.root {
-                        None => format!("Everything in the library's {} folders", library.roots.len()),
+                        None => format!("Everything in the library's {} folders", library.roots().len()),
                         Some(root) if is_root(node) => {
-                            let path = crate::platform::native(&library.roots[root as usize].path);
+                            let path = crate::platform::native(&library.root(root).path);
                             if unreadable {
                                 format!(
                                     "{path}
@@ -216,13 +216,13 @@ Can't be read now (unplugged, moved or renamed?). Showing what was found there l
     /// The folders to show, in order, with nothing of the mode's kinds left out.
     fn rows(&self, library: &Library, kinds: KindSet) -> Vec<Row> {
         let home = library.home();
-        let shown = |dir: u32| library.dirs[dir as usize].total(kinds) > 0;
+        let shown = |dir: u32| library.dir(dir).total(kinds) > 0;
         let mut rows = Vec::new();
         let mut stack = vec![(home, 0usize)];
         while let Some((dir, depth)) = stack.pop() {
-            let node = &library.dirs[dir as usize];
+            let node = library.dir(dir);
             // A folder of the library shows even when empty (just added, or still scanning).
-            let child_shown = |child: u32| shown(child) || is_root(&library.dirs[child as usize]);
+            let child_shown = |child: u32| shown(child) || is_root(library.dir(child));
             let has_children = node.children.iter().any(|&child| child_shown(child));
             rows.push(Row { dir, depth, has_children });
             if self.is_open(library, dir) {
@@ -238,7 +238,7 @@ Can't be read now (unplugged, moved or renamed?). Showing what was found there l
 
 /// A folder's right-click menu.
 fn folder_menu(response: &Response, library: &Library, dir: u32) -> Option<FolderAction> {
-    let node = &library.dirs[dir as usize];
+    let node = library.dir(dir);
     let mut action = None;
     response.context_menu(|ui| {
         ui.set_min_width(190.0);
@@ -258,7 +258,7 @@ fn folder_menu(response: &Response, library: &Library, dir: u32) -> Option<Folde
             ui.close();
         }
         if let Some(root) = node.root.filter(|_| is_root(node)) {
-            let path = library.roots[root as usize].path.clone();
+            let path = library.root(root).path.clone();
             let remove = ui
                 .button(format!("{}  Remove from library", icon::FOLDER_MINUS))
                 .on_hover_text("The files stay where they are");
@@ -285,7 +285,7 @@ fn folder_menu(response: &Response, library: &Library, dir: u32) -> Option<Folde
 pub fn library_menu(ui: &mut Ui, library: &Library, kinds: KindSet) -> Option<FolderAction> {
     let mut action = None;
     ui.set_width(300.0);
-    for (index, root) in library.roots.iter().enumerate() {
+    for (index, root) in library.roots().iter().enumerate() {
         let dir = Library::root_dir(index as u16);
         let (rect, response) = ui.allocate_exact_size(vec2(300.0, 30.0), Sense::click());
         let remove_rect = Rect::from_center_size(pos2(rect.right() - 14.0, rect.center().y), vec2(22.0, 22.0));
@@ -302,7 +302,7 @@ pub fn library_menu(ui: &mut Ui, library: &Library, kinds: KindSet) -> Option<Fo
             FontId::proportional(15.0),
             theme::TEXT_WEAK,
         );
-        let count = grouped(library.dirs[dir as usize].total(kinds) as usize);
+        let count = grouped(library.dir(dir).total(kinds) as usize);
         let count = painter.layout_no_wrap(count, FontId::proportional(11.5), theme::TEXT_FAINT);
         let count_x = remove_rect.left() - 6.0 - count.size().x;
         let mut job =

@@ -84,7 +84,7 @@ pub struct BrowserApp {
 
     mode: Mode,
     modes: [ModeView; 4],
-    /// Indices into `library.entries` shown for the mode, folder and search, in display order.
+    /// Indices into `library.entries()` shown for the mode, folder and search, in display order.
     view: Vec<u32>,
     view_dirty: bool,
     selected_dir: u32,

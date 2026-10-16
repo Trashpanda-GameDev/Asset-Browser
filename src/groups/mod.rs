@@ -387,7 +387,7 @@ mod tests {
         )]);
         let mut groups = Groups::open(&db);
         let footsteps = groups.create(GroupKind::Category, "Footsteps").unwrap();
-        let path = |entry: usize| library.path_of(&library.entries[entry]);
+        let path = |entry: usize| library.path_of(&library.entries()[entry]);
         let step = library.find(0, "sfx/step.wav").unwrap();
         let icon = library.find(0, "ui/icon.png").unwrap();
         groups.add(footsteps, &[path(step as usize), root.join("gone.wav"), PathBuf::from("/elsewhere/x.wav")]);

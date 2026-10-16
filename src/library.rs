@@ -135,12 +135,12 @@ impl SortBy {
 }
 
 pub struct Library {
-    pub roots: Vec<Root>,
-    /// Sorted by root, then lowercase path.
-    pub entries: Vec<Entry>,
+    roots: Vec<Root>,
+    /// Sorted by root, then lowercase path: `find` searches it by halves.
+    entries: Vec<Entry>,
     /// `dirs[0]` is the top ("All folders"); `dirs[1 + n]` is root `n`.
-    pub dirs: Vec<DirNode>,
-    pub kind_totals: [usize; 3],
+    dirs: Vec<DirNode>,
+    kind_totals: [usize; 3],
 }
 
 /// Where a file is, by its absolute path.
@@ -214,6 +214,39 @@ impl Library {
         }
 
         Self { roots: library_roots, entries, dirs, kind_totals }
+    }
+
+    /// The folders the library is made of, in the order they were added.
+    pub fn roots(&self) -> &[Root] {
+        &self.roots
+    }
+
+    pub fn root(&self, index: u16) -> &Root {
+        &self.roots[index as usize]
+    }
+
+    /// Every file, in library order: by root, then by lowercase path.
+    pub fn entries(&self) -> &[Entry] {
+        &self.entries
+    }
+
+    /// The file at `index` in `entries`, the index views and selections hold.
+    pub fn entry(&self, index: u32) -> &Entry {
+        &self.entries[index as usize]
+    }
+
+    /// Every folder: the top ("All folders"), each root, then the folders inside them.
+    pub fn dirs(&self) -> &[DirNode] {
+        &self.dirs
+    }
+
+    pub fn dir(&self, index: u32) -> &DirNode {
+        &self.dirs[index as usize]
+    }
+
+    /// Files of each kind, in `AssetKind::index` order.
+    pub fn kind_totals(&self) -> [usize; 3] {
+        self.kind_totals
     }
 
     /// Where the folder tree starts: the top when there are several roots, the root itself when

@@ -25,7 +25,7 @@ impl BrowserApp {
                 .into_iter()
                 // "All folders" only with several.
                 .filter(|&dir| dir >= library.home())
-                .map(|dir| (dir, library.dirs[dir as usize].name.clone()))
+                .map(|dir| (dir, library.dir(dir).name.clone()))
                 .collect(),
         };
         // `None` for the kind is Uncategorized.
@@ -36,7 +36,7 @@ impl BrowserApp {
         };
         let missing = self.group.and_then(|id| self.membership.missing.get(&id)).map_or(0, Vec::len);
         let elsewhere = self.group.and_then(|id| self.membership.elsewhere.get(&id)).copied().unwrap_or(0);
-        let outside = match library.roots.as_slice() {
+        let outside = match library.roots() {
             [root] => root.name.clone(),
             _ => "the library's folders".to_owned(),
         };

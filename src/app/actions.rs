@@ -29,7 +29,7 @@ impl BrowserApp {
             MenuAction::Open => self.open_entries(&items),
             MenuAction::Reveal => {
                 if let Some(&first) = items.first() {
-                    let _ = platform::reveal(&library.path_of(&library.entries[first as usize]));
+                    let _ = platform::reveal(&library.path_of(library.entry(first)));
                 }
             }
             MenuAction::CopyFiles => {
@@ -45,10 +45,8 @@ impl BrowserApp {
                 }
             }
             MenuAction::CopyPaths => {
-                let paths: Vec<String> = items
-                    .iter()
-                    .map(|&index| platform::native(&library.path_of(&library.entries[index as usize])))
-                    .collect();
+                let paths: Vec<String> =
+                    items.iter().map(|&index| platform::native(&library.path_of(library.entry(index)))).collect();
                 if !paths.is_empty() {
                     self.ctx.copy_text(paths.join("\n"));
                 }
@@ -60,7 +58,7 @@ impl BrowserApp {
         let Some(library) = &self.library else { return };
         let items = if items.len() > OPEN_MANY_MAX { &items[..1] } else { items };
         for &index in items {
-            let _ = platform::open(&library.path_of(&library.entries[index as usize]));
+            let _ = platform::open(&library.path_of(library.entry(index)));
         }
     }
 
@@ -185,7 +183,7 @@ impl BrowserApp {
         }
         if space && let Some(library) = &self.library {
             // The selected sound, or else whatever is playing.
-            let selected_sound = focus.filter(|&focus| library.entries[focus as usize].kind == AssetKind::Audio);
+            let selected_sound = focus.filter(|&focus| library.entry(focus).kind == AssetKind::Audio);
             let playing = self.sound.playing.filter(|(_, key)| self.sound.now_for(*key).is_some());
             if let Some(index) = selected_sound.or(playing.map(|(index, _)| index)) {
                 self.sound.toggle(library, index);

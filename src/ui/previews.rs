@@ -195,7 +195,7 @@ impl Previews {
     pub fn submit(&mut self, thumbs: &ThumbService, library: &Library) {
         let mut jobs_for = Vec::with_capacity(self.wanted.len());
         for &index in &self.wanted {
-            let Some(entry) = library.entries.get(index as usize) else { continue };
+            let Some(entry) = library.entries().get(index as usize) else { continue };
             if !self.has_preview(entry)
                 && !self.failed.contains_key(&entry.key)
                 && !self.arrived_keys.contains(&entry.key)
