@@ -106,13 +106,49 @@ struct Info {
     error: Option<String>,
 }
 
+/// Why there's no sound output.
+#[derive(Debug, thiserror::Error)]
+pub enum OutputError {
+    #[error("no audio output device")]
+    NoDevice,
+    /// What the device said. (cpal's error isn't a standard one, so it's taken in by hand.)
+    #[error("{0}")]
+    Device(cpal::Error),
+    #[error("the output's sample format ({0}) isn't supported")]
+    SampleFormat(SampleFormat),
+    #[error("the sound decoder couldn't start")]
+    NoDecoder,
+}
+
+impl From<cpal::Error> for OutputError {
+    fn from(err: cpal::Error) -> Self {
+        Self::Device(err)
+    }
+}
+
+/// Why a sound can't be played or measured. The message is what the user reads, under the player
+/// or in place of a waveform (the thumbnail cache keeps it with a failed file).
+#[derive(Debug, thiserror::Error)]
+pub enum SoundError {
+    #[error("{0}")]
+    Read(#[from] std::io::Error),
+    #[error("{0}")]
+    Decode(#[from] symphonia::core::errors::Error),
+    #[error("no audio track")]
+    NoTrack,
+    #[error("can't seek there")]
+    BadSeek,
+    #[error("no audio in this file")]
+    NoAudio,
+}
+
 impl Player {
     /// `on_change` runs on the decoder thread whenever what `now` reports changes other than by
     /// the playhead moving (a seek landing, a sound starting or ending), e.g. to redraw the UI.
-    pub fn start(on_change: Wake) -> Result<Self, String> {
-        let device = cpal::default_host().default_output_device().ok_or("no audio output device")?;
+    pub fn start(on_change: Wake) -> Result<Self, OutputError> {
+        let device = cpal::default_host().default_output_device().ok_or(OutputError::NoDevice)?;
         let device_name = device.description().map_or_else(|_| "audio output".to_owned(), |d| d.to_string());
-        let supported = device.default_output_config().map_err(|err| err.to_string())?;
+        let supported = device.default_output_config()?;
         let rate = supported.sample_rate();
         let channels = supported.channels() as usize;
         let (producer, consumer) = rtrb::RingBuffer::new((rate as f32 * BUFFER_SECONDS) as usize * channels);
@@ -125,16 +161,16 @@ impl Player {
             SampleFormat::I16 => output_stream::<i16>(&device, config, consumer, shared.clone(), channels),
             SampleFormat::U16 => output_stream::<u16>(&device, config, consumer, shared.clone(), channels),
             SampleFormat::I32 => output_stream::<i32>(&device, config, consumer, shared.clone(), channels),
-            other => Err(format!("the output's sample format ({other}) isn't supported")),
+            other => Err(OutputError::SampleFormat(other)),
         }?;
-        stream.play().map_err(|err| err.to_string())?;
+        stream.play()?;
 
         let (commands, receiver) = crossbeam_channel::unbounded();
         let decoder_shared = shared.clone();
         work::spawn("audio-decoder", move || {
             decoder_loop(&decoder_shared, producer, &receiver, Format { rate, channels }, &*on_change);
         })
-        .ok_or("the sound decoder couldn't start")?;
+        .ok_or(OutputError::NoDecoder)?;
         Ok(Self { shared, commands, device_rate: rate, device_name, _stream: stream })
     }
 
@@ -192,9 +228,25 @@ impl Player {
 
 /// Opens a sound and decodes its first packet: the work playback waits for before the first audio
 /// can reach the sound card. For the benchmark.
-pub fn time_to_first_audio(source: Source, extension: &str) -> Result<Duration, String> {
+pub fn time_to_first_audio(source: Source, extension: &str) -> Result<Duration, SoundError> {
     let start = Instant::now();
     let mut stream = SoundStream::open(source, extension)?;
     stream.next()?;
     Ok(start.elapsed())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn messages_stay_as_they_are_shown() {
+        // The thumbnail cache keeps a waveform's failure with the file.
+        assert_eq!(SoundError::NoAudio.to_string(), "no audio in this file");
+        assert_eq!(SoundError::NoTrack.to_string(), "no audio track");
+        assert_eq!(SoundError::BadSeek.to_string(), "can't seek there");
+        assert_eq!(OutputError::NoDevice.to_string(), "no audio output device");
+        let format = OutputError::SampleFormat(SampleFormat::U8);
+        assert_eq!(format.to_string(), "the output's sample format (u8) isn't supported");
+    }
 }

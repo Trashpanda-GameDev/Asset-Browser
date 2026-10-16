@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::stream::SoundStream;
-use super::{Format, Source};
+use super::{Format, SoundError, Source};
 
 /// Points stored per waveform. Enough for a wide player; tiles use fewer.
 const WAVEFORM_POINTS: usize = 512;
@@ -19,9 +19,9 @@ pub struct Waveform {
 }
 
 /// Decodes a whole sound file and measures its shape.
-pub fn waveform(path: &Path) -> Result<Waveform, String> {
+pub fn waveform(path: &Path) -> Result<Waveform, SoundError> {
     // One sequential read is far cheaper than many small ones on a spinning disk.
-    let bytes: Arc<[u8]> = std::fs::read(path).map_err(|err| err.to_string())?.into();
+    let bytes: Arc<[u8]> = std::fs::read(path)?.into();
     let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
     let mut stream = SoundStream::open(Source::Memory(bytes), extension)?;
 
@@ -51,7 +51,7 @@ pub fn waveform(path: &Path) -> Result<Waveform, String> {
         blocks.push(current);
     }
     if frames == 0 || sample_rate == 0 {
-        return Err("no audio in this file".into());
+        return Err(SoundError::NoAudio);
     }
 
     let points = blocks.len().min(WAVEFORM_POINTS);

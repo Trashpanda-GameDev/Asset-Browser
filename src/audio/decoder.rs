@@ -129,7 +129,7 @@ impl<'a> Decoder<'a> {
             Err(err) => {
                 // Shown under the player; logged too, like every error the window shows.
                 diag::note("Playing a sound", &err);
-                info.error = Some(err);
+                info.error = Some(err.to_string());
                 self.current = None;
                 self.shared.finished.store(true, Ordering::Release);
             }
@@ -147,7 +147,7 @@ impl<'a> Decoder<'a> {
             Ok(at) => info.start = at,
             Err(err) => {
                 diag::note("Seeking in a sound", &err);
-                info.error = Some(err);
+                info.error = Some(err.to_string());
             }
         }
         self.shared.played_frames.store(0, Ordering::Relaxed);
@@ -191,7 +191,7 @@ impl<'a> Decoder<'a> {
             Ok(None) => self.end(),
             Err(err) => {
                 diag::note("Playing a sound", &err);
-                work::lock(&self.shared.info).error = Some(err);
+                work::lock(&self.shared.info).error = Some(err.to_string());
                 self.end();
                 (self.on_change)();
             }

@@ -70,7 +70,9 @@ impl Worker {
         // file counts as failed, instead of staying "in progress" forever.
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| match job.kind {
             AssetKind::Image => make_thumbnail(&job.path, resizer).map(Preview::Image),
-            AssetKind::Audio => audio::waveform(&job.path).map(|waveform| Preview::Sound(Arc::new(waveform))),
+            AssetKind::Audio => audio::waveform(&job.path)
+                .map(|waveform| Preview::Sound(Arc::new(waveform)))
+                .map_err(|err| err.to_string()),
             AssetKind::Model => {
                 model_thumbnail(&job.path, resizer).map(|(pixels, info)| Preview::Model(pixels, Arc::new(info)))
             }

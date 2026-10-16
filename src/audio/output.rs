@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use cpal::traits::DeviceTrait;
 use cpal::{FromSample, SizedSample};
 
-use super::Shared;
+use super::{OutputError, Shared};
 use crate::diag;
 
 pub(super) fn output_stream<T: SizedSample + FromSample<f32>>(
@@ -16,7 +16,7 @@ pub(super) fn output_stream<T: SizedSample + FromSample<f32>>(
     mut buffer: rtrb::Consumer<f32>,
     shared: Arc<Shared>,
     channels: usize,
-) -> Result<cpal::Stream, String> {
+) -> Result<cpal::Stream, OutputError> {
     device
         .build_output_stream::<T, _, _>(
             config,
@@ -52,5 +52,5 @@ pub(super) fn output_stream<T: SizedSample + FromSample<f32>>(
             |err| diag::report("Audio output", err),
             None,
         )
-        .map_err(|err| err.to_string())
+        .map_err(OutputError::from)
 }
