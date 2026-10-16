@@ -385,7 +385,7 @@ pub fn draw_preview(
         let color = theme::kind_color(entry.kind);
         let progress = playing.map(|now| now.progress(waveform.duration as f64));
         let wave_rect = if large { Rect::from_min_max(rect.min, pos2(rect.max.x, rect.max.y - 16.0)) } else { rect };
-        draw_waveform(painter, wave_rect, waveform, color.gamma_multiply(0.5), color, progress);
+        draw_waveform(painter, wave_rect, waveform, [color.gamma_multiply(0.5), color], progress);
         if large {
             painter.text(
                 rect.right_bottom(),
@@ -727,7 +727,7 @@ impl ListRow<'_, '_> {
                         let progress = playing.map(|now| now.progress(waveform.duration as f64));
                         let color = theme::kind_color(entry.kind);
                         let wave = cell.shrink2(vec2(4.0, 7.0));
-                        draw_waveform(painter, wave, waveform, color.gamma_multiply(0.5), color, progress);
+                        draw_waveform(painter, wave, waveform, [color.gamma_multiply(0.5), color], progress);
                     }
                 }
                 Column::Length => weak(

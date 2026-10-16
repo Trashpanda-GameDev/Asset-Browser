@@ -10,7 +10,7 @@ use crate::ui::empty::{self, EmptyArgs};
 use crate::ui::folders::FolderAction;
 use crate::ui::inspector::InspectorArgs;
 use crate::ui::mode::Layout as ViewLayout;
-use crate::ui::sound;
+use crate::ui::sound::{self, SoundArgs};
 use crate::ui::status_bar::{self, StatusArgs, StatusCommand};
 use crate::ui::theme;
 
@@ -120,12 +120,15 @@ impl BrowserApp {
         let mut command = None;
         egui::Panel::bottom("player").frame(frame).show(ui, |ui| {
             let entry = library.entry(index);
-            let waveform = self.previews.waveforms.get(&entry.key).map(|waveform| waveform.as_ref());
-            let failed = self.previews.failed.contains_key(&entry.key);
             ui.label(RichText::new(entry.name()).font(egui::FontId::new(theme::size::BODY, theme::semibold())));
-            command = sound::scrubber(ui, 56.0, &self.playback, library, index, waveform, failed);
-            let duration = waveform.map(|waveform| waveform.duration as f64);
-            command = command.or(sound::transport(ui, &self.playback, library, index, duration));
+            let sound = SoundArgs {
+                playback: &self.playback,
+                library,
+                index,
+                waveform: self.previews.waveforms.get(&entry.key).map(|waveform| waveform.as_ref()),
+                failed: self.previews.failed.contains_key(&entry.key),
+            };
+            command = sound::player(ui, 56.0, &sound);
         });
         if let Some(command) = command {
             self.run_sound_command(command);

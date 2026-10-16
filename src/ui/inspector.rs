@@ -30,7 +30,7 @@ use super::mode::Selection;
 use super::organize::{self, GroupCommand, Targets};
 use super::previews::Previews;
 use super::sheet_view::SheetView;
-use super::sound::{self, SoundCommand};
+use super::sound::{self, SoundArgs, SoundCommand};
 use super::viewport::Viewport;
 use super::{theme, widgets};
 
@@ -465,13 +465,15 @@ fn sound_section(
     previews: &Previews,
     playback: &Playback,
 ) -> Option<SoundCommand> {
-    let entry = library.entry(focus);
-    let waveform = previews.waveforms.get(&entry.key).map(|waveform| waveform.as_ref());
-    let failed = previews.failed.contains_key(&entry.key);
-    let scrubbed = sound::scrubber(ui, 120.0, playback, library, focus, waveform, failed);
-    let duration =
-        playback.now_for(entry.key).and_then(|now| now.duration).or(waveform.map(|waveform| waveform.duration as f64));
-    scrubbed.or(sound::transport(ui, playback, library, focus, duration))
+    let key = library.entry(focus).key;
+    let sound = SoundArgs {
+        playback,
+        library,
+        index: focus,
+        waveform: previews.waveforms.get(&key).map(|waveform| waveform.as_ref()),
+        failed: previews.failed.contains_key(&key),
+    };
+    sound::player(ui, 120.0, &sound)
 }
 
 fn sound_properties(ui: &mut Ui, entry: &Entry, previews: &Previews) {
