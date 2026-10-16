@@ -20,6 +20,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 
 | File | What it does |
 |---|---|
+| `src/asset.rs` | The kinds of asset (pictures, sounds, 3D models), which extensions are which, and sets of kinds |
 | `src/scan.rs` | Parallel folder walk; which files count as assets |
 | `src/rescan.rs` | Scanning some of the library's folders again, saving their index, and building the library anew |
 | `src/watch.rs` | Told by the OS when the library's folders change, to rescan them once the changes settle |
@@ -38,7 +39,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/groups/` | Favorites, collections and categories (`mod.rs`), how they're saved (`store.rs`), and where their members are in the library (`membership.rs`) |
 | `src/sheets/` | Sprite sheets: what one is (`mod.rs`), guessing grids (`guess.rs`), reading Aseprite / TexturePacker data (`data.rs`), per-file choices (`store.rs`) |
 | `src/animated.rs` | Animated GIFs as sheets of their own frames, within a memory budget |
-| `src/app/` | The window's state (`BrowserApp`, in `mod.rs`) and what it does, a file an area: the library's folders and scans (`library.rs`), what's browsed and selected (`view.rs`), keys and asset actions (`actions.rs`), favorites, collections and categories (`organizing.rs`), deleting (`deleting.rs`), settings (`settings.rs`), the window's parts (`header.rs`, `toolbar.rs`, `sidebar.rs`, `panels.rs`, `toast.rs`), and the screenshots tool's hooks (`screenshots.rs`) |
+| `src/app/` | The window's state (`BrowserApp`, in `mod.rs`) and what it does, a file an area: the library's folders and scans (`library.rs`), what's browsed and selected (`view.rs`), keys and asset actions (`actions.rs`), favorites, collections and categories (`organizing.rs`), deleting (`deleting.rs`), settings (`settings.rs`, saved under the keys in `setting_keys.rs`), the window's parts (`header.rs`, `toolbar.rs`, `sidebar.rs`, `panels.rs`, `toast.rs`), and the screenshots tool's hooks (`screenshots.rs`) |
 | `src/ui/mode.rs` | The modes, what each remembers, and the selection |
 | `src/ui/header.rs` | The window's top: the library's folders, the modes, the view's buttons and the search |
 | `src/ui/toolbar.rs` | Above the assets: where you are, the counts, the order and each mode's own options |
@@ -150,14 +151,14 @@ changed there during the run (a file copied in) shows in the last picture; take 
 cargo run --release --bin shots -- --demo docs/images F:\Assets
 ```
 
-Takes the README's pictures and clips again, after the look changes; it takes about a minute. It draws and
-synthesises a small library of made-up game assets (`src/bin/shots/demo.rs`: icons, tiles, backgrounds, sprite
+Takes the README's pictures and clips again, after the look changes; it takes about a minute. It draws and synthesises
+a small library of made-up game assets (`src/bin/shots/demo/`, a file per kind: icons, tiles, backgrounds, sprite
 sheets, GIFs, sounds and 3D models, with some favorites, collections and categories) into the folder given last, which
 has to be empty or hold only what a run wrote before, since its path shows in the pictures (without one, it uses
 `target/demo`). Then it shows each part of the app on it, pressing keys, typing searches and adding files as it goes,
-and records the clips as GIFs (`src/bin/shots/clip.rs`: each frame holds only what changed since the one before,
-which keeps them small). The app keeps its cache and settings in `target/demo` for the run, so your own library is
-left alone.
+and records the clips as GIFs (`src/bin/shots/clip.rs`: each frame holds only what changed since the one before, which
+keeps them small). The app keeps its cache and settings in `target/demo` for the run, so your own library is left
+alone.
 
 ## Adding to a mode
 

@@ -4,8 +4,8 @@ The rules the code follows so it stays easy to change: which part may use which,
 each other, and how errors, stored data and tests are handled. [Working on Asset Browser](development.md) has the map
 of the files. [Back to the README](../README.md)
 
-Some older code doesn't follow these rules yet and is being brought in line: the architecture test and the
-`refactor:` marks (below) list what's left.
+All of the code follows these rules: the architecture test lists no exceptions, and no function carries a mark
+for breaking one. Code that has to break a rule says so where it does, as below.
 
 ## Layers
 
@@ -53,8 +53,8 @@ Checked by clippy (`clippy.toml`, and `[lints]` in `Cargo.toml`), with warnings 
 - A function does one thing: at most 60 lines of code, a cognitive complexity of at most 15, and at most 5
   parameters (more go in an args struct, like `InspectorArgs`). A longer function becomes named steps.
 - No flag arguments and no clusters of bools: they become an enum that names the cases.
-- `#[expect(clippy::..., reason = "...")]` marks code that breaks a rule, and says why. A reason starting with
-  `refactor:` is a to-do. The build fails once the code no longer needs its mark, so marks can't go stale.
+- `#[expect(clippy::..., reason = "...")]` marks code that breaks a rule on purpose, and says why. The build fails
+  once the code no longer needs its mark, so marks can't go stale.
 
 Not checked by a tool, but expected:
 
@@ -66,7 +66,8 @@ Not checked by a tool, but expected:
 ## Errors
 
 - A module that can fail returns its own error type: an enum with `thiserror`, whose message is what the user reads
-  (`platform::CopyError` is a small one). Errors from a library pass through as they are (`trash::Error`).
+  (`platform::CopyError` is a small one; `model::ModelError` keeps the messages the thumbnail cache stores with a
+  failed file). Errors from a library pass through as they are (`trash::Error`).
 - The app shows errors with `diag::report` (the log, and the status bar); `diag::note` only logs, for errors not worth
   showing, such as an update check while offline.
 - No error is dropped without saying why: a `let _ =` on a `Result` has a comment.
@@ -79,8 +80,8 @@ Not checked by a tool, but expected:
   through a migration there that keeps what's there.
 - Every SQLite file is opened with `db::connect`, and several writes that belong together go in one
   `db::in_transaction`.
-- Every settings key and every number stored for an enum (asset kinds, group kinds) has one owner, and a test pins
-  its value: changing one loses what people saved.
+- Every settings key (`app::setting_keys`) and every number stored for an enum (asset kinds, group kinds) has one
+  owner, and a test pins its value: changing one loses what people saved.
 - Changing how a cache stores something means bumping its version number, which clears that part of everyone's cache.
 
 ## Tests
