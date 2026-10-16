@@ -7,6 +7,7 @@
 //! PLY, 3DS and Collada are small readers of our own. A .blend file can't be read without Blender,
 //! but it carries the picture Blender saved with it (`blend`).
 
+use std::collections::HashSet;
 use std::path::Path;
 
 pub mod blend;
@@ -40,6 +41,22 @@ pub struct Model {
     pub bones: Vec<[[f32; 3]; 2]>,
     pub bounds: Bounds,
     pub info: ModelInfo,
+}
+
+impl Model {
+    /// Every triangle edge once, as a line list into `vertices`: the wireframe.
+    pub fn edges(&self) -> Vec<u32> {
+        let mut seen = HashSet::with_capacity(self.indices.len());
+        let mut lines = Vec::with_capacity(self.indices.len() * 2);
+        for triangle in self.indices.as_chunks::<3>().0 {
+            for (a, b) in [(triangle[0], triangle[1]), (triangle[1], triangle[2]), (triangle[2], triangle[0])] {
+                if seen.insert((a.min(b), a.max(b))) {
+                    lines.extend([a, b]);
+                }
+            }
+        }
+        lines
+    }
 }
 
 #[repr(C)]
@@ -424,6 +441,21 @@ mod tests {
 
     fn vertex(position: [f32; 3]) -> Vertex {
         Vertex { position, normal: [0.0, 0.0, 1.0], uv: [0.0; 2], color: [1.0; 4] }
+    }
+
+    #[test]
+    fn edges_count_a_shared_side_once() {
+        // A square of two triangles: four sides and the diagonal.
+        let corners = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]];
+        let mut builder = Builder::default();
+        let clay = builder.default_material(false);
+        let base = builder.add_vertices(&corners.map(vertex));
+        builder.add_triangles(clay, base, &[0, 1, 2, 0, 2, 3]);
+        let model = builder.finish("square").unwrap();
+        let mut edges: Vec<[u32; 2]> =
+            model.edges().as_chunks::<2>().0.iter().map(|&[a, b]| [a.min(b), a.max(b)]).collect();
+        edges.sort_unstable();
+        assert_eq!(edges, [[0, 1], [0, 2], [0, 3], [1, 2], [2, 3]]);
     }
 
     #[test]

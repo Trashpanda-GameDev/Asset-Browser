@@ -230,11 +230,53 @@ pub(crate) fn fit_size(w: u32, h: u32, max: u32) -> (u32, u32) {
     (((w as f64 * scale).round() as u32).max(1), ((h as f64 * scale).round() as u32).max(1))
 }
 
+/// A picture's smaller sizes for its mip chain: every half size below `w` × `h`, by averaging 2×2
+/// blocks, down to 1×1.
+pub fn mip_levels(w: u32, h: u32, rgba: &[u8]) -> Vec<(u32, u32, Vec<u8>)> {
+    let mut levels: Vec<(u32, u32, Vec<u8>)> = Vec::new();
+    loop {
+        let (w, h, pixels) = match levels.last() {
+            Some((w, h, pixels)) => (*w, *h, pixels.as_slice()),
+            None => (w, h, rgba),
+        };
+        if w <= 1 && h <= 1 {
+            return levels;
+        }
+        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+        let mut next = vec![0u8; (nw * nh * 4) as usize];
+        for y in 0..nh {
+            for x in 0..nw {
+                for channel in 0..4 {
+                    let sample = |sx: u32, sy: u32| {
+                        let (sx, sy) = (sx.min(w - 1), sy.min(h - 1));
+                        pixels[((sy * w + sx) * 4 + channel) as usize] as u32
+                    };
+                    let sum = sample(x * 2, y * 2)
+                        + sample(x * 2 + 1, y * 2)
+                        + sample(x * 2, y * 2 + 1)
+                        + sample(x * 2 + 1, y * 2 + 1);
+                    next[((y * nw + x) * 4 + channel) as usize] = ((sum + 2) / 4) as u8;
+                }
+            }
+        }
+        levels.push((nw, nh, next));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn mips_go_down_to_one_pixel() {
+        let levels = mip_levels(5, 3, &[200; 5 * 3 * 4]);
+        assert_eq!(levels.iter().map(|(w, h, _)| (*w, *h)).collect::<Vec<_>>(), [(2, 1), (1, 1)]);
+        assert!(levels.iter().all(|(w, h, pixels)| pixels.len() == (w * h * 4) as usize));
+        assert!(levels.iter().all(|(_, _, pixels)| pixels.iter().all(|&value| value == 200)));
+        assert!(mip_levels(1, 1, &[1, 2, 3, 4]).is_empty());
+    }
 
     #[test]
     fn big_decodes_take_turns() {

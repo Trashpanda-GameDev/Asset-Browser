@@ -102,7 +102,7 @@ impl Gpu {
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() }],
         });
         let (smooth, crisp) = (sampler(&device, wgpu::FilterMode::Linear), sampler(&device, wgpu::FilterMode::Nearest));
-        let white = upload_texture(&device, &state.queue, "white", [1, 1], &[255; 4]);
+        let white = upload_texture(&device, &state.queue, "white", (1, 1, &[255; 4]), &[]);
         Self {
             device,
             queue: state.queue.clone(),

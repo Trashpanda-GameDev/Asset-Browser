@@ -12,11 +12,10 @@ use eframe::egui_wgpu::RenderState;
 use egui_phosphor::regular as icon;
 
 use crate::asset::{AssetKind, KindSet};
-use crate::detail::{Detail, Loaded};
+use crate::detail::{Detail, DetailModel, Loaded};
 use crate::groups::{FAVORITES, GroupKind, Groups, Membership};
 use crate::imaging::Pixels;
 use crate::library::{Entry, Library};
-use crate::model::Model;
 use crate::playback::Playback;
 use crate::sheets::{Saved, Sheet};
 
@@ -64,7 +63,7 @@ enum DetailState {
         pixels: Arc<Pixels>,
         sheet: Option<Sheet>,
     },
-    Model(Arc<Model>),
+    Model(Arc<DetailModel>),
     Failed(String),
 }
 

@@ -59,7 +59,7 @@ impl Inspector {
 
     pub(super) fn model_properties(&self, ui: &mut Ui, entry: &Entry, previews: &Previews) {
         let loaded = match &self.detail {
-            Some((key, DetailState::Model(model))) if *key == entry.key => Some(&model.info),
+            Some((key, DetailState::Model(detail))) if *key == entry.key => Some(&detail.model.info),
             _ => None,
         };
         let Some(info) = loaded.or(previews.models.get(&entry.key).map(|info| info.as_ref())) else {

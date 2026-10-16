@@ -9,7 +9,7 @@ use eframe::egui::{self, Align2, Color32, FontId, Rect, Sense, Stroke, StrokeKin
 use eframe::egui_wgpu::RenderState;
 use egui_phosphor::regular as icon;
 
-use crate::model::Model;
+use crate::detail::DetailModel;
 
 use super::{theme, widgets};
 
@@ -20,7 +20,7 @@ mod shader;
 
 use camera::{Orbit, globals};
 use gpu::{Globals, Gpu, Target};
-use scene::{Scene, edges};
+use scene::{Scene, edge_buffer};
 
 const AUTO_ROTATE_SPEED: f32 = 0.5; // radians per second
 
@@ -41,7 +41,7 @@ pub struct Viewport {
 #[derive(Clone, Copy)]
 pub struct ShownModel<'a> {
     pub key: i64,
-    pub model: &'a Model,
+    pub model: &'a DetailModel,
 }
 
 impl Viewport {
@@ -71,7 +71,7 @@ impl Viewport {
         let globals = globals(&self.orbit, scene, size);
         if self.drawn != Some(globals) || self.drawn_wireframe != self.wireframe {
             if self.wireframe && scene.edges.is_none() {
-                scene.edges = edges(gpu, shown.model);
+                scene.edges = edge_buffer(gpu, &shown.model.edges);
             }
             gpu.queue.write_buffer(&gpu.globals, 0, bytemuck::bytes_of(&globals));
             gpu.render(scene, target, self.wireframe);

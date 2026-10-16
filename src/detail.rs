@@ -24,7 +24,29 @@ pub enum Detail {
     /// The picture and its frames: a sprite sheet's, or for an animated GIF all its frames laid
     /// out side by side (`animated`).
     Image(Pixels, Option<Sheet>),
-    Model(Arc<Model>),
+    Model(Arc<DetailModel>),
+}
+
+/// A model for the 3D view, with what its upload to the GPU needs made here, off the window's
+/// thread.
+pub struct DetailModel {
+    pub model: Model,
+    /// Each texture's smaller sizes, for its mip chain (`imaging::mip_levels`).
+    pub mips: Vec<Vec<(u32, u32, Vec<u8>)>>,
+    /// The wireframe: every triangle edge once (`Model::edges`).
+    pub edges: Vec<u32>,
+}
+
+impl DetailModel {
+    fn prepare(model: Model) -> Self {
+        let mips = model
+            .textures
+            .iter()
+            .map(|texture| imaging::mip_levels(texture.width, texture.height, &texture.rgba))
+            .collect();
+        let edges = model.edges();
+        Self { model, mips, edges }
+    }
 }
 
 pub struct Loaded {
@@ -79,7 +101,7 @@ fn run(requests: &WorkList<Request>, results: &Sender<Loaded>, on_result: &(dyn 
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| match request.kind {
             AssetKind::Image => load_picture(&request.path, &mut resizer, &superseded),
             AssetKind::Model => model::load(&request.path, &LoadOptions { max_texture: DETAIL_MAX })
-                .map(|model| Detail::Model(Arc::new(model))),
+                .map(|model| Detail::Model(Arc::new(DetailModel::prepare(model)))),
             AssetKind::Audio => Err("sounds have no large preview".to_owned()),
         }))
         .unwrap_or_else(|_| Err("the decoder crashed on this file".into()));
