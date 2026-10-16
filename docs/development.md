@@ -69,7 +69,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/changelog.rs`, `CHANGELOG.md` | What's new in each version, built into the app; the release's notes too |
 | `src/ui/settings/` | The settings window (`mod.rs`), with a file per page: Updates, Keyboard, Storage and Memory |
 | `src/ui/whats_new.rs` | "What's new" after an update, and every version's notes |
-| `src/bin/bench.rs` | The benchmark |
+| `src/bin/bench/` | The benchmark (`main.rs`), its preview passes (`previews.rs`) and contact sheets (`sheets.rs`) |
 | `src/bin/shots/` | Screenshots of the window and the settings, to check the look; and the README's pictures and clips, of made-up assets |
 | `build.rs`, `assets/` | The app icon, and putting it with the app's name into the Windows exe (`src/main.rs` sets the window's) |
 | `.cargo/config.toml` | Links the C runtime into Windows builds, so they need no Visual C++ redistributable |

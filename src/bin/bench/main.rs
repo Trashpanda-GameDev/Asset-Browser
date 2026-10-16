@@ -9,21 +9,24 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use asset_browser::app::grouped;
 use asset_browser::asset::{AssetKind, KindSet};
 use asset_browser::audio::{self, Source};
-use asset_browser::imaging::Pixels;
 use asset_browser::library::{Entry, Library, root_string};
-use asset_browser::model::{self, LoadOptions, ModelInfo, TextureStats, raster};
-use asset_browser::thumbs::{Preview, THUMB_MAX, THUMB_TEXTURE, Thumb, ThumbJob, ThumbService};
-use asset_browser::work::Wake;
+use asset_browser::model::{self, LoadOptions, raster};
+use asset_browser::thumbs::{THUMB_MAX, THUMB_TEXTURE};
 use asset_browser::{db, folder_index, scan};
+
+mod previews;
+mod sheets;
+
+use previews::previews;
 
 /// Contact sheets: pictures to a row, and to a page.
 const COLUMNS: usize = 8;
+
 const PER_PAGE: usize = 48;
 
 /// The cache database's files: the database, and its write-ahead log and index.
@@ -222,188 +225,6 @@ fn spread<'a>(library: &'a Library, kind: AssetKind, options: &Options, count: u
     all.into_iter().skip(skip).step_by(step).take(count).collect()
 }
 
-/// A preview pass: into an empty cache, or from it.
-#[derive(Clone, Copy, PartialEq)]
-enum Pass {
-    Cold,
-    Warm,
-}
-
-impl Pass {
-    fn name(self) -> &'static str {
-        match self {
-            Pass::Cold => "cold",
-            Pass::Warm => "warm",
-        }
-    }
-}
-
-/// What the previews of a kind are called.
-fn label(kind: AssetKind) -> &'static str {
-    match kind {
-        AssetKind::Image => "Thumbnails",
-        AssetKind::Audio => "Waveforms",
-        AssetKind::Model => "Models",
-    }
-}
-
-/// Makes previews for `sample` twice: into an empty cache, then from it.
-fn previews(kind: AssetKind, library: &Library, sample: &[&Entry], db_path: &Path, options: &Options) {
-    if sample.is_empty() {
-        return;
-    }
-    for pass in [Pass::Cold, Pass::Warm] {
-        let textures_before = model::texture_stats();
-        let keep_pictures = pass == Pass::Cold && options.sheet.is_some();
-        let results = Results::of_pass(library, sample, db_path, options.threads, keep_pictures);
-        println!(
-            "{} ({}): {} in {:.2} s = {:.0}/s on {} threads, {} failed",
-            label(kind),
-            pass.name(),
-            grouped(results.done),
-            results.elapsed.as_secs_f64(),
-            results.done as f64 / results.elapsed.as_secs_f64(),
-            results.threads,
-            results.failed.len(),
-        );
-        if let (Some(path), false) = (&options.sheet, results.pictures.is_empty()) {
-            write_sheet(path, &results.pictures);
-            println!("    contact sheet: {}", path.display());
-        }
-        if let (Some(path), AssetKind::Model, Pass::Cold) = (&options.sheet, kind, pass) {
-            write_model_sheets(path, sample, &results.models, &results.failed);
-        }
-        if pass == Pass::Cold {
-            if kind == AssetKind::Model {
-                report_models(&results.contents, textures_before);
-            }
-            results.report_slowest_and_failures(sample, kind);
-        }
-    }
-}
-
-/// What a pass over a sample gave.
-struct Results {
-    done: usize,
-    elapsed: Duration,
-    threads: usize,
-    failed: Vec<(i64, String)>,
-    /// Each preview's time (microseconds) and key.
-    times: Vec<(u64, i64)>,
-    /// The first pictures, for a contact sheet.
-    pictures: Vec<Pixels>,
-    /// Every model's picture in sample order, for a sheet of them all.
-    models: Vec<Option<Pixels>>,
-    /// Models textured, missing a texture, picture only (.blend), skeleton only, animated.
-    contents: [usize; 5],
-}
-
-impl Results {
-    /// Makes the sample's previews with `threads` workers into the cache at `db_path`, keeping
-    /// the pictures for contact sheets when asked.
-    fn of_pass(library: &Library, sample: &[&Entry], db_path: &Path, threads: usize, keep_pictures: bool) -> Self {
-        let order: HashMap<i64, usize> = sample.iter().enumerate().map(|(i, entry)| (entry.key, i)).collect();
-        let nothing: Wake = Arc::new(|| {});
-        let service = ThumbService::start_with_threads(db_path, threads, &nothing);
-        let jobs = sample
-            .iter()
-            .map(|entry| ThumbJob { key: entry.key, path: library.path_of(entry), kind: entry.kind })
-            .collect();
-        let mut results = Results {
-            done: 0,
-            elapsed: Duration::ZERO,
-            threads: 0,
-            failed: Vec::new(),
-            times: Vec::new(),
-            pictures: Vec::new(),
-            models: (0..sample.len()).map(|_| None).collect(),
-            contents: [0; 5],
-        };
-        let start = Instant::now();
-        service.set_wanted(jobs);
-        while results.done < sample.len() {
-            let Some(thumb) = service.recv_timeout(Duration::from_secs(120)) else {
-                println!("  timed out with {} of {} done", results.done, sample.len());
-                break;
-            };
-            results.done += 1;
-            results.take(thumb, &order, keep_pictures);
-        }
-        results.elapsed = start.elapsed();
-        results.threads = service.thread_count();
-        drop(service); // waits for the cache writer to commit
-        results
-    }
-
-    fn take(&mut self, thumb: Thumb, order: &HashMap<i64, usize>, keep_pictures: bool) {
-        if let Ok(Preview::Model(_, info)) = &thumb.result {
-            for (count, yes) in self.contents.iter_mut().zip(contents(info)) {
-                *count += usize::from(yes);
-            }
-        }
-        match thumb.result {
-            Ok(Preview::Model(pixels, _)) if keep_pictures => self.models[order[&thumb.key]] = Some(pixels),
-            Ok(Preview::Image(pixels)) if keep_pictures && self.pictures.len() < PER_PAGE => self.pictures.push(pixels),
-            Ok(_) => {}
-            Err(message) => self.failed.push((thumb.key, message)),
-        }
-        self.times.push((thumb.micros, thumb.key));
-    }
-
-    /// The five slowest previews, and the commonest reasons previews failed.
-    fn report_slowest_and_failures(mut self, sample: &[&Entry], kind: AssetKind) {
-        let names: HashMap<i64, (&str, u64)> =
-            sample.iter().map(|entry| (entry.key, (entry.rel.as_str(), entry.size))).collect();
-        self.times.sort_unstable_by(|a, b| b.cmp(a));
-        for (micros, key) in self.times.iter().take(5) {
-            let (rel, size) = names[key];
-            println!("    slowest: {:>7.0} ms  {:>9} KB  {rel}", *micros as f64 / 1000.0, size / 1024);
-        }
-        let mut reasons: HashMap<String, usize> = HashMap::new();
-        for (key, message) in &self.failed {
-            let ext = names[key].0.rsplit('.').next().unwrap_or("").to_lowercase();
-            *reasons.entry(format!(".{ext}: {}", message.chars().take(70).collect::<String>())).or_default() += 1;
-        }
-        let mut reasons: Vec<_> = reasons.into_iter().collect();
-        reasons.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
-        for (reason, count) in reasons.iter().take(if kind == AssetKind::Model { 20 } else { 6 }) {
-            println!("    failed x{count}: {reason}");
-        }
-    }
-}
-
-/// Whether a model is textured, missing a texture, only a picture (.blend), only a skeleton, and
-/// animated.
-fn contents(info: &ModelInfo) -> [bool; 5] {
-    let picture_only = info.format.starts_with("Blender");
-    [
-        info.textures > 0,
-        info.missing_textures > 0,
-        picture_only,
-        !info.geometry && !picture_only,
-        !info.animations.is_empty(),
-    ]
-}
-
-/// What the models were, and the textures decoded for them since `before`.
-fn report_models(contents: &[usize; 5], before: TextureStats) {
-    let [textured, missing, pictures, skeletons, animated] = *contents;
-    println!(
-        "    {textured} textured, {missing} missing a texture, {pictures} .blend pictures, \
-         {skeletons} skeletons only, {animated} animated"
-    );
-    let textures = model::texture_stats();
-    let decoded = textures.decoded - before.decoded;
-    let micros = textures.decode_micros - before.decode_micros;
-    println!(
-        "    textures: {} decoded ({:.0} ms of work, {:.1} ms each), {} reused from memory",
-        grouped(decoded as usize),
-        micros as f64 / 1000.0,
-        micros as f64 / 1000.0 / decoded.max(1) as f64,
-        grouped((textures.reused - before.reused) as usize),
-    );
-}
-
 /// Where each model's time goes, one file after another with the files already in memory: reading
 /// the file (with its textures, which the cold pass left in the texture cache) and rendering.
 fn model_stages(library: &Library, sample: &[&Entry]) {
@@ -434,7 +255,8 @@ fn model_stages(library: &Library, sample: &[&Entry]) {
     println!("    load:   {}", summary(loading));
     println!("    render: {}", summary(rendering));
     let mut formats: Vec<_> = by_format.into_iter().collect();
-    formats.sort_unstable_by_key(|(_, (count, ..))| std::cmp::Reverse(*count));
+    // Most first; formats with as many by name, so runs print alike.
+    formats.sort_unstable_by(|(a, (a_count, ..)), (b, (b_count, ..))| b_count.cmp(a_count).then_with(|| a.cmp(b)));
     for (format, (count, loaded, rendered)) in formats {
         println!(
             "    {format:<8} x{count:<4} load {:.1} ms, render {:.1} ms on average",
@@ -442,42 +264,6 @@ fn model_stages(library: &Library, sample: &[&Entry]) {
             ms(rendered) / count as f64
         );
     }
-}
-
-/// Every model's thumbnail in sample order, a page at a time (`<sheet>-models-<page>.png`),
-/// failures as red cells, with a list of which cell is which file (`<sheet>-models.txt`).
-fn write_model_sheets(path: &Path, sample: &[&Entry], cells: &[Option<Pixels>], failed: &[(i64, String)]) {
-    let stem = path.with_extension("");
-    let failures: HashMap<i64, &str> = failed.iter().map(|(key, message)| (*key, message.as_str())).collect();
-    let mut legend = String::new();
-    for (page, start) in (0..cells.len()).step_by(PER_PAGE).enumerate() {
-        let end = (start + PER_PAGE).min(cells.len());
-        let side = THUMB_MAX;
-        let failed_cell = Pixels {
-            w: side,
-            h: side,
-            src_w: side,
-            src_h: side,
-            rgba: [200, 40, 40, 160].repeat((side * side) as usize),
-        };
-        let page_cells: Vec<Pixels> = cells[start..end]
-            .iter()
-            .map(|cell| match cell {
-                Some(cell) => Pixels { rgba: cell.rgba.clone(), ..*cell },
-                None => Pixels { rgba: failed_cell.rgba.clone(), ..failed_cell },
-            })
-            .collect();
-        let page_path = PathBuf::from(format!("{}-models-{:02}.png", stem.display(), page + 1));
-        write_sheet(&page_path, &page_cells);
-        for (i, entry) in sample[start..end].iter().enumerate() {
-            let failure = failures.get(&entry.key).map(|message| format!("  FAILED: {message}")).unwrap_or_default();
-            let (row, column) = (i / COLUMNS + 1, i % COLUMNS + 1);
-            legend.push_str(&format!("{:02} r{row} c{column}  {}{failure}\n", page + 1, entry.rel));
-        }
-    }
-    let legend_path = PathBuf::from(format!("{}-models.txt", stem.display()));
-    std::fs::write(&legend_path, legend).expect("write contact sheet legend");
-    println!("    contact sheets: {}-models-NN.png, legend {}", stem.display(), legend_path.display());
 }
 
 /// What playback waits for before the first audio: opening the file and decoding its first
@@ -524,32 +310,6 @@ impl Timings {
         let total: Duration = times.iter().sum();
         Some(Self { median: ms(times[times.len() / 2]), mean: ms(total) / times.len() as f64, worst: ms(worst) })
     }
-}
-
-/// Lays thumbnails out on a checkerboard, `COLUMNS` to a row, to check them by eye.
-fn write_sheet(path: &std::path::Path, cells: &[Pixels]) {
-    let cell_side = THUMB_MAX + 8;
-    let columns = COLUMNS as u32;
-    let rows = (cells.len() as u32).div_ceil(columns);
-    let mut sheet = image::RgbaImage::from_fn(columns * cell_side, rows * cell_side, |x, y| {
-        let light = ((x / 8) + (y / 8)) % 2 == 0;
-        let v = if light { 200 } else { 160 };
-        image::Rgba([v, v, v, 255])
-    });
-    for (i, cell) in cells.iter().enumerate() {
-        let (ox, oy) = ((i as u32 % columns) * cell_side + 4, (i as u32 / columns) * cell_side + 4);
-        for y in 0..cell.h {
-            for x in 0..cell.w {
-                let s = &cell.rgba[((y * cell.w + x) * 4) as usize..][..4];
-                let d = sheet.get_pixel_mut(ox + x, oy + y);
-                let a = s[3] as u32;
-                for (dst, &src) in d.0.iter_mut().zip(s).take(3) {
-                    *dst = ((src as u32 * a + *dst as u32 * (255 - a)) / 255) as u8;
-                }
-            }
-        }
-    }
-    sheet.save(path).expect("write contact sheet");
 }
 
 fn ms(duration: Duration) -> f64 {
