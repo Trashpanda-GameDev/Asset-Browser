@@ -10,10 +10,10 @@ use std::sync::Arc;
 use crossbeam_channel::{Receiver, Sender};
 use fast_image_resize as fr;
 
-use crate::animated;
+use crate::animated::{self, GifError};
 use crate::asset::AssetKind;
-use crate::imaging::{self, Pixels};
-use crate::model::{self, LoadOptions, Model};
+use crate::imaging::{self, PictureError, Pixels};
+use crate::model::{self, LoadOptions, Model, ModelError};
 use crate::sheets::{self, Sheet};
 use crate::work::{self, Wake, WorkList};
 
@@ -49,9 +49,24 @@ impl DetailModel {
     }
 }
 
+/// Why there's no large preview. The inspector shows the message.
+#[derive(Debug, thiserror::Error)]
+pub enum DetailError {
+    #[error("{0}")]
+    Picture(#[from] PictureError),
+    #[error("{0}")]
+    Gif(#[from] GifError),
+    #[error("{0}")]
+    Model(#[from] ModelError),
+    #[error("sounds have no large preview")]
+    NoneForSounds,
+    #[error("the decoder crashed on this file")]
+    Crashed,
+}
+
 pub struct Loaded {
     pub key: i64,
-    pub result: Result<Detail, String>,
+    pub result: Result<Detail, DetailError>,
 }
 
 struct Request {
@@ -102,10 +117,10 @@ fn run(requests: &WorkList<Request>, results: &Sender<Loaded>, on_result: &(dyn 
             AssetKind::Image => load_picture(&request.path, &mut resizer, &superseded),
             AssetKind::Model => model::load(&request.path, &LoadOptions { max_texture: DETAIL_MAX })
                 .map(|model| Detail::Model(Arc::new(DetailModel::prepare(model))))
-                .map_err(|err| err.to_string()),
-            AssetKind::Audio => Err("sounds have no large preview".to_owned()),
+                .map_err(DetailError::from),
+            AssetKind::Audio => Err(DetailError::NoneForSounds),
         }))
-        .unwrap_or_else(|_| Err("the decoder crashed on this file".into()));
+        .unwrap_or_else(|_| Err(DetailError::Crashed));
         imaging::trim_resizer(&mut resizer);
         if results.send(Loaded { key: request.key, result }).is_err() {
             return;
@@ -115,17 +130,31 @@ fn run(requests: &WorkList<Request>, results: &Sender<Loaded>, on_result: &(dyn 
 }
 
 /// The picture, and its frames: an animated GIF's own, or a sprite sheet's when it looks like one.
-fn load_picture(path: &Path, resizer: &mut fr::Resizer, superseded: &dyn Fn() -> bool) -> Result<Detail, String> {
+fn load_picture(path: &Path, resizer: &mut fr::Resizer, superseded: &dyn Fn() -> bool) -> Result<Detail, DetailError> {
     if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("gif")) {
-        let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+        let bytes = std::fs::read(path).map_err(PictureError::from)?;
         match animated::load_gif(&bytes, resizer, superseded) {
             Ok(Some((pixels, sheet))) => return Ok(Detail::Image(pixels, Some(sheet))),
-            Err(err) if superseded() => return Err(err.to_string()),
+            Err(err) if superseded() => return Err(err.into()),
             // A still GIF is a picture like any other; so is one whose frames can't all be read.
             Ok(None) | Err(_) => {}
         }
     }
-    let pixels = imaging::make_image(path, resizer, DETAIL_MAX).map_err(|err| err.to_string())?;
+    let pixels = imaging::make_image(path, resizer, DETAIL_MAX)?;
     let sheet = sheets::detect(path, &pixels);
     Ok(Detail::Image(pixels, sheet))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn messages_stay_as_they_are_shown() {
+        assert_eq!(DetailError::NoneForSounds.to_string(), "sounds have no large preview");
+        assert_eq!(DetailError::Crashed.to_string(), "the decoder crashed on this file");
+        // A reader's error reads as it did.
+        assert_eq!(DetailError::from(PictureError::NoPixels).to_string(), "image has no pixels");
+        assert_eq!(DetailError::from(GifError::Stopped).to_string(), "no longer wanted");
+    }
 }

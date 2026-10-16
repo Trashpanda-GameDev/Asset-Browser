@@ -119,7 +119,7 @@ impl Inspector {
                 DetailState::Image { texture, size, pixels: Arc::new(pixels), sheet }
             }
             Ok(Detail::Model(model)) => DetailState::Model(model),
-            Err(message) => DetailState::Failed(message),
+            Err(error) => DetailState::Failed(error.to_string()),
         };
     }
 
