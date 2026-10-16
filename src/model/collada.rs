@@ -42,8 +42,7 @@ pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<
         "X_UP" => [[0.0, 1.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
         _ => IDENTITY,
     };
-    let scale = [[meters, 0.0, 0.0, 0.0], [0.0, meters, 0.0, 0.0], [0.0, 0.0, meters, 0.0], [0.0, 0.0, 0.0, 1.0]];
-    let space = geometry::mul(&axes, &scale);
+    let space = geometry::mul(&axes, &geometry::scaling([meters; 3]));
 
     let mut reader = Reader {
         ids: &ids,
@@ -94,25 +93,18 @@ fn numbers<T: std::str::FromStr>(node: Option<Node>) -> Vec<T> {
         .unwrap_or_default()
 }
 
-/// A Collada matrix: 16 numbers, row by row.
-fn matrix_from_rows(values: &[f32]) -> Option<Mat4> {
-    (values.len() >= 16).then(|| std::array::from_fn(|column| std::array::from_fn(|row| values[row * 4 + column])))
-}
-
 /// A node's own transform: its transform elements multiplied in order.
 fn local_transform(node: Node) -> Mat4 {
     let mut m = IDENTITY;
     for element in node.children().filter(Node::is_element) {
         let values: Vec<f32> = numbers(Some(element));
         let step: Option<Mat4> = match (element.tag_name().name(), values.as_slice()) {
-            ("matrix", values) => matrix_from_rows(values),
-            ("translate", [x, y, z, ..]) => {
-                Some([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [*x, *y, *z, 1.0]])
+            ("matrix", values) => geometry::from_rows(values),
+            ("translate", [x, y, z, ..]) => Some(geometry::translation([*x, *y, *z])),
+            ("scale", [x, y, z, ..]) => Some(geometry::scaling([*x, *y, *z])),
+            ("rotate", [x, y, z, degrees, ..]) => {
+                Some(geometry::rotation(normalize([*x, *y, *z]), degrees.to_radians()))
             }
-            ("scale", [x, y, z, ..]) => {
-                Some([[*x, 0.0, 0.0, 0.0], [0.0, *y, 0.0, 0.0], [0.0, 0.0, *z, 0.0], [0.0, 0.0, 0.0, 1.0]])
-            }
-            ("rotate", [x, y, z, degrees, ..]) => Some(rotation(normalize([*x, *y, *z]), degrees.to_radians())),
             _ => None,
         };
         if let Some(step) = step {
@@ -120,19 +112,6 @@ fn local_transform(node: Node) -> Mat4 {
         }
     }
     m
-}
-
-/// Rotation by `angle` radians about the unit `axis`.
-fn rotation(axis: [f32; 3], angle: f32) -> Mat4 {
-    let [x, y, z] = axis;
-    let (s, c) = angle.sin_cos();
-    let t = 1.0 - c;
-    [
-        [t * x * x + c, t * x * y + s * z, t * x * z - s * y, 0.0],
-        [t * x * y - s * z, t * y * y + c, t * y * z + s * x, 0.0],
-        [t * x * z + s * y, t * y * z - s * x, t * z * z + c, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ]
 }
 
 /// One input of a primitive: which source, at which offset in each corner's indices.
@@ -206,7 +185,7 @@ impl<'a, 'input> Reader<'a, 'input> {
                     let Some(skin) = controller.and_then(|controller| child(controller, "skin")) else { continue };
                     let Some(geometry) = skin.attribute("source").and_then(|url| self.target(url)) else { continue };
                     let bind_shape =
-                        matrix_from_rows(&numbers::<f32>(child(skin, "bind_shape_matrix"))).unwrap_or(IDENTITY);
+                        geometry::from_rows(&numbers::<f32>(child(skin, "bind_shape_matrix"))).unwrap_or(IDENTITY);
                     let bindings = self.bindings(element);
                     self.add_geometry(geometry, &geometry::mul(&matrix, &bind_shape), &bindings);
                 }
@@ -571,12 +550,5 @@ mod tests {
         let no_geometry =
             QUAD.replace("<p>0 0 1 1 2 2 3 3</p>", "<p>0 0 1</p>").replace("<p>0 2 1</p>", "<p>9 9 9</p>");
         assert!(parse(no_geometry.as_bytes(), Path::new("test.dae"), &LoadOptions::default()).is_err());
-    }
-
-    #[test]
-    fn rotation_matches_right_hand_rule() {
-        let quarter = rotation([0.0, 0.0, 1.0], std::f32::consts::FRAC_PI_2);
-        let p = geometry::transform_point(&quarter, [1.0, 0.0, 0.0]);
-        assert!((p[0]).abs() < 1e-6 && (p[1] - 1.0).abs() < 1e-6);
     }
 }

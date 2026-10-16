@@ -27,6 +27,32 @@ pub(super) fn mul(a: &Mat4, b: &Mat4) -> Mat4 {
     out
 }
 
+/// 16 numbers row by row, as Collada stores a matrix; `None` when there are fewer.
+pub(super) fn from_rows(values: &[f32]) -> Option<Mat4> {
+    (values.len() >= 16).then(|| std::array::from_fn(|column| std::array::from_fn(|row| values[row * 4 + column])))
+}
+
+pub(super) fn translation([x, y, z]: [f32; 3]) -> Mat4 {
+    [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [x, y, z, 1.0]]
+}
+
+pub(super) fn scaling([x, y, z]: [f32; 3]) -> Mat4 {
+    [[x, 0.0, 0.0, 0.0], [0.0, y, 0.0, 0.0], [0.0, 0.0, z, 0.0], [0.0, 0.0, 0.0, 1.0]]
+}
+
+/// Rotation by `angle` radians about the unit `axis`, by the right-hand rule.
+pub(super) fn rotation(axis: [f32; 3], angle: f32) -> Mat4 {
+    let [x, y, z] = axis;
+    let (s, c) = angle.sin_cos();
+    let t = 1.0 - c;
+    [
+        [t * x * x + c, t * x * y + s * z, t * x * z - s * y, 0.0],
+        [t * x * y - s * z, t * y * y + c, t * y * z + s * x, 0.0],
+        [t * x * z + s * y, t * y * z - s * x, t * z * z + c, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+}
+
 pub(super) fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
     [0, 1, 2].map(|row| m[0][row] * p[0] + m[1][row] * p[1] + m[2][row] * p[2] + m[3][row])
 }
@@ -195,6 +221,18 @@ mod tests {
         let mut indices = [0, 1, 2, 3, 4, 5];
         flip_winding(&mut indices);
         assert_eq!(indices, [0, 2, 1, 3, 5, 4]);
+    }
+
+    #[test]
+    fn matrices_place_points_as_named() {
+        let quarter = rotation([0.0, 0.0, 1.0], std::f32::consts::FRAC_PI_2);
+        let p = transform_point(&quarter, [1.0, 0.0, 0.0]);
+        assert!((p[0]).abs() < 1e-6 && (p[1] - 1.0).abs() < 1e-6, "right-hand rule: {p:?}");
+        let moved = mul(&translation([1.0, 2.0, 3.0]), &scaling([2.0; 3]));
+        assert_eq!(transform_point(&moved, [1.0, 1.0, 1.0]), [3.0, 4.0, 5.0], "scaled, then moved");
+        let rows: Vec<f32> = (0..16).map(|i| i as f32).collect();
+        assert_eq!(from_rows(&rows).map(|m| m[3]), Some([3.0, 7.0, 11.0, 15.0]), "the last column holds the move");
+        assert_eq!(from_rows(&rows[..15]), None);
     }
 
     fn vertex(position: [f32; 3]) -> Vertex {
