@@ -68,12 +68,24 @@ pub struct Updates {
     started: Option<Instant>,
     /// When a check last found nothing newer.
     checked: Option<SystemTime>,
-    /// The check under way was asked for, so its answer is shown; and when that answer came.
-    asked: bool,
-    answered: Option<Instant>,
-    downloaded: Option<Box<UpdateInfo>>,
-    /// Velopack's updater is waiting for the app to close, to install the download.
-    installing: bool,
+    asked: Asked,
+    download: Download,
+}
+
+/// A check someone asked for, whose answer is shown for a moment.
+enum Asked {
+    No,
+    /// Under way.
+    Waiting,
+    Answered(Instant),
+}
+
+/// The update that was downloaded.
+enum Download {
+    None,
+    Ready(Box<UpdateInfo>),
+    /// Handed to Velopack's updater, which installs it once the app has closed.
+    Installing,
 }
 
 impl Updates {
@@ -93,10 +105,8 @@ impl Updates {
             repaint,
             started: None,
             checked: None,
-            asked: false,
-            answered: None,
-            downloaded: None,
-            installing: false,
+            asked: Asked::No,
+            download: Download::None,
         };
         updates.check(false);
         updates
@@ -121,12 +131,15 @@ impl Updates {
 
     /// The check under way was asked for.
     pub fn asked(&self) -> bool {
-        self.asked
+        matches!(self.asked, Asked::Waiting)
     }
 
     /// When a check that was asked for ended, to show its answer for a moment.
     pub fn answered(&self) -> Option<Instant> {
-        self.answered
+        match self.asked {
+            Asked::Answered(at) => Some(at),
+            Asked::No | Asked::Waiting => None,
+        }
     }
 
     /// When a check last found nothing newer.
@@ -148,8 +161,7 @@ impl Updates {
         if work::spawn("updates", move || check_and_download(&manager, &tx, &*repaint)).is_some() {
             self.status = Status::Checking;
             self.started = Some(Instant::now());
-            self.asked = asked;
-            self.answered = None;
+            self.asked = if asked { Asked::Waiting } else { Asked::No };
         } else {
             self.status = Status::Failed { action: "check for updates", error: "the check couldn't start".to_owned() };
         }
@@ -172,7 +184,7 @@ impl Updates {
                 }
                 Event::Downloaded(update) => {
                     self.status = Status::Ready { version: update.TargetFullRelease.Version.clone() };
-                    self.downloaded = Some(update);
+                    self.download = Download::Ready(update);
                     self.answer();
                 }
                 Event::Failed { action, error } => {
@@ -187,8 +199,8 @@ impl Updates {
     }
 
     fn answer(&mut self) {
-        if std::mem::take(&mut self.asked) {
-            self.answered = Some(Instant::now());
+        if let Asked::Waiting = self.asked {
+            self.asked = Asked::Answered(Instant::now());
         }
     }
 
@@ -204,14 +216,11 @@ impl Updates {
     }
 
     fn install(&mut self, restart: bool) -> bool {
-        let (Some(manager), Some(update)) = (&self.manager, &self.downloaded) else { return false };
-        if self.installing {
-            return false;
-        }
+        let (Some(manager), Download::Ready(update)) = (&self.manager, &self.download) else { return false };
         // Restarting shows the updater's progress; closing doesn't pop anything up afterwards.
         match manager.wait_exit_then_apply_updates(&**update, !restart, restart, Vec::<&str>::new()) {
             Ok(()) => {
-                self.installing = true;
+                self.download = Download::Installing;
                 true
             }
             Err(err) => {
@@ -303,7 +312,7 @@ mod tests {
         assert_eq!(updates.status(), &offline);
         assert!(updates.answered().is_none());
 
-        updates.asked = true;
+        updates.asked = Asked::Waiting;
         updates.tx.send(Event::UpToDate).unwrap();
         updates.poll();
         assert_eq!(updates.status(), &Status::UpToDate);
