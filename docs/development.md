@@ -31,7 +31,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/groups.rs` | Favorites, collections and categories, and where their members are in the library |
 | `src/sheets.rs` | Sprite sheets: reading Aseprite / TexturePacker data, guessing grids, per-file choices |
 | `src/animated.rs` | Animated GIFs as sheets of their own frames, within a memory budget |
-| `src/app.rs` | The window: panels, keyboard, modes, settings |
+| `src/app/` | The window's state (`BrowserApp`, in `mod.rs`) and what it does, a file an area: the library's folders and scans (`library.rs`), what's browsed and selected (`view.rs`), keys and asset actions (`actions.rs`), favorites, collections and categories (`organizing.rs`), deleting (`deleting.rs`), settings (`settings.rs`), the window's parts (`header.rs`, `toolbar.rs`, `sidebar.rs`, `panels.rs`, `toast.rs`), and the screenshots tool's hooks (`screenshots.rs`) |
 | `src/ui/mode.rs` | The modes, what each remembers, and the selection |
 | `src/ui/browse.rs` | The grid and the list (with each mode's columns) |
 | `src/ui/inspector.rs` | The preview pane, with a section per kind |
@@ -151,7 +151,7 @@ What belongs to one kind of asset lives in a few known places, so a new tool for
 
 - What the mode browses, its name and icon: `Mode` in `src/ui/mode.rs`.
 - Its list columns: `columns()` in `src/ui/browse.rs`.
-- Its options above the assets: the `match mode` at the end of `BrowserApp::toolbar` in `src/app.rs`.
+- Its options above the assets: the `match mode` at the end of `BrowserApp::toolbar` in `src/app/toolbar.rs`.
 - Its part of the preview pane: `image_section`, `sound_section` or `model_section`, and the matching
   `*_properties`, in `src/ui/inspector.rs`.
-- Anything it should remember: `load_settings` and `save_settings` in `src/app.rs`.
+- Anything it should remember: `load_settings` and `save_settings` in `src/app/settings.rs`.

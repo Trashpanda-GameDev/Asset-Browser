@@ -1,0 +1,303 @@
+//! Deleting files and folders to the Recycle Bin: the question, the job on its own thread, and
+//! the library catching up afterwards.
+
+use std::collections::HashSet;
+use std::path::PathBuf;
+
+use crossbeam_channel::Receiver;
+use eframe::egui::{self, Align, Key, Layout, Modifiers, RichText};
+use egui_phosphor::regular as icon;
+
+use crate::deletion::{self, Deleted};
+use crate::groups::UNCATEGORIZED;
+use crate::library;
+use crate::scan::ScannedFile;
+use crate::ui::format::grouped;
+use crate::ui::organize::{GroupCommand, Targets, plural};
+use crate::ui::{theme, widgets};
+use crate::{diag, platform};
+
+use super::BrowserApp;
+
+/// Files or a folder to delete, waiting for "Delete?" to be answered.
+pub(super) struct DeleteRequest {
+    paths: Vec<PathBuf>,
+    /// For the messages: "3 files", "\u{201c}hero.png\u{201d}", "the folder \u{201c}ui\u{201d}".
+    what: String,
+    /// The dialog's question, and what it lists.
+    title: String,
+    details: String,
+    /// On a drive with no Recycle Bin, so it can't be undone.
+    permanent: bool,
+    /// The group being browsed: the files could just be taken out of it instead.
+    group: Option<i64>,
+    after: AfterDelete,
+}
+
+/// Where to be once the files are gone, as in a file manager.
+#[derive(Clone, Default)]
+struct AfterDelete {
+    /// The asset after them in the view, to select (by cache key).
+    next: Option<i64>,
+    /// A deleted folder and its parent (`DirNode::key`s): the parent is browsed instead if the
+    /// folder, or one inside it, was.
+    folder: Option<String>,
+    parent: Option<String>,
+}
+
+/// A deletion under way.
+pub(super) struct Deleting {
+    rx: Receiver<Deleted>,
+    what: String,
+    permanent: bool,
+    after: AfterDelete,
+}
+
+impl BrowserApp {
+    /// "Delete these?" for the selection: the Delete key, or the asset menu.
+    pub(super) fn ask_to_delete_selection(&mut self) {
+        if self.deleting.is_some() {
+            self.notify("Still deleting the last ones…".to_owned());
+            return;
+        }
+        let items = self.selected_in_order();
+        let Some(library) = &self.library else { return };
+        if items.is_empty() {
+            return;
+        }
+        let entry = |index: u32| &library.entries[index as usize];
+        let paths: Vec<PathBuf> = items.iter().map(|&index| library.path_of(entry(index))).collect();
+        let names: Vec<&str> = items.iter().take(3).map(|&index| entry(index).name()).collect();
+        // One file is named in the question, so this says where it is; several are listed.
+        let details = match items.as_slice() {
+            &[index] => {
+                let root = &library.roots[entry(index).root as usize].name;
+                let folder = entry(index).folder();
+                if folder.is_empty() {
+                    format!("In {root}")
+                } else {
+                    format!("In {root} › {}", folder.replace('/', " › "))
+                }
+            }
+            _ if items.len() > names.len() => {
+                format!("{} and {} more", names.join(", "), grouped(items.len() - names.len()))
+            }
+            _ => names.join(", "),
+        };
+        // The asset after them takes the selection afterwards, or else the one before.
+        let chosen: HashSet<u32> = items.iter().copied().collect();
+        let focus = self.mode_view().selection.focus;
+        let at = focus.and_then(|focus| self.view.iter().position(|&index| index == focus)).unwrap_or(0);
+        let next = self.view[at..]
+            .iter()
+            .chain(self.view[..at].iter().rev())
+            .find(|index| !chosen.contains(index))
+            .map(|&index| entry(index).key);
+        let what = match names.as_slice() {
+            [name] if items.len() == 1 => format!("\u{201c}{name}\u{201d}"),
+            _ => plural(items.len(), "file"),
+        };
+        self.confirm_files = Some(DeleteRequest {
+            title: format!("Delete {what}?"),
+            details,
+            permanent: !paths.iter().all(|path| platform::has_trash(path)),
+            group: self.group.filter(|&id| id != UNCATEGORIZED),
+            after: AfterDelete { next, ..AfterDelete::default() },
+            paths,
+            what,
+        });
+    }
+
+    /// "Delete this folder?" from its menu in the tree. The library's own folders are only ever
+    /// taken out of the library (`remove_root`), never deleted from here.
+    pub(super) fn ask_to_delete_folder(&mut self, dir: u32) {
+        if self.deleting.is_some() {
+            self.notify("Still deleting the last ones…".to_owned());
+            return;
+        }
+        let Some(library) = &self.library else { return };
+        let Some(node) = library.dirs.get(dir as usize).filter(|node| node.root.is_some() && !node.lower.is_empty())
+        else {
+            return;
+        };
+        let Some(path) = library.dir_path(dir) else { return };
+        let assets: u32 = node.totals.iter().sum();
+        let parent = node.parent.and_then(|parent| library.dirs.get(parent as usize)).map(|parent| parent.key.clone());
+        let what = format!("the folder \u{201c}{}\u{201d}", node.name);
+        self.confirm_files = Some(DeleteRequest {
+            title: format!("Delete {what}?"),
+            details: format!(
+                "Everything in it goes with it: {} and any other files.",
+                plural(assets as usize, "asset")
+            ),
+            permanent: !platform::has_trash(&path),
+            group: None,
+            after: AfterDelete { next: None, folder: Some(node.key.clone()), parent },
+            paths: vec![path],
+            what,
+        });
+    }
+
+    /// "Delete?", saying where things go. Enter deletes when it can be undone; Esc cancels.
+    pub(super) fn delete_files_dialog(&mut self, ctx: &egui::Context) {
+        enum Choice {
+            Delete,
+            /// Take the files out of the group being browsed instead.
+            TakeOut(i64),
+            Cancel,
+        }
+        let Some(request) = &self.confirm_files else { return };
+        let bin = platform::trash_name();
+        let group = request.group.and_then(|id| self.groups.get(id)).map(|group| (group.id, group.name.clone()));
+        let mut choice = None;
+        let modal = egui::Modal::new(egui::Id::new("delete-files")).show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.label(RichText::new(&request.title).font(egui::FontId::new(15.0, theme::semibold())));
+            ui.add_space(4.0);
+            ui.add(egui::Label::new(RichText::new(&request.details).color(theme::TEXT_WEAK)).wrap());
+            ui.add_space(6.0);
+            let note = if request.permanent {
+                RichText::new(format!("{}  This drive has no {bin}, so this can't be undone.", icon::WARNING))
+                    .color(theme::ERROR)
+            } else {
+                RichText::new(format!("Deleted files and folders go to the {bin}, so they can be put back."))
+                    .color(theme::TEXT_FAINT)
+            };
+            ui.add(egui::Label::new(note.size(12.5)).wrap());
+            ui.add_space(12.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let label = if request.permanent { "Delete for good" } else { "Delete" };
+                if widgets::button(ui, icon::TRASH, label).clicked() {
+                    choice = Some(Choice::Delete);
+                }
+                if widgets::button(ui, "", "Cancel").clicked() {
+                    choice = Some(Choice::Cancel);
+                }
+                if let Some((id, name)) = &group {
+                    let take_out = widgets::button(ui, icon::MINUS_CIRCLE, &format!("Only take out of {name}"));
+                    if take_out.on_hover_text("The files stay where they are").clicked() {
+                        choice = Some(Choice::TakeOut(*id));
+                    }
+                }
+            });
+        });
+        let enter = !request.permanent && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter));
+        if choice.is_none() && enter {
+            choice = Some(Choice::Delete);
+        }
+        if choice.is_none() && modal.should_close() {
+            choice = Some(Choice::Cancel);
+        }
+        let Some(choice) = choice else { return };
+        let Some(request) = self.confirm_files.take() else { return };
+        match choice {
+            Choice::Delete => self.start_deleting(request),
+            Choice::TakeOut(id) => self.run_group_command(GroupCommand::Remove(id, Targets::Paths(request.paths))),
+            Choice::Cancel => {}
+        }
+    }
+
+    fn start_deleting(&mut self, request: DeleteRequest) {
+        // A sound that's being deleted stops first.
+        if let (Some(library), Some((index, _))) = (&self.library, self.sound.playing)
+            && let Some(entry) = library.entries.get(index as usize)
+        {
+            let playing = library.path_of(entry);
+            if request.paths.iter().any(|path| library::is_within(&playing, path)) {
+                self.sound.reset();
+            }
+        }
+        let ctx = self.ctx.clone();
+        let rx = deletion::start(request.paths, move || ctx.request_repaint());
+        self.deleting = Some(Deleting { rx, what: request.what, permanent: request.permanent, after: request.after });
+    }
+
+    /// Takes in a finished deletion: drops what went from the library, moves to what's next, and
+    /// says how it went.
+    pub(super) fn poll_deleting(&mut self) {
+        let Some(job) = self.deleting.take() else { return };
+        let deleted = match job.rx.try_recv() {
+            Ok(deleted) => deleted,
+            Err(crossbeam_channel::TryRecvError::Empty) => {
+                self.deleting = Some(job);
+                return;
+            }
+            // The thread couldn't start (that's reported) or died.
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                self.notify(format!("Couldn't delete {}", job.what));
+                return;
+            }
+        };
+        if !deleted.gone.is_empty() {
+            // Browsing the deleted folder, or one inside it: its parent is shown instead.
+            let browsing_it = job.after.folder.as_ref().is_some_and(|folder| {
+                let shown = self.library.as_ref().and_then(|library| library.dirs.get(self.selected_dir as usize));
+                self.group.is_none()
+                    && shown.is_some_and(|dir| dir.key == *folder || dir.key.starts_with(&format!("{folder}/")))
+            });
+            self.forget_paths(&deleted.gone);
+            if browsing_it
+                && let Some(dir) = job.after.parent.as_ref().and_then(|parent| self.library.as_ref()?.find_dir(parent))
+            {
+                self.select_dir(dir);
+            }
+            // The asset after the deleted ones takes the selection, as in a file manager. The view
+            // is rebuilt first: it held indices into the old library.
+            self.refresh_membership();
+            if self.view_dirty {
+                self.rebuild_view();
+            }
+            let next = job.after.next.and_then(|key| {
+                let library = self.library.as_ref()?;
+                library.entries.iter().position(|entry| entry.key == key).map(|index| index as u32)
+            });
+            if self.mode_view().selection.is_empty()
+                && let Some(index) = next.filter(|index| self.view.contains(index))
+            {
+                self.mode_view_mut().selection.only(index);
+                self.scroll_to_focus = true;
+                self.focused(index);
+            }
+        }
+        match &deleted.error {
+            None if job.permanent => self.notify(format!("Deleted {}", job.what)),
+            None => self.notify(format!("Moved {} to the {}", job.what, platform::trash_name())),
+            Some(error) => {
+                let mut kept: Vec<String> = deleted.kept.iter().take(3).map(|path| platform::native(path)).collect();
+                if deleted.kept.len() > kept.len() {
+                    kept.push(format!("and {} more", grouped(deleted.kept.len() - kept.len())));
+                }
+                diag::report(&format!("Couldn't delete {}", kept.join(", ")), error);
+                self.notify(if deleted.gone.is_empty() {
+                    format!("Couldn't delete {}: see the status bar", job.what)
+                } else {
+                    format!("Deleted {}, but not {}", plural(deleted.gone.len(), "file"), grouped(deleted.kept.len()))
+                });
+            }
+        }
+    }
+
+    /// Drops deleted files and folders from the library at once; a rescan of their library
+    /// folders follows, to make sure and to save the index.
+    fn forget_paths(&mut self, gone: &[PathBuf]) {
+        let Some(library) = &self.library else { return };
+        let mut by_root: Vec<(u16, Vec<String>)> = Vec::new();
+        for path in gone {
+            let Some((root, rel)) = library.place_of(path) else { continue };
+            match by_root.iter_mut().find(|(other, _)| *other == root) {
+                Some((_, rels)) => rels.push(rel),
+                None => by_root.push((root, vec![rel])),
+            }
+        }
+        let fresh: Vec<(PathBuf, Vec<ScannedFile>)> = by_root
+            .iter()
+            .map(|(root, rels)| (library.roots[*root as usize].path.clone(), library.files_without(*root, rels)))
+            .collect();
+        if fresh.is_empty() {
+            return;
+        }
+        let rescan: Vec<PathBuf> = fresh.iter().map(|(path, _)| path.clone()).collect();
+        self.rebuild_library(fresh);
+        self.scan(rescan);
+    }
+}
