@@ -14,6 +14,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::imaging::Pixels;
 use crate::{db, diag};
 
 /// Alpha below this counts as transparent when looking for gaps between frames.
@@ -164,29 +165,19 @@ impl Sheet {
     }
 }
 
-/// The picture the guesses look at: as decoded (`w` × `h`, straight RGBA), and the file's own size.
-pub struct Pixels<'a> {
-    pub rgba: &'a [u8],
-    pub w: u32,
-    pub h: u32,
-    pub src_w: u32,
-    pub src_h: u32,
+/// A pixel's alpha in the picture the guesses look at (as decoded, `w` × `h`).
+fn alpha(pixels: &Pixels, x: u32, y: u32) -> u8 {
+    pixels.rgba.get(((y * pixels.w + x) * 4 + 3) as usize).copied().unwrap_or(0)
 }
 
-impl Pixels<'_> {
-    fn alpha(&self, x: u32, y: u32) -> u8 {
-        self.rgba.get(((y * self.w + x) * 4 + 3) as usize).copied().unwrap_or(0)
-    }
-
-    /// Whether a rectangle in file pixels has nothing visible in it.
-    fn is_empty(&self, rect: [u32; 4]) -> bool {
-        let (sx, sy) = (self.w as f32 / self.src_w.max(1) as f32, self.h as f32 / self.src_h.max(1) as f32);
-        let x0 = (rect[0] as f32 * sx) as u32;
-        let y0 = (rect[1] as f32 * sy) as u32;
-        let x1 = (((rect[0] + rect[2]) as f32 * sx).ceil() as u32).min(self.w);
-        let y1 = (((rect[1] + rect[3]) as f32 * sy).ceil() as u32).min(self.h);
-        !(y0..y1).any(|y| (x0..x1).any(|x| self.alpha(x, y) >= CLEAR_ALPHA))
-    }
+/// Whether a rectangle in the file's own pixels (`src_w` × `src_h`) has nothing visible in it.
+fn is_empty(pixels: &Pixels, rect: [u32; 4]) -> bool {
+    let (sx, sy) = (pixels.w as f32 / pixels.src_w.max(1) as f32, pixels.h as f32 / pixels.src_h.max(1) as f32);
+    let x0 = (rect[0] as f32 * sx) as u32;
+    let y0 = (rect[1] as f32 * sy) as u32;
+    let x1 = (((rect[0] + rect[2]) as f32 * sx).ceil() as u32).min(pixels.w);
+    let y1 = (((rect[1] + rect[3]) as f32 * sy).ceil() as u32).min(pixels.h);
+    !(y0..y1).any(|y| (x0..x1).any(|x| alpha(pixels, x, y) >= CLEAR_ALPHA))
 }
 
 /// What's known about a picture as a sprite sheet, or `None` when nothing suggests it is one.
@@ -222,7 +213,7 @@ pub fn from_grid(grid: Grid, pixels: &Pixels, guessed: Guess) -> Sheet {
     // (row, column) → frame index, for the cells that aren't empty.
     let mut at: BTreeMap<(usize, usize), usize> = BTreeMap::new();
     for (index, rect) in cells.into_iter().enumerate() {
-        if pixels.is_empty(rect) {
+        if is_empty(pixels, rect) {
             continue;
         }
         at.insert((index / columns, index % columns), frames.len());
@@ -284,9 +275,9 @@ fn gaps(pixels: &Pixels) -> Option<Grid> {
     // Gaps are looked for in file pixels when the picture is its own size; a shrunk copy's lines
     // are matched to the file's by scale, which is close enough for a starting point.
     let clear_columns: Vec<bool> =
-        (0..pixels.w).map(|x| (0..pixels.h).all(|y| pixels.alpha(x, y) < CLEAR_ALPHA)).collect();
+        (0..pixels.w).map(|x| (0..pixels.h).all(|y| alpha(pixels, x, y) < CLEAR_ALPHA)).collect();
     let clear_rows: Vec<bool> =
-        (0..pixels.h).map(|y| (0..pixels.w).all(|x| pixels.alpha(x, y) < CLEAR_ALPHA)).collect();
+        (0..pixels.h).map(|y| (0..pixels.w).all(|x| alpha(pixels, x, y) < CLEAR_ALPHA)).collect();
     let columns = divide(&clear_columns);
     let rows = divide(&clear_rows);
     if columns.is_none() && rows.is_none() {
@@ -552,8 +543,8 @@ mod tests {
         (rgba, w, h)
     }
 
-    fn pixels(rgba: &[u8], w: u32, h: u32) -> Pixels<'_> {
-        Pixels { rgba, w, h, src_w: w, src_h: h }
+    fn pixels(rgba: &[u8], w: u32, h: u32) -> Pixels {
+        Pixels { rgba: rgba.to_vec(), w, h, src_w: w, src_h: h }
     }
 
     #[test]

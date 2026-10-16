@@ -13,22 +13,16 @@ use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-pub struct Sampled {
-    pub w: u32,
-    pub h: u32,
-    pub src_w: u32,
-    pub src_h: u32,
-    pub rgba: Vec<u8>,
-}
+use super::Pixels;
 
 /// Reads the picture at no less than `2 * max` pixels on its longest side (or its full size if
 /// smaller), so the final resize still has detail to average.
-pub fn read(path: &Path, max: u32) -> Result<Sampled, String> {
+pub fn read(path: &Path, max: u32) -> Result<Pixels, String> {
     read_inner(path, max).map_err(|err| format!("PSD: {err}"))
 }
 
 #[expect(clippy::cognitive_complexity, clippy::too_many_lines, reason = "refactor: split into named steps")]
-fn read_inner(path: &Path, max: u32) -> Result<Sampled, String> {
+fn read_inner(path: &Path, max: u32) -> Result<Pixels, String> {
     let file = File::open(path).map_err(|err| err.to_string())?;
     let mut r = Reader { inner: BufReader::with_capacity(64 * 1024, file), pos: 0 };
 
@@ -168,7 +162,7 @@ fn read_inner(path: &Path, max: u32) -> Result<Sampled, String> {
         };
         px.copy_from_slice(&[unmatte(red), unmatte(green), unmatte(blue), a]);
     }
-    Ok(Sampled { w: out_w, h: out_h, src_w: w, src_h: h, rgba })
+    Ok(Pixels { w: out_w, h: out_h, src_w: w, src_h: h, rgba })
 }
 
 /// Picks every `step`th sample of a decoded row, converted to 8 bits.

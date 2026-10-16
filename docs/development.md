@@ -27,9 +27,9 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/db.rs` | SQLite: opening a file, transactions, the user data file's tables and migrations; the folder index, thumbnail, waveform and model-facts caches, settings |
 | `src/thumbs.rs` | Preview worker pool and cache writer |
 | `src/preview_key.rs` | The key a file's previews are cached under, with the versions to bump when previews are made differently |
-| `src/imaging.rs` | Reading pictures and shrinking them, within a memory budget shared by the threads that decode |
+| `src/imaging/` | Reading pictures and shrinking them, within a memory budget shared by the threads that decode |
 | `src/audio.rs` | Playback (cpal + symphonia, lock-free ring buffer), read-ahead, waveforms |
-| `src/psd_composite.rs` | Reads a PSD/PSB's flattened picture at reduced size |
+| `src/imaging/psd.rs` | Reads a PSD/PSB's flattened picture at reduced size |
 | `src/model/` | 3D models: the loaders, the CPU thumbnail renderer, and the lighting shared with the 3D view |
 | `src/detail.rs` | Loads the preview pane's large picture (or a GIF's frames) or whole model |
 | `src/groups.rs` | Favorites, collections and categories, and where their members are in the library |
@@ -80,7 +80,7 @@ keeps the cache, the log and the user's own data is in the [guide](guide.md#wher
 - **On-screen first.** The grid asks only for the visible rows plus a few around them, every frame; that list replaces
   the work queue, so scrolling past something drops it rather than making it first.
 - **The UI thread never touches the disk or decodes anything,** and only draws the rows on screen.
-- **PSDs are read from their flattened picture,** and only the rows the thumbnail needs (`src/psd_composite.rs`).
+- **PSDs are read from their flattened picture,** and only the rows the thumbnail needs (`src/imaging/psd.rs`).
 - **Memory stays bounded.** A picture is decoded at full size before it's shrunk, so the thumbnail workers share a
   decoding budget (512 MB): big pictures take turns, small ones never wait. Opaque pictures are shrunk without the
   extra copy transparency needs, and no worker keeps its working copy of a big picture afterwards. At most 1,500

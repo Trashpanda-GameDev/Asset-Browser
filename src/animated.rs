@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use fast_image_resize as fr;
 use image::AnimationDecoder;
 
-use crate::imaging::{ThumbPixels, fit_size, shrink};
+use crate::imaging::{Pixels, fit_size, shrink};
 use crate::sheets::{Animation, Frame, Sheet, Source};
 
 /// The frames picture's longest side, and its pixels at most (16 MP: 64 MB, on the GPU too). The
@@ -31,7 +31,7 @@ pub fn load_gif(
     bytes: &[u8],
     resizer: &mut fr::Resizer,
     stop: &dyn Fn() -> bool,
-) -> Result<Option<(ThumbPixels, Sheet)>, String> {
+) -> Result<Option<(Pixels, Sheet)>, String> {
     let (width, height, total) = count_frames(bytes)?;
     if total < 2 || width == 0 || height == 0 {
         return Ok(None);
@@ -76,7 +76,7 @@ pub fn load_gif(
     }
     let animations = vec![Animation { name: "All frames".to_owned(), frames: (0..frames.len()).collect() }];
     let sheet = Sheet { frames, animations, source: Source::Animated { width, height, total } };
-    let pixels = ThumbPixels { w: layout.width, h: layout.height, src_w: layout.width, src_h: layout.height, rgba };
+    let pixels = Pixels { w: layout.width, h: layout.height, src_w: layout.width, src_h: layout.height, rgba };
     Ok(Some((pixels, sheet)))
 }
 

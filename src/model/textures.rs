@@ -388,7 +388,7 @@ fn normalize(path: &Path) -> PathBuf {
 fn decode_file(path: &Path, max: u32, alpha: Alpha) -> Option<Decoded> {
     let name = path.file_name()?.to_string_lossy().into_owned();
     if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("psd")) {
-        let sampled = crate::psd_composite::read(path, max).ok()?;
+        let sampled = crate::imaging::psd::read(path, max).ok()?;
         return finish(&name, sampled.w, sampled.h, sampled.rgba, max, alpha);
     }
     let bytes = std::fs::read(path).ok()?;

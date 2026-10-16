@@ -16,8 +16,8 @@ use eframe::egui::{
 };
 use egui_phosphor::regular as icon;
 
-use crate::imaging::ThumbPixels;
-use crate::sheets::{self, Frame, Guess, Pixels, Saved, Sheet, SheetStore, Source, Split};
+use crate::imaging::Pixels;
+use crate::sheets::{self, Frame, Guess, Saved, Sheet, SheetStore, Source, Split};
 
 use super::browse::fit_rect;
 use super::image_view::ImageView;
@@ -73,12 +73,12 @@ impl SheetView {
     }
 
     /// Takes a newly shown picture: what was detected in it, and the user's choices for it.
-    pub fn load(&mut self, key: String, detected: Option<Sheet>, pixels: &ThumbPixels, now: f64) {
+    pub fn load(&mut self, key: String, detected: Option<Sheet>, pixels: &Pixels, now: f64) {
         let saved = self.store.get(&key);
         // A data file's or a GIF's own frames aren't overridden by a grid.
         let from_file = matches!(detected, Some(Sheet { source: Source::Data(_) | Source::Animated { .. }, .. }));
         self.sheet = match saved.and_then(|saved| saved.grid) {
-            Some(grid) if !from_file => Some(sheets::from_grid(grid, &view(pixels), Guess::User)),
+            Some(grid) if !from_file => Some(sheets::from_grid(grid, pixels, Guess::User)),
             _ => detected.clone(),
         };
         self.animate = match saved {
@@ -118,11 +118,11 @@ impl SheetView {
 
     /// Switches between the picture and its frames played. With nothing detected, the frames
     /// come from a first guess at a grid, to adjust.
-    pub fn toggle(&mut self, pixels: &ThumbPixels, now: f64) {
+    pub fn toggle(&mut self, pixels: &Pixels, now: f64) {
         self.animate = !self.animate;
         if self.animate && self.sheet.is_none() {
-            let grid = sheets::default_grid(&view(pixels));
-            self.sheet = Some(sheets::from_grid(grid, &view(pixels), Guess::Default));
+            let grid = sheets::default_grid(pixels);
+            self.sheet = Some(sheets::from_grid(grid, pixels, Guess::Default));
         }
         self.started = now;
         self.save();
@@ -215,7 +215,7 @@ impl SheetView {
 
     /// Transport, animations, grid and the sheet overview, under the playing frame.
     #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
-    pub fn controls(&mut self, ui: &mut Ui, texture: TextureId, sheet_size: [u32; 2], pixels: &ThumbPixels) {
+    pub fn controls(&mut self, ui: &mut Ui, texture: TextureId, sheet_size: [u32; 2], pixels: &Pixels) {
         let now = ui.input(|input| input.time);
         let mut changed_grid = None;
         let mut save = false;
@@ -386,15 +386,15 @@ impl SheetView {
 
         match changed_grid {
             Some(Some(grid)) => {
-                self.sheet = Some(sheets::from_grid(grid, &view(pixels), Guess::User));
+                self.sheet = Some(sheets::from_grid(grid, pixels, Guess::User));
                 self.animation =
                     self.animation.min(self.sheet.as_ref().map_or(0, |s| s.animations.len().saturating_sub(1)));
                 save = true;
             }
             Some(None) => {
                 self.sheet = self.detected.clone().or_else(|| {
-                    let grid = sheets::default_grid(&view(pixels));
-                    Some(sheets::from_grid(grid, &view(pixels), Guess::Default))
+                    let grid = sheets::default_grid(pixels);
+                    Some(sheets::from_grid(grid, pixels, Guess::Default))
                 });
                 self.animation = 0;
                 save = true;
@@ -413,10 +413,6 @@ fn split_label(split: Split) -> &'static str {
         Split::Columns => "A column each",
         Split::All => "One animation",
     }
-}
-
-fn view(pixels: &ThumbPixels) -> Pixels<'_> {
-    Pixels { rgba: &pixels.rgba, w: pixels.w, h: pixels.h, src_w: pixels.src_w, src_h: pixels.src_h }
 }
 
 /// Draws one frame into `canvas` (the whole frame's area): its pixels at their offset, turned

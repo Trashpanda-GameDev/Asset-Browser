@@ -12,7 +12,7 @@ use fast_image_resize as fr;
 
 use crate::animated;
 use crate::asset::AssetKind;
-use crate::imaging::{self, ThumbPixels};
+use crate::imaging::{self, Pixels};
 use crate::model::{self, LoadOptions, Model};
 use crate::sheets::{self, Sheet};
 use crate::work::{self, Wake, WorkList};
@@ -23,7 +23,7 @@ const DETAIL_MAX: u32 = 2048;
 pub enum Detail {
     /// The picture and its frames: a sprite sheet's, or for an animated GIF all its frames laid
     /// out side by side (`animated`).
-    Image(ThumbPixels, Option<Sheet>),
+    Image(Pixels, Option<Sheet>),
     Model(Arc<Model>),
 }
 
@@ -103,8 +103,6 @@ fn load_picture(path: &Path, resizer: &mut fr::Resizer, superseded: &dyn Fn() ->
         }
     }
     let pixels = imaging::make_image(path, resizer, DETAIL_MAX)?;
-    let view =
-        sheets::Pixels { rgba: &pixels.rgba, w: pixels.w, h: pixels.h, src_w: pixels.src_w, src_h: pixels.src_h };
-    let sheet = sheets::detect(path, &view);
+    let sheet = sheets::detect(path, &pixels);
     Ok(Detail::Image(pixels, sheet))
 }

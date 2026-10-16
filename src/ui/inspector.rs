@@ -14,7 +14,7 @@ use egui_phosphor::regular as icon;
 use crate::asset::AssetKind;
 use crate::detail::{Detail, DetailLoader};
 use crate::groups::{FAVORITES, GroupKind, Groups, Membership};
-use crate::imaging::ThumbPixels;
+use crate::imaging::Pixels;
 use crate::library::{Entry, Library};
 use crate::model::Model;
 use crate::sheets::{Sheet, Source};
@@ -48,7 +48,7 @@ enum DetailState {
         texture: TextureHandle,
         size: [u32; 2],
         /// Kept for the sprite sheet player, which looks for empty frames in it.
-        pixels: Arc<ThumbPixels>,
+        pixels: Arc<Pixels>,
         sheet: Option<Sheet>,
     },
     Model(Arc<Model>),

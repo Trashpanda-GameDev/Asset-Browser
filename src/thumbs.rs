@@ -24,7 +24,7 @@ use crate::db::{
     self, CacheWrite, FORMAT_FAILED, FORMAT_JPEG, FORMAT_QOI, FORMAT_RAW_RGBA, StoredThumb, StoredWaveform,
 };
 use crate::diag;
-use crate::imaging::{self, ThumbPixels};
+use crate::imaging::{self, Pixels};
 use crate::model::{self, LoadOptions, ModelInfo, blend, raster};
 use crate::storage::{self, Part};
 use crate::work::{self, Wake};
@@ -44,12 +44,12 @@ pub struct ThumbJob {
 }
 
 pub enum Preview {
-    Image(ThumbPixels),
+    Image(Pixels),
     Sound(Arc<Waveform>),
     /// A model's thumbnail and what's in the file. The picture is a render, `THUMB_MAX` square
     /// with a transparent background (`src_w` and `src_h` 0), or for a .blend the preview
     /// Blender saved (`src_w` × `src_h` its size).
-    Model(ThumbPixels, Arc<ModelInfo>),
+    Model(Pixels, Arc<ModelInfo>),
 }
 
 pub struct Thumb {
@@ -382,7 +382,7 @@ fn writer_loop(db_path: &Path, jobs: &Receiver<Store>) {
 }
 
 /// Reads an image file and shrinks the picture to fit `THUMB_MAX`.
-fn make_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<ThumbPixels, String> {
+fn make_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<Pixels, String> {
     imaging::make_image(path, resizer, THUMB_MAX)
 }
 
@@ -391,7 +391,7 @@ fn make_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<ThumbPixels,
 /// (`blend::crop_to_content`) and scaled to fit.
 ///
 /// Renders have `src_w` and `src_h` set to 0: they weren't scaled from a picture of known size.
-fn model_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<(ThumbPixels, ModelInfo), String> {
+fn model_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<(Pixels, ModelInfo), String> {
     if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("blend")) {
         let preview = blend::read_preview(path)?;
         let (w, h, rgba) = blend::crop_to_content(&preview);
@@ -402,29 +402,29 @@ fn model_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<(ThumbPixel
     }
     let model = model::load(path, &LoadOptions { max_texture: THUMB_TEXTURE })?;
     let rgba = raster::render_thumbnail(&model, THUMB_MAX);
-    Ok((ThumbPixels { w: THUMB_MAX, h: THUMB_MAX, src_w: 0, src_h: 0, rgba }, model.info))
+    Ok((Pixels { w: THUMB_MAX, h: THUMB_MAX, src_w: 0, src_h: 0, rgba }, model.info))
 }
 
 /// Scales a picture up or down so its longer side is `max`.
-fn fit_picture(w: u32, h: u32, rgba: Vec<u8>, max: u32, resizer: &mut fr::Resizer) -> Result<ThumbPixels, String> {
+fn fit_picture(w: u32, h: u32, rgba: Vec<u8>, max: u32, resizer: &mut fr::Resizer) -> Result<Pixels, String> {
     if w == 0 || h == 0 {
         return Err("the saved preview has no pixels".into());
     }
     let scale = max as f64 / w.max(h) as f64;
     let (fit_w, fit_h) = (((w as f64 * scale).round() as u32).max(1), ((h as f64 * scale).round() as u32).max(1));
     if (fit_w, fit_h) == (w, h) {
-        return Ok(ThumbPixels { w, h, src_w: w, src_h: h, rgba });
+        return Ok(Pixels { w, h, src_w: w, src_h: h, rgba });
     }
     let src = fr::images::Image::from_vec_u8(w, h, rgba, fr::PixelType::U8x4).map_err(|err| err.to_string())?;
     let mut dst = fr::images::Image::new(fit_w, fit_h, fr::PixelType::U8x4);
     let options = fr::ResizeOptions::new().resize_alg(fr::ResizeAlg::Convolution(fr::FilterType::CatmullRom));
     resizer.resize(&src, &mut dst, &options).map_err(|err| err.to_string())?;
-    Ok(ThumbPixels { w: fit_w, h: fit_h, src_w: w, src_h: h, rgba: dst.into_vec() })
+    Ok(Pixels { w: fit_w, h: fit_h, src_w: w, src_h: h, rgba: dst.into_vec() })
 }
 
 /// JPEG for opaque thumbnails (small), QOI when there's transparency (lossless and fast).
-fn encode_stored(pixels: &ThumbPixels) -> StoredThumb {
-    let ThumbPixels { w, h, src_w, src_h, .. } = *pixels;
+fn encode_stored(pixels: &Pixels) -> StoredThumb {
+    let Pixels { w, h, src_w, src_h, .. } = *pixels;
     let opaque = pixels.rgba.as_chunks::<4>().0.iter().all(|px| px[3] == 255);
     let mut data = Vec::new();
     let encoded = if opaque {
@@ -443,7 +443,7 @@ fn encode_stored(pixels: &ThumbPixels) -> StoredThumb {
     }
 }
 
-fn decode_stored(stored: &StoredThumb) -> Result<ThumbPixels, String> {
+fn decode_stored(stored: &StoredThumb) -> Result<Pixels, String> {
     let rgba = match stored.format {
         FORMAT_FAILED => return Err(String::from_utf8_lossy(&stored.data).into_owned()),
         FORMAT_RAW_RGBA => stored.data.clone(),
@@ -455,7 +455,7 @@ fn decode_stored(stored: &StoredThumb) -> Result<ThumbPixels, String> {
                 .into_raw()
         }
     };
-    Ok(ThumbPixels { w: stored.w, h: stored.h, src_w: stored.src_w, src_h: stored.src_h, rgba })
+    Ok(Pixels { w: stored.w, h: stored.h, src_w: stored.src_w, src_h: stored.src_h, rgba })
 }
 
 #[cfg(test)]
@@ -482,7 +482,7 @@ mod tests {
         };
         let mut rgba = vec![0u8; 4 * 4 * 4];
         rgba[0..4].copy_from_slice(&[10, 20, 30, 255]);
-        let pixels = ThumbPixels { w: 4, h: 4, src_w: 0, src_h: 0, rgba };
+        let pixels = Pixels { w: 4, h: 4, src_w: 0, src_h: 0, rgba };
         let job = ThumbJob { key: 7, path: PathBuf::from("a.fbx"), kind: AssetKind::Model };
         let failed = ThumbJob { key: 8, path: PathBuf::from("b.fbx"), kind: AssetKind::Model };
         let writes = [

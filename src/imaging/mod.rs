@@ -1,6 +1,8 @@
 //! Pictures: reading image files (a PSD from its flattened picture), shrinking them to a size, and
 //! the memory decoding takes, shared by the threads that decode.
 
+pub(crate) mod psd;
+
 use std::cell::Cell;
 use std::io::Cursor;
 use std::path::Path;
@@ -10,10 +12,9 @@ use std::sync::{Condvar, Mutex};
 use fast_image_resize as fr;
 use image::ImageFormat;
 
-use crate::psd_composite;
 use crate::work;
 
-pub struct ThumbPixels {
+pub struct Pixels {
     pub w: u32,
     pub h: u32,
     pub src_w: u32,
@@ -21,7 +22,7 @@ pub struct ThumbPixels {
     pub rgba: Vec<u8>,
 }
 
-impl ThumbPixels {
+impl Pixels {
     /// Stored unscaled: draw it with sharp pixels rather than smoothed.
     pub fn is_unscaled(&self) -> bool {
         self.w == self.src_w && self.h == self.src_h
@@ -68,10 +69,10 @@ pub fn join_decode_budget() {
 
 /// Reads an image file and shrinks the picture to fit `max` pixels on its longer side. Pictures
 /// no bigger are kept as they are.
-pub fn make_image(path: &Path, resizer: &mut fr::Resizer, max: u32) -> Result<ThumbPixels, String> {
+pub fn make_image(path: &Path, resizer: &mut fr::Resizer, max: u32) -> Result<Pixels, String> {
     if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("psd")) {
         // Reads only the part of the file it needs, so it opens the file itself.
-        let sampled = psd_composite::read(path, max)?;
+        let sampled = psd::read(path, max)?;
         return shrink(sampled.w, sampled.h, sampled.rgba, sampled.src_w, sampled.src_h, max, resizer);
     }
     let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
@@ -117,25 +118,25 @@ pub(crate) fn shrink(
     src_h: u32,
     max: u32,
     resizer: &mut fr::Resizer,
-) -> Result<ThumbPixels, String> {
+) -> Result<Pixels, String> {
     if w == 0 || h == 0 {
         return Err("image has no pixels".into());
     }
     let (thumb_w, thumb_h) = fit_size(src_w, src_h, max);
     if (thumb_w, thumb_h) == (w, h) {
-        return Ok(ThumbPixels { w, h, src_w, src_h, rgba });
+        return Ok(Pixels { w, h, src_w, src_h, rgba });
     }
     // A fully opaque picture (most textures) needs no premultiplied copy of itself.
     let opaque = rgba.as_chunks::<4>().0.iter().all(|px| px[3] == 255);
     let src = fr::images::Image::from_vec_u8(w, h, rgba, fr::PixelType::U8x4).map_err(|err| err.to_string())?;
     let mut dst = fr::images::Image::new(thumb_w, thumb_h, fr::PixelType::U8x4);
     resizer.resize(&src, &mut dst, &resize_options(!opaque)).map_err(|err| err.to_string())?;
-    Ok(ThumbPixels { w: thumb_w, h: thumb_h, src_w, src_h, rgba: dst.into_vec() })
+    Ok(Pixels { w: thumb_w, h: thumb_h, src_w, src_h, rgba: dst.into_vec() })
 }
 
 /// `shrink` for a picture without alpha (JPEGs, many textures): resized as it was decoded, so
 /// it's never copied at full size with an alpha channel added.
-fn shrink_rgb(w: u32, h: u32, rgb: Vec<u8>, max: u32, resizer: &mut fr::Resizer) -> Result<ThumbPixels, String> {
+fn shrink_rgb(w: u32, h: u32, rgb: Vec<u8>, max: u32, resizer: &mut fr::Resizer) -> Result<Pixels, String> {
     if w == 0 || h == 0 {
         return Err("image has no pixels".into());
     }
@@ -149,7 +150,7 @@ fn shrink_rgb(w: u32, h: u32, rgb: Vec<u8>, max: u32, resizer: &mut fr::Resizer)
         dst.into_vec()
     };
     let rgba = rgb.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 255]).collect();
-    Ok(ThumbPixels { w: thumb_w, h: thumb_h, src_w: w, src_h: h, rgba })
+    Ok(Pixels { w: thumb_w, h: thumb_h, src_w: w, src_h: h, rgba })
 }
 
 /// Lets a resizer's working buffers go when they've grown past `RESIZER_KEEP`. Call after each

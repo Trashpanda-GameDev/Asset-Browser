@@ -11,7 +11,7 @@ use eframe::egui::{self, Color32, ColorImage, TextureFilter, TextureHandle, Text
 
 use crate::asset::AssetKind;
 use crate::audio::Waveform;
-use crate::imaging::ThumbPixels;
+use crate::imaging::Pixels;
 use crate::library::{Entry, Library};
 use crate::model::ModelInfo;
 use crate::thumbs::{Preview, Thumb, ThumbJob, ThumbService};
@@ -145,7 +145,7 @@ impl Previews {
         }
     }
 
-    fn upload(&mut self, ctx: &egui::Context, key: i64, pixels: &ThumbPixels, unscaled: bool) {
+    fn upload(&mut self, ctx: &egui::Context, key: i64, pixels: &Pixels, unscaled: bool) {
         let options = if unscaled {
             let mut options = TextureOptions::NEAREST;
             options.minification = TextureFilter::Linear;

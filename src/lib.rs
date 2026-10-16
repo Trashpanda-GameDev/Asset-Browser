@@ -20,7 +20,6 @@ pub mod model;
 pub mod paths;
 pub(crate) mod platform;
 pub(crate) mod preview_key;
-pub(crate) mod psd_composite;
 pub mod scan;
 pub(crate) mod sheets;
 pub(crate) mod storage;

@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use asset_browser::app::grouped;
 use asset_browser::asset::AssetKind;
 use asset_browser::audio::{self, Source};
-use asset_browser::imaging::ThumbPixels;
+use asset_browser::imaging::Pixels;
 use asset_browser::library::{Entry, Library, root_string};
 use asset_browser::model::{self, LoadOptions, raster};
 use asset_browser::thumbs::{Preview, THUMB_MAX, THUMB_TEXTURE, ThumbJob, ThumbService};
@@ -225,9 +225,9 @@ fn previews(label: &str, library: &Library, sample: &[&Entry], db_path: &Path, o
         let mut done = 0;
         let mut failed: Vec<(i64, String)> = Vec::new();
         let mut slowest: Vec<(u64, i64)> = Vec::new();
-        let mut sheet_cells: Vec<ThumbPixels> = Vec::new();
+        let mut sheet_cells: Vec<Pixels> = Vec::new();
         // Models: every result in sample order, for a sheet of them all.
-        let mut model_cells: Vec<Option<ThumbPixels>> = (0..sample.len()).map(|_| None).collect();
+        let mut model_cells: Vec<Option<Pixels>> = (0..sample.len()).map(|_| None).collect();
         // Textured, missing a texture, picture only (.blend), skeleton only, animated.
         let mut contents = [0usize; 5];
         while done < sample.len() {
@@ -365,20 +365,19 @@ fn model_stages(library: &Library, sample: &[&Entry]) {
 
 /// Every model's thumbnail in sample order, 48 to a page (`<sheet>-models-<page>.png`), failures
 /// as red cells, with a list of which cell is which file (`<sheet>-models.txt`).
-fn write_model_sheets(path: &Path, sample: &[&Entry], cells: &[Option<ThumbPixels>], failed: &[(i64, String)]) {
+fn write_model_sheets(path: &Path, sample: &[&Entry], cells: &[Option<Pixels>], failed: &[(i64, String)]) {
     const PER_PAGE: usize = 48;
     let stem = path.with_extension("");
     let failures: HashMap<i64, &str> = failed.iter().map(|(key, message)| (*key, message.as_str())).collect();
     let mut legend = String::new();
     for (page, start) in (0..cells.len()).step_by(PER_PAGE).enumerate() {
         let end = (start + PER_PAGE).min(cells.len());
-        let failed_cell =
-            ThumbPixels { w: 192, h: 192, src_w: 192, src_h: 192, rgba: [200, 40, 40, 160].repeat(192 * 192) };
-        let page_cells: Vec<ThumbPixels> = cells[start..end]
+        let failed_cell = Pixels { w: 192, h: 192, src_w: 192, src_h: 192, rgba: [200, 40, 40, 160].repeat(192 * 192) };
+        let page_cells: Vec<Pixels> = cells[start..end]
             .iter()
             .map(|cell| match cell {
-                Some(cell) => ThumbPixels { rgba: cell.rgba.clone(), ..*cell },
-                None => ThumbPixels { rgba: failed_cell.rgba.clone(), ..failed_cell },
+                Some(cell) => Pixels { rgba: cell.rgba.clone(), ..*cell },
+                None => Pixels { rgba: failed_cell.rgba.clone(), ..failed_cell },
             })
             .collect();
         let page_path = PathBuf::from(format!("{}-models-{:02}.png", stem.display(), page + 1));
@@ -425,7 +424,7 @@ fn start_latency(library: &Library, sample: &[&Entry]) {
 }
 
 /// Lays thumbnails out on a checkerboard, 8 to a row, to check them by eye.
-fn write_sheet(path: &std::path::Path, cells: &[ThumbPixels]) {
+fn write_sheet(path: &std::path::Path, cells: &[Pixels]) {
     const CELL: u32 = 200;
     let columns = 8u32;
     let rows = (cells.len() as u32).div_ceil(columns);
