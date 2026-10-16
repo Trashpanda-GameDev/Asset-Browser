@@ -25,7 +25,6 @@ use super::{theme, widgets};
 /// Frames per second when the frames have no timing of their own and no speed was picked.
 const DEFAULT_FPS: f32 = 8.0;
 
-#[expect(clippy::struct_excessive_bools, reason = "refactor: bools that are states become enums")]
 pub struct SheetView {
     /// The picture the state below is for (its `groups::path_key`).
     key: Option<String>,
@@ -36,18 +35,23 @@ pub struct SheetView {
     /// Showing the frames played instead of the whole picture.
     pub animate: bool,
     animation: usize,
-    playing: bool,
-    /// When the current playthrough started (`InputState::time`).
-    started: f64,
-    /// The frame shown while paused (a position in the animation).
-    paused_at: usize,
-    fps: f32,
-    /// The user picked `fps` for this picture (or else it follows `DEFAULT_FPS`).
-    fps_chosen: bool,
-    /// Play the frame durations the file gives (a data file's, a GIF's) instead of `fps`.
+    /// Where playback is.
+    playhead: Playhead,
+    /// The speed the user picked for this picture; without one it plays at `DEFAULT_FPS`.
+    chosen_fps: Option<f32>,
+    /// Play the frame durations the file gives (a data file's, a GIF's) instead of the speed.
     file_timing: bool,
     /// What the user changed, until the app takes it to save: the picture's key and the choices.
     changed: Option<(String, Saved)>,
+}
+
+/// Where an animation's playback is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Playhead {
+    /// Playing since this time (`InputState::time`), counted from the first frame.
+    Playing { since: f64 },
+    /// Stopped on this place in the animation.
+    Paused { at: usize },
 }
 
 impl Default for SheetView {
@@ -58,11 +62,8 @@ impl Default for SheetView {
             sheet: None,
             animate: false,
             animation: 0,
-            playing: true,
-            started: 0.0,
-            paused_at: 0,
-            fps: DEFAULT_FPS,
-            fps_chosen: false,
+            playhead: Playhead::Playing { since: 0.0 },
+            chosen_fps: None,
             file_timing: true,
             changed: None,
         }
@@ -78,14 +79,11 @@ impl SheetView {
     pub fn load(&mut self, key: String, detected: Option<Sheet>, now: f64) {
         self.sheet = detected.clone();
         self.animate = self.sheet.as_ref().is_some_and(Sheet::is_certain);
-        self.fps = DEFAULT_FPS;
-        self.fps_chosen = false;
+        self.chosen_fps = None;
         self.detected = detected;
         self.key = Some(key);
         self.animation = 0;
-        self.playing = true;
-        self.started = now;
-        self.paused_at = 0;
+        self.playhead = Playhead::Playing { since: now };
         self.file_timing = true;
     }
 
@@ -99,8 +97,7 @@ impl SheetView {
             self.sheet = Some(sheets::from_grid(grid, pixels, Guess::User));
         }
         self.animate = saved.animate && self.sheet.is_some();
-        self.fps = saved.fps.map_or(DEFAULT_FPS, |fps| fps.clamp(1.0, 60.0));
-        self.fps_chosen = saved.fps.is_some();
+        self.chosen_fps = saved.fps.map(|fps| fps.clamp(1.0, 60.0));
     }
 
     /// The pane moved to something that isn't a picture, or the choices were forgotten: the
@@ -131,7 +128,7 @@ impl SheetView {
             let grid = sheets::default_grid(pixels);
             self.sheet = Some(sheets::from_grid(grid, pixels, Guess::Default));
         }
-        self.started = now;
+        self.replay(now);
         self.choices_changed();
     }
 
@@ -143,18 +140,44 @@ impl SheetView {
             Source::Grid(grid, Guess::User | Guess::Default) => Some(grid),
             _ => None,
         });
-        let fps = self.fps_chosen.then_some(self.fps);
+        let fps = self.chosen_fps;
         self.changed = Some((key.clone(), Saved { animate: self.animate, grid, fps }));
+    }
+
+    fn fps(&self) -> f32 {
+        self.chosen_fps.unwrap_or(DEFAULT_FPS)
+    }
+
+    fn is_playing(&self) -> bool {
+        matches!(self.playhead, Playhead::Playing { .. })
+    }
+
+    /// Playing on from `position` in the animation, as if it had played up to it.
+    fn playing_from(&self, position: usize, now: f64) -> Playhead {
+        Playhead::Playing { since: now - position as f64 / self.fps() as f64 }
+    }
+
+    /// Starts over from the first frame if it's playing; a paused frame stays.
+    fn replay(&mut self, now: f64) {
+        if self.is_playing() {
+            self.playhead = Playhead::Playing { since: now };
+        }
+    }
+
+    /// Back to the first frame, playing or paused.
+    fn rewind(&mut self, now: f64) {
+        self.playhead = if self.is_playing() { Playhead::Playing { since: now } } else { Playhead::Paused { at: 0 } };
     }
 
     /// Where in the animation playback is (a position in its frame list).
     fn position(&self, now: f64) -> usize {
         let Some(animation) = self.current_animation() else { return 0 };
         let count = animation.frames.len().max(1);
-        if !self.playing {
-            return self.paused_at.min(count - 1);
-        }
-        let elapsed = (now - self.started).max(0.0);
+        let since = match self.playhead {
+            Playhead::Paused { at } => return at.min(count - 1),
+            Playhead::Playing { since } => since,
+        };
+        let elapsed = (now - since).max(0.0);
         if let Some(durations) = self.durations() {
             let total: u64 = durations.iter().map(|&d| d as u64).sum::<u64>().max(1);
             let mut t = (elapsed * 1000.0) as u64 % total;
@@ -166,7 +189,7 @@ impl SheetView {
             }
             return count - 1;
         }
-        (elapsed * self.fps as f64) as usize % count
+        (elapsed * self.fps() as f64) as usize % count
     }
 
     /// The data file's frame durations for the current animation, when they're used.
@@ -216,7 +239,7 @@ impl SheetView {
         let count = animation.frames.len();
         let label = format!("{} / {count}", position + 1);
         widgets::badge(&ui.painter_at(rect), rect.left_top() + vec2(8.0, 8.0), Align2::LEFT_TOP, &label, theme::TEXT);
-        if self.playing && count > 1 {
+        if self.is_playing() && count > 1 {
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f32(1.0 / 60.0));
         }
     }
@@ -234,22 +257,18 @@ impl SheetView {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             if widgets::icon_button(ui, icon::SKIP_BACK, "Previous frame", false).clicked() {
-                self.playing = false;
-                self.paused_at = (position + count.max(1) - 1) % count.max(1);
+                self.playhead = Playhead::Paused { at: (position + count.max(1) - 1) % count.max(1) };
             }
-            let (glyph, tip) = if self.playing { (icon::PAUSE, "Pause") } else { (icon::PLAY, "Play") };
-            if widgets::icon_button(ui, glyph, tip, self.playing).clicked() {
-                if self.playing {
-                    self.paused_at = position;
+            let (glyph, tip) = if self.is_playing() { (icon::PAUSE, "Pause") } else { (icon::PLAY, "Play") };
+            if widgets::icon_button(ui, glyph, tip, self.is_playing()).clicked() {
+                self.playhead = if self.is_playing() {
+                    Playhead::Paused { at: position }
                 } else {
-                    // Carry on from the frame shown.
-                    self.started = now - position as f64 / self.fps as f64;
-                }
-                self.playing = !self.playing;
+                    self.playing_from(position, now)
+                };
             }
             if widgets::icon_button(ui, icon::SKIP_FORWARD, "Next frame", false).clicked() {
-                self.playing = false;
-                self.paused_at = (position + 1) % count.max(1);
+                self.playhead = Playhead::Paused { at: (position + 1) % count.max(1) };
             }
             ui.add_space(6.0);
             let timed = sheet.frames.iter().any(|frame| frame.duration_ms.is_some());
@@ -261,15 +280,17 @@ impl SheetView {
                 };
                 if widgets::toggle_chip(ui, icon::CLOCK, "File timing", &mut file, tip).changed() {
                     self.file_timing = file;
-                    self.started = now;
+                    self.replay(now);
                 }
             }
             if !(timed && self.file_timing) {
-                let speed =
-                    egui::DragValue::new(&mut self.fps).range(1.0..=60.0).speed(0.2).suffix(" fps").max_decimals(0);
+                let mut fps = self.fps();
+                let speed = egui::DragValue::new(&mut fps).range(1.0..=60.0).speed(0.2).suffix(" fps").max_decimals(0);
                 if ui.add(speed).on_hover_text("Frames per second").changed() {
-                    self.started = now - position as f64 / self.fps as f64;
-                    self.fps_chosen = true;
+                    self.chosen_fps = Some(fps);
+                    if self.is_playing() {
+                        self.playhead = self.playing_from(position, now);
+                    }
                     save = true;
                 }
             }
@@ -282,8 +303,7 @@ impl SheetView {
                     let label = format!("{} · {}", animation.name, animation.frames.len());
                     if ui.add(egui::Button::selectable(index == self.animation, label)).clicked() {
                         self.animation = index;
-                        self.started = now;
-                        self.paused_at = 0;
+                        self.rewind(now);
                     }
                 }
             });
@@ -386,8 +406,8 @@ impl SheetView {
             // Show that frame, in the animation it belongs to.
             if let Some(animation) = sheet.animations.iter().position(|animation| animation.frames.contains(&index)) {
                 self.animation = animation;
-                self.paused_at = sheet.animations[animation].frames.iter().position(|&i| i == index).unwrap_or(0);
-                self.playing = false;
+                let at = sheet.animations[animation].frames.iter().position(|&i| i == index).unwrap_or(0);
+                self.playhead = Playhead::Paused { at };
             }
         }
         response.on_hover_text("Click a frame to show it");
@@ -472,14 +492,14 @@ mod tests {
         // Counted from the file name: certain, so it plays.
         view.load("walk_strip4.png".into(), Some(sheets::from_grid(grid(4), &pixels, Guess::FileName)), 0.0);
         assert!(view.animate);
-        assert_eq!((view.fps, view.fps_chosen), (DEFAULT_FPS, false));
+        assert_eq!(view.chosen_fps, None);
 
         view.apply(Saved { animate: false, grid: Some(grid(2)), fps: Some(90.0) }, &pixels);
         assert!(!view.animate);
         assert!(
             matches!(view.sheet.as_ref().map(|sheet| &sheet.source), Some(Source::Grid(g, Guess::User)) if *g == grid(2))
         );
-        assert_eq!((view.fps, view.fps_chosen), (60.0, true));
+        assert_eq!(view.chosen_fps, Some(60.0));
         // Showing what was saved is no change to save.
         assert!(view.take_choices().is_none());
 
@@ -488,6 +508,28 @@ mod tests {
         let (key, saved) = view.take_choices().unwrap();
         assert_eq!(key, "walk_strip4.png");
         assert_eq!(saved, Saved { animate: true, grid: Some(grid(2)), fps: Some(60.0) });
+    }
+
+    #[test]
+    fn the_playhead_plays_pauses_and_starts_over() {
+        let pixels = Pixels { w: 64, h: 16, src_w: 64, src_h: 16, rgba: vec![255; 64 * 16 * 4] };
+        let mut view = SheetView::default();
+        view.load("walk_strip4.png".into(), Some(sheets::from_grid(grid(4), &pixels, Guess::FileName)), 10.0);
+        // Four frames at 8 a second: a quarter of a second in is the third.
+        assert_eq!(view.position(10.25), 2);
+        view.playhead = Playhead::Paused { at: 3 };
+        assert_eq!(view.position(99.0), 3);
+        // Playing the animation again keeps a paused frame; an animation's button goes back to
+        // the first.
+        view.replay(20.0);
+        assert_eq!(view.playhead, Playhead::Paused { at: 3 });
+        view.rewind(20.0);
+        assert_eq!(view.playhead, Playhead::Paused { at: 0 });
+        // Play carries on from the frame shown.
+        view.playhead = view.playing_from(2, 30.0);
+        assert_eq!(view.position(30.0), 2);
+        view.rewind(31.0);
+        assert_eq!(view.position(31.0), 0);
     }
 
     #[test]
