@@ -13,6 +13,7 @@ use crate::asset::KindSet;
 use crate::groups::{FAVORITES, Group, GroupKind, Groups, Membership, UNCATEGORIZED, UNCATEGORIZED_NAME};
 
 use super::format::grouped;
+use super::keymap::{self, Action};
 use super::{theme, widgets};
 
 const ROW_HEIGHT: f32 = widgets::SIDEBAR_ROW_HEIGHT;
@@ -107,19 +108,22 @@ impl Sidebar<'_> {
             if response.clicked() {
                 commands.push(GroupCommand::Show(FAVORITES));
             }
-            response.on_hover_text("Starred assets (F stars the selection)");
+            let tip = match keymap::shortcut_label(ui.ctx(), Action::Favorite) {
+                Some(key) => format!("Starred assets ({key} stars the selection)"),
+                None => "Starred assets".to_owned(),
+            };
+            response.on_hover_text(tip);
         }
 
         for kind in [GroupKind::Collection, GroupKind::Category] {
             ui.add_space(10.0);
-            let title = if kind == GroupKind::Collection { "Collections" } else { "Categories" };
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                widgets::section_label(ui, title);
+                widgets::section_label(ui, kind.title());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(4.0);
-                    let tip = if kind == GroupKind::Collection { "New collection" } else { "New category" };
-                    if widgets::icon_button_sized(ui, icon::PLUS, tip, false, 20.0).clicked() {
+                    let tip = format!("New {}", kind.noun());
+                    if widgets::icon_button_sized(ui, icon::PLUS, &tip, false, 20.0).clicked() {
                         commands.push(GroupCommand::New(kind, Targets::Paths(Vec::new())));
                     }
                 });
@@ -382,31 +386,12 @@ pub fn menu_items(
         command = Some(GroupCommand::ToggleFavorite(Targets::Selection));
         ui.close();
     }
+    let on = GroupTargets { groups, membership, targets };
     for kind in [GroupKind::Collection, GroupKind::Category] {
-        let (glyph, title) =
-            if kind == GroupKind::Collection { (icon::STACK, "Collections") } else { (icon::TAG, "Categories") };
-        ui.menu_button(format!("{glyph}  {title}"), |ui| {
-            ui.set_min_width(180.0);
-            let mut any = false;
-            for group in groups.of_kind(kind) {
-                any = true;
-                let on = all_in(membership, group.id, targets);
-                let color = (kind == GroupKind::Category).then(|| theme::category_color(group.color));
-                if menu_toggle(ui, on, color, &group.name).clicked() {
-                    command = Some(if on {
-                        GroupCommand::Remove(group.id, Targets::Selection)
-                    } else {
-                        GroupCommand::Add(group.id, Targets::Selection)
-                    });
-                    ui.close();
-                }
-            }
-            if any {
-                ui.separator();
-            }
-            if ui.button(format!("{}  New {}…", icon::PLUS, kind.noun())).clicked() {
-                command = Some(GroupCommand::New(kind, Targets::Selection));
-                ui.close();
+        let glyph = if kind == GroupKind::Collection { icon::STACK } else { icon::TAG };
+        ui.menu_button(format!("{glyph}  {}", kind.title()), |ui| {
+            if let Some(asked) = group_items(ui, &on, kind, true) {
+                command = Some(asked);
             }
         });
     }
@@ -427,6 +412,50 @@ pub fn menu_items(
 }
 
 /// A menu row with a check mark, an optional colour dot and a name.
+/// The assets something is done to (entry indices), and the groups they can go in.
+struct GroupTargets<'a> {
+    groups: &'a Groups,
+    membership: &'a Membership,
+    targets: &'a [u32],
+}
+
+/// The groups of `kind` to put the targets in, and "New …", for a menu or a popup. With
+/// `ticked`, the groups they're all in already are listed too, ticked: clicking one takes them
+/// out.
+fn group_items(ui: &mut Ui, on: &GroupTargets<'_>, kind: GroupKind, ticked: bool) -> Option<GroupCommand> {
+    ui.set_min_width(180.0);
+    let mut command = None;
+    let mut any = false;
+    for group in on.groups.of_kind(kind) {
+        let all = all_in(on.membership, group.id, on.targets);
+        if all && !ticked {
+            continue;
+        }
+        any = true;
+        if menu_toggle(ui, all, group_color(group), &group.name).clicked() {
+            command = Some(if all {
+                GroupCommand::Remove(group.id, Targets::Selection)
+            } else {
+                GroupCommand::Add(group.id, Targets::Selection)
+            });
+            ui.close();
+        }
+    }
+    if any {
+        ui.separator();
+    }
+    if ui.button(format!("{}  New {}…", icon::PLUS, kind.noun())).clicked() {
+        command = Some(GroupCommand::New(kind, Targets::Selection));
+        ui.close();
+    }
+    command
+}
+
+/// A category's colour; other groups have none.
+fn group_color(group: &Group) -> Option<Color32> {
+    (group.kind == GroupKind::Category).then(|| theme::category_color(group.color))
+}
+
 fn menu_toggle(ui: &mut Ui, on: bool, color: Option<Color32>, name: &str) -> Response {
     let height = 24.0;
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width().max(160.0), height), Sense::click());
@@ -470,10 +499,7 @@ pub fn chips(
                 continue;
             }
             let partly = !all_in(membership, group.id, targets);
-            let color = match kind {
-                GroupKind::Category => theme::category_color(group.color),
-                _ => theme::TEXT_WEAK,
-            };
+            let color = group_color(group).unwrap_or(theme::TEXT_WEAK);
             match chip(ui, &group.name, color, partly) {
                 ChipClick::Body => command = Some(GroupCommand::Show(group.id)),
                 ChipClick::Remove => command = Some(GroupCommand::Remove(group.id, Targets::Selection)),
@@ -482,23 +508,10 @@ pub fn chips(
         }
         let tip = if kind == GroupKind::Collection { "Add to a collection" } else { "Add a category" };
         let add = widgets::icon_button_sized(ui, icon::PLUS, tip, false, 22.0);
+        let on = GroupTargets { groups, membership, targets };
         egui::Popup::menu(&add).show(|ui| {
-            ui.set_min_width(180.0);
-            let mut any = false;
-            for group in groups.of_kind(kind).filter(|group| !all_in(membership, group.id, targets)) {
-                any = true;
-                let color = (kind == GroupKind::Category).then(|| theme::category_color(group.color));
-                if menu_toggle(ui, false, color, &group.name).clicked() {
-                    command = Some(GroupCommand::Add(group.id, Targets::Selection));
-                    ui.close();
-                }
-            }
-            if any {
-                ui.separator();
-            }
-            if ui.button(format!("{}  New {}…", icon::PLUS, kind.noun())).clicked() {
-                command = Some(GroupCommand::New(kind, Targets::Selection));
-                ui.close();
+            if let Some(asked) = group_items(ui, &on, kind, false) {
+                command = Some(asked);
             }
         });
     });

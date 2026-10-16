@@ -198,8 +198,8 @@ impl Inspector {
                 }
             });
             ui.add_space(6.0);
-            for (kind, label) in [(GroupKind::Collection, "Collections"), (GroupKind::Category, "Categories")] {
-                widgets::section_label(ui, label);
+            for kind in [GroupKind::Collection, GroupKind::Category] {
+                widgets::section_label(ui, kind.title());
                 if let Some(command) = organize::chips(ui, groups, membership, &targets, kind) {
                     output.command = Some(command);
                 }

@@ -69,6 +69,15 @@ impl GroupKind {
             Self::Category => "category",
         }
     }
+
+    /// "Collections", "Categories": the heading over the groups of the kind.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Favorites => "Favorites",
+            Self::Collection => "Collections",
+            Self::Category => "Categories",
+        }
+    }
 }
 
 pub struct Group {
