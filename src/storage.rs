@@ -207,6 +207,7 @@ mod tests {
     use super::*;
     use crate::db::{self, CacheWrite, StoredThumb};
     use crate::test_support::TempDir;
+    use rusqlite::OptionalExtension;
 
     #[test]
     fn measures_and_clears_parts_of_the_cache() {
@@ -244,5 +245,28 @@ mod tests {
             usage.cache_file,
             after.cache_file
         );
+    }
+
+    /// The parts name tables that other modules make: renaming one there has to rename it here.
+    #[test]
+    fn every_part_names_tables_its_file_has() {
+        let temp = TempDir::new("storage_tables");
+        let cache = db::open(&temp.path().join("library.sqlite")).unwrap();
+        let user_path = temp.path().join("user.sqlite");
+        let user = db::open_user(&user_path).unwrap();
+        drop(crate::groups::Groups::open(&user_path));
+        drop(crate::sheets::SheetStore::open(&user_path));
+        for part in Part::CACHE.into_iter().chain(Part::USER) {
+            let conn = if part.in_user_data() { &user } else { &cache };
+            for table in part.tables() {
+                let found: Option<String> = conn
+                    .query_row("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |row| {
+                        row.get(0)
+                    })
+                    .optional()
+                    .unwrap();
+                assert!(found.is_some(), "{part:?}'s table {table} isn't made by its store");
+            }
+        }
     }
 }

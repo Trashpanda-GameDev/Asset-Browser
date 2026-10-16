@@ -7,6 +7,7 @@ use eframe::egui::{
 };
 
 use crate::asset::AssetKind;
+use crate::groups;
 
 /// Behind the browsed assets.
 pub const BG: Color32 = Color32::from_rgb(15, 16, 19);
@@ -28,8 +29,8 @@ pub const ACCENT_SOFT: Color32 = Color32::from_rgba_unmultiplied_const(108, 140,
 pub const ERROR: Color32 = Color32::from_rgb(244, 102, 102);
 /// The favourite star.
 pub const FAVORITE: Color32 = Color32::from_rgb(250, 199, 72);
-/// What categories are coloured with, in the order new ones take them (`groups::CATEGORY_COLORS`).
-pub const CATEGORY_COLORS: [Color32; 8] = [
+/// What categories are coloured with, in the order new ones take them.
+pub const CATEGORY_COLORS: [Color32; groups::CATEGORY_COLOR_COUNT as usize] = [
     Color32::from_rgb(239, 99, 99),
     Color32::from_rgb(242, 153, 74),
     Color32::from_rgb(236, 201, 75),

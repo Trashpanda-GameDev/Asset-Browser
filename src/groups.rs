@@ -28,8 +28,9 @@ pub const FAVORITES: i64 = 0;
 /// Not a stored group: every asset in no category, worked out by `Membership`.
 pub const UNCATEGORIZED: i64 = -1;
 pub const UNCATEGORIZED_NAME: &str = "Uncategorized";
-/// How many colours categories cycle through (the palette is the UI's: `theme::CATEGORY_COLORS`).
-pub const CATEGORY_COLORS: u8 = 8;
+/// How many colours categories cycle through. The palette is the UI's (`theme::CATEGORY_COLORS`), and
+/// the compiler holds it to this many.
+pub const CATEGORY_COLOR_COUNT: u8 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GroupKind {
@@ -151,7 +152,7 @@ impl Groups {
         if kind == GroupKind::Favorites || name.is_empty() {
             return None;
         }
-        let color = (self.of_kind(GroupKind::Category).count() % CATEGORY_COLORS as usize) as u8;
+        let color = (self.of_kind(GroupKind::Category).count() % CATEGORY_COLOR_COUNT as usize) as u8;
         let created = now_ms();
         let id = match &self.conn {
             Some(conn) => match conn.execute(
@@ -201,7 +202,7 @@ impl Groups {
     }
 
     pub fn set_color(&mut self, id: i64, color: u8) {
-        let color = color % CATEGORY_COLORS;
+        let color = color % CATEGORY_COLOR_COUNT;
         if let Some(conn) = &self.conn
             && let Err(err) = conn.execute("UPDATE groups SET color = ?1 WHERE id = ?2", params![color, id])
         {
@@ -370,7 +371,7 @@ fn load(conn: &Connection) -> rusqlite::Result<Vec<Group>> {
             kind,
             lower: name.to_lowercase(),
             name,
-            color: (color.rem_euclid(CATEGORY_COLORS as i64)) as u8,
+            color: (color.rem_euclid(CATEGORY_COLOR_COUNT as i64)) as u8,
             members: Vec::new(),
             keys: HashSet::new(),
             next_seq: 0,
