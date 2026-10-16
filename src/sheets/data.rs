@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::{Animation, Frame, Sheet, Source};
+use crate::diag;
 
 /// Reads `name.json` (or `name.png.json`) beside the picture, if it's sprite sheet data.
 pub(super) fn from_data_file(path: &Path) -> Option<Sheet> {
@@ -14,7 +15,10 @@ pub(super) fn from_data_file(path: &Path) -> Option<Sheet> {
     let (data_path, text) = candidates
         .iter()
         .find_map(|candidate| std::fs::read_to_string(candidate).ok().map(|text| (candidate, text)))?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    // A broken file is logged: otherwise the picture would just quietly be guessed at instead.
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|err| diag::note(&format!("Reading sprite sheet data ({})", data_path.display()), err))
+        .ok()?;
     let data_name = data_path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     parse_data(&json, &data_name)
 }
