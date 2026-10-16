@@ -127,9 +127,9 @@ fn previews(ui: &mut Ui, progress: ThumbProgress) {
 fn playing_elsewhere(ui: &mut Ui, args: &StatusArgs<'_>) -> Option<StatusCommand> {
     let library = args.library?;
     let (index, key) = args.playback.playing.filter(|&(index, _)| Some(index) != args.focus)?;
-    widgets::divider(ui);
     let now = args.playback.now_for(key)?;
     let entry = library.entries().get(index as usize).filter(|entry| entry.key == key)?;
+    widgets::divider(ui);
     let mut command = None;
     let glyph = if now.paused { icon::PLAY } else { icon::PAUSE };
     if widgets::icon_button_sized(ui, glyph, "Play or pause", false, 22.0).clicked() {
