@@ -9,10 +9,11 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use super::builder::Builder;
 use super::geometry::{self, DEFAULT_CREASE};
 use super::textures::{self, Alpha};
 use super::vector;
-use super::{Builder, LoadOptions, Model, ModelError, Vertex, z_up_to_y_up};
+use super::{LoadOptions, Model, ModelError, Vertex, z_up_to_y_up};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Encoding {

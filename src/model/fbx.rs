@@ -4,9 +4,10 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use super::builder::{Builder, Slot};
 use super::textures::{self, Alpha};
 use super::vector::normalize;
-use super::{Builder, LoadOptions, Model, ModelError, Slot, Vertex, srgb_to_linear};
+use super::{LoadOptions, Model, ModelError, Vertex, srgb_to_linear};
 
 /// ufbx's working memory per file. Only there to stop a corrupt file from exhausting memory: the
 /// largest model in the test library (6 MB) needs a small fraction of it.

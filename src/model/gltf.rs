@@ -14,10 +14,11 @@ use ::gltf::accessor::{DataType, Dimensions};
 use ::gltf::mesh::Mode;
 use ::gltf::{Accessor, Document, Semantic};
 
+use super::builder::{Builder, Slot};
 use super::geometry::{self, IDENTITY, Mat4, NormalMatrix};
 use super::textures::{self, Alpha};
 use super::vector::normalize;
-use super::{Builder, LoadOptions, Model, ModelError, Slot, Vertex, percent_decode};
+use super::{LoadOptions, Model, ModelError, Vertex, percent_decode};
 
 pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
     let dir = super::folder(file);

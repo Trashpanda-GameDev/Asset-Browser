@@ -10,10 +10,11 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use super::builder::{Builder, Slot};
 use super::geometry::{self, Smoothing};
 use super::textures::{self, Alpha};
 use super::vector::{cross, dot};
-use super::{Builder, LoadOptions, Model, ModelError, Slot, Vertex, srgb_to_linear, z_up_to_y_up};
+use super::{LoadOptions, Model, ModelError, Vertex, srgb_to_linear, z_up_to_y_up};
 
 const MAIN: u16 = 0x4D4D;
 const EDITOR: u16 = 0x3D3D;

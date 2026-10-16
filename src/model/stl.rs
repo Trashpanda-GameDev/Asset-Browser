@@ -8,8 +8,9 @@
 
 use std::path::Path;
 
+use super::builder::Builder;
 use super::vector::{cross, normalize, sub};
-use super::{Builder, LoadOptions, Model, ModelError, Vertex, z_up_to_y_up};
+use super::{LoadOptions, Model, ModelError, Vertex, z_up_to_y_up};
 
 /// STL has nothing beside it to read, and no textures.
 pub(super) fn parse(bytes: &[u8], _file: &Path, _options: &LoadOptions) -> Result<Model, ModelError> {

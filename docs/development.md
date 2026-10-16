@@ -32,7 +32,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/imaging/` | Reading pictures and shrinking them, within a memory budget shared by the threads that decode |
 | `src/audio/` | Sound: the player (`mod.rs`), the device callback (`output.rs`), the decoder thread (`decoder.rs`), reading a file with symphonia (`stream.rs`), resampling, waveforms, read-ahead |
 | `src/imaging/psd.rs` | Reads a PSD/PSB's flattened picture at reduced size |
-| `src/model/` | 3D models: the loaders, the CPU thumbnail renderer, and the lighting shared with the 3D view |
+| `src/model/` | 3D models: `load` and the formats it reads (`mod.rs`), a reader per format, the `Builder` they all fill (`builder.rs`), textures (`textures/`), the CPU thumbnail renderer (`raster/`), and the lighting shared with the 3D view (`shading.rs`) |
 | `src/detail.rs` | Loads the preview pane's large picture (or a GIF's frames) or whole model |
 | `src/playback.rs` | What's playing: the player, the sounds read ahead of the selection, auto-play, loop and volume |
 | `src/groups/` | Favorites, collections and categories (`mod.rs`), how they're saved (`store.rs`), and where their members are in the library (`membership.rs`) |

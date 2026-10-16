@@ -13,10 +13,11 @@ use std::sync::Arc;
 
 use roxmltree::Node;
 
+use super::builder::{Builder, Slot};
 use super::geometry::{self, DEFAULT_CREASE, IDENTITY, Mat4, NormalMatrix};
 use super::textures::{self, Alpha};
 use super::vector::normalize;
-use super::{Builder, LoadOptions, Model, ModelError, Slot, Vertex, srgb_to_linear};
+use super::{LoadOptions, Model, ModelError, Vertex, srgb_to_linear};
 
 pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
     let (text, dir) = (String::from_utf8_lossy(bytes), super::folder(file));
