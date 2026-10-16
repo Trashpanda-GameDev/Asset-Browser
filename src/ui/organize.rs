@@ -94,126 +94,88 @@ pub struct Sidebar<'a> {
 }
 
 impl Sidebar<'_> {
-    #[expect(clippy::cognitive_complexity, clippy::too_many_lines, reason = "refactor: split into named steps")]
-    pub fn show(self, ui: &mut Ui) -> Vec<GroupCommand> {
+    pub fn show(mut self, ui: &mut Ui) -> Vec<GroupCommand> {
         let mut commands = Vec::new();
         let dragging = egui::DragAndDrop::payload::<DraggedAssets>(ui.ctx()).map(|payload| payload.0.len());
-
-        if let Some(favorites) = self.groups.get(FAVORITES) {
-            let count = self.membership.total(FAVORITES, self.kinds);
-            let row =
-                Row { glyph: Glyph::Favorite, name: &favorites.name, count, selected: self.viewing == Some(FAVORITES) };
-            let response = row.show(ui);
-            drop_target(&response, FAVORITES, &mut commands);
-            if response.clicked() {
-                commands.push(GroupCommand::Show(FAVORITES));
-            }
-            let tip = match keymap::shortcut_label(ui.ctx(), Action::Favorite) {
-                Some(key) => format!("Starred assets ({key} stars the selection)"),
-                None => "Starred assets".to_owned(),
-            };
-            response.on_hover_text(tip);
-        }
-
+        self.favorites_row(ui, &mut commands);
         for kind in [GroupKind::Collection, GroupKind::Category] {
             ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                ui.add_space(8.0);
-                widgets::section_label(ui, kind.title());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(4.0);
-                    let tip = format!("New {}", kind.noun());
-                    if widgets::icon_button_sized(ui, icon::PLUS, &tip, false, 20.0).clicked() {
-                        commands.push(GroupCommand::New(kind, Targets::Paths(Vec::new())));
-                    }
-                });
-            });
+            section_heading(ui, kind, &mut commands);
             if kind == GroupKind::Category {
-                // Always there: whatever no category holds, to work through.
-                let count = self.membership.total(UNCATEGORIZED, self.kinds);
-                let selected = self.viewing == Some(UNCATEGORIZED);
-                let row = Row { glyph: Glyph::Ring, name: UNCATEGORIZED_NAME, count, selected };
-                let response = row.show(ui);
-                if response.clicked() {
-                    commands.push(GroupCommand::Show(UNCATEGORIZED));
-                }
-                response.on_hover_text("Assets in no category");
+                self.uncategorized_row(ui, &mut commands);
             }
-            let mut any = false;
-            for group in self.groups.of_kind(kind) {
-                any = true;
-                if self.edit.as_ref().is_some_and(|edit| edit.id == Some(group.id)) {
-                    edit_row(ui, self.edit, &mut commands);
-                    continue;
-                }
-                let glyph = match kind {
-                    GroupKind::Category => Glyph::Dot(theme::category_color(group.color)),
-                    _ => Glyph::Icon(icon::STACK),
-                };
-                let count = self.membership.total(group.id, self.kinds);
-                let row = Row { glyph, name: &group.name, count, selected: self.viewing == Some(group.id) };
-                let response = row.show(ui);
-                drop_target(&response, group.id, &mut commands);
-                if response.clicked() {
-                    commands.push(GroupCommand::Show(group.id));
-                }
-                if response.double_clicked() {
-                    commands.push(GroupCommand::StartRename(group.id));
-                }
-                let missing = self.membership.missing.get(&group.id).map_or(0, Vec::len);
-                response.context_menu(|ui| {
-                    ui.set_min_width(170.0);
-                    if ui.button(format!("{}  Rename", icon::PENCIL_SIMPLE)).clicked() {
-                        commands.push(GroupCommand::StartRename(group.id));
-                        ui.close();
-                    }
-                    if kind == GroupKind::Category {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            for (index, color) in theme::CATEGORY_COLORS.iter().enumerate() {
-                                if swatch(ui, *color, group.color as usize == index).clicked() {
-                                    commands.push(GroupCommand::Recolor(group.id, index as u8));
-                                    ui.close();
-                                }
-                            }
-                        });
-                    }
-                    if missing > 0 && ui.button(format!("{}  Remove {missing} missing", icon::BROOM)).clicked() {
-                        commands.push(GroupCommand::RemoveMissing(group.id));
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button(format!("{}  Delete {}…", icon::TRASH, kind.noun())).clicked() {
-                        commands.push(GroupCommand::AskDelete(group.id));
-                        ui.close();
-                    }
-                });
-            }
-            if self.edit.as_ref().is_some_and(|edit| edit.id.is_none() && edit.kind == kind) {
-                any = true;
-                edit_row(ui, self.edit, &mut commands);
-            }
-            if let Some(count) = dragging {
-                // Dropping here makes a new group from the dragged assets.
-                let label = format!("New {} from {}", kind.noun(), plural(count, "asset"));
-                let response = dashed_row(ui, &label);
-                if let Some(payload) = response.dnd_release_payload::<DraggedAssets>() {
-                    commands.push(GroupCommand::New(kind, Targets::Paths(payload.0.clone())));
-                }
-            } else if !any {
-                let hint = match kind {
-                    GroupKind::Collection => "Lists of assets for a purpose. Drag assets here or press +.",
-                    _ => "Labels for assets, shown on them and found by search.",
-                };
-                ui.horizontal(|ui| {
-                    ui.add_space(12.0);
-                    ui.add(
-                        egui::Label::new(RichText::new(hint).size(theme::size::SMALL).color(theme::TEXT_FAINT)).wrap(),
-                    );
-                });
-            }
+            let any = self.group_rows(ui, kind, &mut commands);
+            below_groups(ui, kind, dragging, any, &mut commands);
         }
         commands
+    }
+
+    /// Favorites, always first: the starred assets.
+    fn favorites_row(&self, ui: &mut Ui, commands: &mut Vec<GroupCommand>) {
+        let Some(favorites) = self.groups.get(FAVORITES) else { return };
+        let count = self.membership.total(FAVORITES, self.kinds);
+        let row =
+            Row { glyph: Glyph::Favorite, name: &favorites.name, count, selected: self.viewing == Some(FAVORITES) };
+        let response = row.show(ui);
+        drop_target(&response, FAVORITES, commands);
+        if response.clicked() {
+            commands.push(GroupCommand::Show(FAVORITES));
+        }
+        let tip = match keymap::shortcut_label(ui.ctx(), Action::Favorite) {
+            Some(key) => format!("Starred assets ({key} stars the selection)"),
+            None => "Starred assets".to_owned(),
+        };
+        response.on_hover_text(tip);
+    }
+
+    /// Uncategorized, always there: whatever no category holds, to work through.
+    fn uncategorized_row(&self, ui: &mut Ui, commands: &mut Vec<GroupCommand>) {
+        let count = self.membership.total(UNCATEGORIZED, self.kinds);
+        let selected = self.viewing == Some(UNCATEGORIZED);
+        let response = Row { glyph: Glyph::Ring, name: UNCATEGORIZED_NAME, count, selected }.show(ui);
+        if response.clicked() {
+            commands.push(GroupCommand::Show(UNCATEGORIZED));
+        }
+        response.on_hover_text("Assets in no category");
+    }
+
+    /// The groups of `kind`, the one being named as a text field; whether there are any.
+    fn group_rows(&mut self, ui: &mut Ui, kind: GroupKind, commands: &mut Vec<GroupCommand>) -> bool {
+        let groups = self.groups;
+        let mut any = false;
+        for group in groups.of_kind(kind) {
+            any = true;
+            if self.edit.as_ref().is_some_and(|edit| edit.id == Some(group.id)) {
+                edit_row(ui, self.edit, commands);
+            } else {
+                self.group_row(ui, group, commands);
+            }
+        }
+        if self.edit.as_ref().is_some_and(|edit| edit.id.is_none() && edit.kind == kind) {
+            any = true;
+            edit_row(ui, self.edit, commands);
+        }
+        any
+    }
+
+    /// A collection or category: click to show it, double-click to rename it, right-click for
+    /// more, drop assets on it to add them.
+    fn group_row(&self, ui: &mut Ui, group: &Group, commands: &mut Vec<GroupCommand>) {
+        let glyph = match group.kind {
+            GroupKind::Category => Glyph::Dot(theme::category_color(group.color)),
+            _ => Glyph::Icon(icon::STACK),
+        };
+        let count = self.membership.total(group.id, self.kinds);
+        let response = Row { glyph, name: &group.name, count, selected: self.viewing == Some(group.id) }.show(ui);
+        drop_target(&response, group.id, commands);
+        if response.clicked() {
+            commands.push(GroupCommand::Show(group.id));
+        }
+        if response.double_clicked() {
+            commands.push(GroupCommand::StartRename(group.id));
+        }
+        let missing = self.membership.missing.get(&group.id).map_or(0, Vec::len);
+        response.context_menu(|ui| group_menu(ui, group, missing, commands));
     }
 }
 
@@ -288,6 +250,71 @@ impl Row<'_> {
         painter.galley(pos2(x + 14.0, y - name.size().y / 2.0), name, color);
         painter.galley(pos2(count_x, y - count.size().y / 2.0), count, theme::TEXT_FAINT);
         response
+    }
+}
+
+/// "Collections" or "Categories", with a + to make one.
+fn section_heading(ui: &mut Ui, kind: GroupKind, commands: &mut Vec<GroupCommand>) {
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        widgets::section_label(ui, kind.title());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(4.0);
+            let tip = format!("New {}", kind.noun());
+            if widgets::icon_button_sized(ui, icon::PLUS, &tip, false, 20.0).clicked() {
+                commands.push(GroupCommand::New(kind, Targets::Paths(Vec::new())));
+            }
+        });
+    });
+}
+
+/// A group's menu: rename it, a category's colour, take out what's missing, delete it.
+fn group_menu(ui: &mut Ui, group: &Group, missing: usize, commands: &mut Vec<GroupCommand>) {
+    ui.set_min_width(170.0);
+    if ui.button(format!("{}  Rename", icon::PENCIL_SIMPLE)).clicked() {
+        commands.push(GroupCommand::StartRename(group.id));
+        ui.close();
+    }
+    if group.kind == GroupKind::Category {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for (index, color) in theme::CATEGORY_COLORS.iter().enumerate() {
+                if swatch(ui, *color, group.color as usize == index).clicked() {
+                    commands.push(GroupCommand::Recolor(group.id, index as u8));
+                    ui.close();
+                }
+            }
+        });
+    }
+    if missing > 0 && ui.button(format!("{}  Remove {missing} missing", icon::BROOM)).clicked() {
+        commands.push(GroupCommand::RemoveMissing(group.id));
+        ui.close();
+    }
+    ui.separator();
+    if ui.button(format!("{}  Delete {}…", icon::TRASH, group.kind.noun())).clicked() {
+        commands.push(GroupCommand::AskDelete(group.id));
+        ui.close();
+    }
+}
+
+/// Under a kind's groups: while assets are dragged, a place to drop them to make a group of them;
+/// with no groups yet, what the kind is for.
+fn below_groups(ui: &mut Ui, kind: GroupKind, dragging: Option<usize>, any: bool, commands: &mut Vec<GroupCommand>) {
+    if let Some(count) = dragging {
+        let label = format!("New {} from {}", kind.noun(), plural(count, "asset"));
+        let response = dashed_row(ui, &label);
+        if let Some(payload) = response.dnd_release_payload::<DraggedAssets>() {
+            commands.push(GroupCommand::New(kind, Targets::Paths(payload.0.clone())));
+        }
+    } else if !any {
+        let hint = match kind {
+            GroupKind::Collection => "Lists of assets for a purpose. Drag assets here or press +.",
+            _ => "Labels for assets, shown on them and found by search.",
+        };
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            ui.add(egui::Label::new(RichText::new(hint).size(theme::size::SMALL).color(theme::TEXT_FAINT)).wrap());
+        });
     }
 }
 
