@@ -29,7 +29,7 @@ use crate::diag;
 /// Decoded audio kept ready ahead of the playhead: rides out a slow disk read without a gap.
 const BUFFER_SECONDS: f32 = 2.0;
 /// Points stored per waveform. Enough for a wide player; tiles use fewer.
-pub const WAVEFORM_POINTS: usize = 512;
+const WAVEFORM_POINTS: usize = 512;
 /// Read-ahead: files bigger than this stream from disk instead (long music, mostly).
 const READ_AHEAD_MAX_FILE: u64 = 24 * 1024 * 1024;
 /// What the sounds read ahead may hold in all; the memory setting changes it

@@ -63,7 +63,7 @@ pub fn format_age(mtime_ns: i64) -> String {
 }
 
 /// Seconds since the Unix epoch → "12 May 2024" (UTC).
-pub fn format_date(seconds: i64) -> String {
+fn format_date(seconds: i64) -> String {
     const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     let (year, month, day) = civil_from_days(seconds.div_euclid(86_400));
     format!("{day} {} {year}", MONTHS[(month - 1) as usize])

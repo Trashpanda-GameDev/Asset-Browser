@@ -40,7 +40,7 @@ const THUMB_VERSION: u64 = 1;
 /// The same for model previews, kept apart so they can be made again without throwing away the
 /// image and sound caches. Starts at 2: version 1 is what model keys were before models had
 /// previews.
-pub const MODEL_PREVIEW_VERSION: u64 = 2;
+const MODEL_PREVIEW_VERSION: u64 = 2;
 
 pub struct ThumbJob {
     pub key: i64,
@@ -75,7 +75,6 @@ impl ThumbPixels {
 pub struct Thumb {
     pub key: i64,
     pub result: Result<Preview, String>,
-    pub from_cache: bool,
     pub micros: u64,
 }
 
@@ -204,10 +203,6 @@ impl ThumbService {
         (state.queue.len(), state.in_flight.len())
     }
 
-    pub fn is_in_flight(&self, key: i64) -> bool {
-        self.shared.state.lock().unwrap().in_flight.contains(&key)
-    }
-
     pub fn try_recv(&self) -> Option<Thumb> {
         self.results.try_recv().ok()
     }
@@ -281,7 +276,7 @@ impl Worker {
         let start = Instant::now();
         if let Some(result) = conn.and_then(|conn| cached_preview(conn, job)) {
             self.stats.from_cache.fetch_add(1, Ordering::Relaxed);
-            return Thumb { key: job.key, result, from_cache: true, micros: start.elapsed().as_micros() as u64 };
+            return Thumb { key: job.key, result, micros: start.elapsed().as_micros() as u64 };
         }
 
         // Some decoders panic on malformed files. Contain it here: the worker carries on and the
@@ -302,7 +297,7 @@ impl Worker {
         let _ = self.store.send(Store::Write(to_cache(job, &result)));
         self.stats.made.fetch_add(1, Ordering::Relaxed);
         self.stats.make_micros.fetch_add(micros, Ordering::Relaxed);
-        Thumb { key: job.key, result, from_cache: false, micros }
+        Thumb { key: job.key, result, micros }
     }
 }
 
@@ -445,7 +440,7 @@ pub(crate) fn reserve_decode(w: u32, h: u32) -> Option<Reserved<'static>> {
 }
 
 /// Reads an image file and shrinks the picture to fit `THUMB_MAX`.
-pub fn make_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<ThumbPixels, String> {
+fn make_thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<ThumbPixels, String> {
     make_image(path, resizer, THUMB_MAX)
 }
 

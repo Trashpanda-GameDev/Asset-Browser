@@ -194,13 +194,8 @@ impl Action {
     }
 
     /// Moves, which select a range when Shift is held too.
-    pub fn extends_with_shift(self) -> bool {
+    fn extends_with_shift(self) -> bool {
         self.group() == "Moving around"
-    }
-
-    /// Works while the search box has the keys, when it has Ctrl or Alt (a plain key is typed).
-    pub fn while_typing(self) -> bool {
-        self.group() == "Window"
     }
 }
 
@@ -241,7 +236,7 @@ impl Shortcut {
     }
 
     /// As saved: "ctrl+shift+F". The key is egui's own name for it.
-    pub fn to_text(self) -> String {
+    fn to_text(self) -> String {
         let mut text = String::new();
         for (on, name) in [(self.command, "ctrl+"), (self.alt, "alt+"), (self.shift, "shift+")] {
             if on {

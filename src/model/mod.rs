@@ -146,7 +146,7 @@ pub const THUMB_TEXTURE: u32 = 256;
 /// Models with more triangles than this aren't loaded. A vertex is 48 bytes and a faceted STL has
 /// three per triangle, so this keeps one model under about 600 MB with a thumbnail made on every
 /// core at once. The largest model in the test library has 151,000.
-pub const MAX_TRIANGLES: u64 = 4_000_000;
+const MAX_TRIANGLES: u64 = 4_000_000;
 
 fn check_triangle_count(triangles: u64) -> Result<(), String> {
     if triangles > MAX_TRIANGLES {

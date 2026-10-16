@@ -159,8 +159,9 @@ fn src() -> PathBuf {
 fn declared_modules() -> BTreeSet<String> {
     let lib = without_tests(&fs::read_to_string(src().join("lib.rs")).expect("read src/lib.rs"));
     lib.lines()
-        .filter_map(|line| line.trim().strip_prefix("pub mod ").or_else(|| line.trim().strip_prefix("mod ")))
-        .map(|rest| rest.trim_end_matches(';').to_owned())
+        .filter_map(|line| line.split_once("mod "))
+        .filter(|(visibility, _)| visibility.trim().is_empty() || visibility.trim().starts_with("pub"))
+        .map(|(_, name)| name.trim().trim_end_matches(';').to_owned())
         .collect()
 }
 

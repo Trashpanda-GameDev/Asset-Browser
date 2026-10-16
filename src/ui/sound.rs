@@ -64,7 +64,7 @@ impl Sound {
     }
 
     /// Plays `index` from `seconds` in, or jumps there if it's already playing.
-    pub fn play_from(&mut self, library: &Library, index: u32, seconds: f64) {
+    fn play_from(&mut self, library: &Library, index: u32, seconds: f64) {
         let key = library.entries[index as usize].key;
         if self.now_for(key).is_none() {
             self.play(library, index);

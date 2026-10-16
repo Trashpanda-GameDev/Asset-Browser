@@ -17,7 +17,7 @@ use crate::sheets::{self, Sheet};
 use crate::thumbs::{self, ThumbPixels};
 
 /// Longest side of an inspector picture, and of a model's textures in the 3D view.
-pub const DETAIL_MAX: u32 = 2048;
+const DETAIL_MAX: u32 = 2048;
 
 pub enum Detail {
     /// The picture and its frames: a sprite sheet's, or for an animated GIF all its frames laid

@@ -9,7 +9,7 @@ use egui_phosphor::regular as icon;
 
 use super::theme;
 
-pub const ICON_SIZE: f32 = 16.0;
+const ICON_SIZE: f32 = 16.0;
 
 /// A square button showing one icon. `active` shows it switched on.
 pub fn icon_button(ui: &mut Ui, glyph: &str, tooltip: &str, active: bool) -> Response {

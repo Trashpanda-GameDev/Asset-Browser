@@ -77,10 +77,6 @@ impl Previews {
         self.max_textures = count.max(100);
     }
 
-    pub fn texture_count(&self) -> usize {
-        self.textures.len()
-    }
-
     /// Forgets what's held of the cache's parts that were cleared, so they're made again as
     /// they're shown: thumbnails (and model pictures), waveforms, model facts.
     #[expect(clippy::fn_params_excessive_bools, reason = "refactor: an enum instead of bool flags")]
@@ -179,7 +175,7 @@ impl Previews {
         self.textures.get(&key).map(|texture| texture.src_size)
     }
 
-    pub fn has_preview(&self, entry: &Entry) -> bool {
+    fn has_preview(&self, entry: &Entry) -> bool {
         match entry.kind {
             AssetKind::Image => self.textures.contains_key(&entry.key),
             AssetKind::Audio => self.waveforms.contains_key(&entry.key),

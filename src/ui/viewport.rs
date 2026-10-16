@@ -109,11 +109,6 @@ struct Target {
 }
 
 impl Viewport {
-    /// Whether models can be shown in 3D at all (the window runs on wgpu).
-    pub fn available(render_state: Option<&RenderState>) -> bool {
-        render_state.is_some()
-    }
-
     /// Draws `model` (with cache key `key`) in `rect`. Returns false if there's no GPU to draw with.
     #[expect(
         clippy::too_many_arguments,

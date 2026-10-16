@@ -19,7 +19,7 @@ use crate::diag;
 pub const RELEASES: &str = "https://github.com/Trashpanda-GameDev/Asset-Browser";
 /// A folder or web address holding `vpk pack` output, checked instead of `RELEASES`: for trying an
 /// update out before it's released.
-pub const FEED_VARIABLE: &str = "ASSET_BROWSER_UPDATE_FEED";
+const FEED_VARIABLE: &str = "ASSET_BROWSER_UPDATE_FEED";
 /// How often a copy that's left open checks again. A check uses one or two of the 60 requests an
 /// hour GitHub allows an address that doesn't sign in.
 const CHECK_AGAIN: Duration = Duration::from_secs(6 * 60 * 60);
