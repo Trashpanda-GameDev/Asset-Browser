@@ -16,7 +16,7 @@ use crate::library::{Entry, Library, SortBy};
 
 use super::asset_actions::{self, AssetAction};
 use super::display::Backdrop;
-use super::format::{format_age, format_size, format_time, grouped};
+use super::format::{channels, dimensions, format_age, format_size, format_time, grouped, sample_rate};
 use super::keymap::{self, Action};
 use super::mode::{Mode, Selection};
 use super::organize::{self, DraggedAssets, GroupCommand, Targets};
@@ -378,10 +378,7 @@ pub fn draw_preview(
         draw_texture(painter, rect, texture, previews.checker.id(), backdrop, look.pixels_per_point);
     } else if let Some(waveform) = previews.waveforms.get(&entry.key) {
         let color = theme::kind_color(entry.kind);
-        let progress = playing.map(|now| {
-            let total = now.duration.unwrap_or(waveform.duration as f64).max(f64::EPSILON);
-            (now.position / total) as f32
-        });
+        let progress = playing.map(|now| now.progress(waveform.duration as f64));
         let wave_rect = if large { Rect::from_min_max(rect.min, pos2(rect.max.x, rect.max.y - 16.0)) } else { rect };
         draw_waveform(painter, wave_rect, waveform, color.gamma_multiply(0.5), color, progress);
         if large {
@@ -719,15 +716,10 @@ impl ListRow<'_, '_> {
                     );
                 }
                 Column::Details => weak(self.details()),
-                Column::Dimensions => {
-                    weak(self.previews.dimensions(entry.key).map_or_else(String::new, |[w, h]| format!("{w} × {h}")))
-                }
+                Column::Dimensions => weak(self.previews.dimensions(entry.key).map_or_else(String::new, dimensions)),
                 Column::Waveform => {
                     if let Some(waveform) = self.previews.waveforms.get(&entry.key) {
-                        let progress = playing.map(|now| {
-                            let total = now.duration.unwrap_or(waveform.duration as f64).max(f64::EPSILON);
-                            (now.position / total) as f32
-                        });
+                        let progress = playing.map(|now| now.progress(waveform.duration as f64));
                         let color = theme::kind_color(entry.kind);
                         let wave = cell.shrink2(vec2(4.0, 7.0));
                         draw_waveform(painter, wave, waveform, color.gamma_multiply(0.5), color, progress);
@@ -740,7 +732,7 @@ impl ListRow<'_, '_> {
                         .map_or_else(String::new, |w| format_time(w.duration as f64)),
                 ),
                 Column::Format => weak(self.previews.waveforms.get(&entry.key).map_or_else(String::new, |w| {
-                    format!("{:.1} kHz · {}", w.sample_rate as f32 / 1000.0, channels(w.channels))
+                    format!("{} · {}", sample_rate(w.sample_rate), channels(w.channels))
                 })),
                 Column::Triangles => weak(
                     self.previews
@@ -775,9 +767,7 @@ impl ListRow<'_, '_> {
     fn details(&self) -> String {
         let entry = self.entry;
         match entry.kind {
-            AssetKind::Image => {
-                self.previews.dimensions(entry.key).map_or_else(String::new, |[w, h]| format!("{w} × {h}"))
-            }
+            AssetKind::Image => self.previews.dimensions(entry.key).map_or_else(String::new, dimensions),
             AssetKind::Audio => {
                 self.previews.waveforms.get(&entry.key).map_or_else(String::new, |w| {
                     format!("{} · {}", format_time(w.duration as f64), channels(w.channels))
@@ -794,14 +784,6 @@ impl ListRow<'_, '_> {
                 }
             }),
         }
-    }
-}
-
-pub fn channels(count: u16) -> String {
-    match count {
-        1 => "mono".to_owned(),
-        2 => "stereo".to_owned(),
-        n => format!("{n} ch"),
     }
 }
 

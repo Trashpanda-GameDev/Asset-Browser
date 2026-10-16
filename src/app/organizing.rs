@@ -11,7 +11,8 @@ use crate::asset::AssetKind;
 use crate::groups::{self, FAVORITES, Groups, Membership};
 use crate::library::Library;
 use crate::sheets::{Saved, SheetStore};
-use crate::ui::organize::{GroupCommand, GroupEdit, Targets, plural};
+use crate::ui::format::plural;
+use crate::ui::organize::{GroupCommand, GroupEdit, Targets};
 use crate::ui::{theme, widgets};
 
 use super::BrowserApp;

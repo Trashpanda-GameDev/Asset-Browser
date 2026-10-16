@@ -21,9 +21,9 @@ use crate::playback::Playback;
 use crate::sheets::{Saved, Sheet, Source};
 
 use super::asset_actions::{self, AssetAction};
-use super::browse::{Look, channels, draw_preview};
+use super::browse::{Look, draw_preview};
 use super::display::{self, Display};
-use super::format::{format_age, format_size, format_time, grouped};
+use super::format::{channels, dimensions, format_age, format_size, format_time, grouped, sample_rate};
 use super::image_view::{ImageView, Picture};
 use super::keymap::{self, Action};
 use super::mode::Selection;
@@ -477,7 +477,7 @@ fn sound_section(
 fn sound_properties(ui: &mut Ui, entry: &Entry, previews: &Previews) {
     if let Some(waveform) = previews.waveforms.get(&entry.key) {
         widgets::property(ui, "Length", format_time(waveform.duration as f64));
-        widgets::property(ui, "Sample rate", format!("{:.1} kHz", waveform.sample_rate as f32 / 1000.0));
+        widgets::property(ui, "Sample rate", sample_rate(waveform.sample_rate));
         widgets::property(ui, "Channels", channels(waveform.channels));
     } else if let Some(message) = previews.failed.get(&entry.key) {
         widgets::property(ui, "Preview", RichText::new(message).color(theme::ERROR));
@@ -498,7 +498,7 @@ fn image_properties(
     frames: Option<RichText>,
 ) {
     if let Some([w, h]) = detail.or(previews.dimensions(entry.key)) {
-        widgets::property(ui, "Dimensions", format!("{w} × {h} px"));
+        widgets::property(ui, "Dimensions", format!("{} px", dimensions([w, h])));
     } else if let Some(message) = previews.failed.get(&entry.key) {
         widgets::property(ui, "Preview", RichText::new(message).color(theme::ERROR));
     } else {

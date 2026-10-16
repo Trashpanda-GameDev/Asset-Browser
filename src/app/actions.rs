@@ -6,9 +6,10 @@ use eframe::egui;
 use crate::asset::AssetKind;
 use crate::library::folder_name;
 use crate::ui::asset_actions::AssetAction;
+use crate::ui::format::plural;
 use crate::ui::keymap::{Action, Keymap};
 use crate::ui::mode::{Layout as ViewLayout, Mode};
-use crate::ui::organize::{GroupCommand, Targets, plural};
+use crate::ui::organize::{GroupCommand, Targets};
 use crate::ui::sound::SoundCommand;
 use crate::{diag, platform};
 

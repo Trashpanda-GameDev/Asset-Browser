@@ -14,8 +14,7 @@ use crate::rescan::ScanTotals;
 use crate::thumbs::ThumbProgress;
 use crate::updates::Updates;
 
-use super::format::{format_time, grouped};
-use super::organize::plural;
+use super::format::{format_time, grouped, plural};
 use super::sound::SoundCommand;
 use super::updates::{self, UpdateAction};
 use super::{theme, widgets};

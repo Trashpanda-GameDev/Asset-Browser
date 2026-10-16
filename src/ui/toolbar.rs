@@ -7,7 +7,7 @@ use crate::groups::{self, GroupKind, Groups, Membership, UNCATEGORIZED};
 use crate::library::{Library, SortBy};
 
 use super::display::{self, Display};
-use super::format::grouped;
+use super::format::{grouped, plural};
 use super::mode::{Layout as ViewLayout, Mode, ModeView};
 use super::organize::GroupCommand;
 use super::{theme, widgets};
@@ -115,7 +115,7 @@ fn crumbs(ui: &mut Ui, library: &Library, dir: u32) -> Option<u32> {
 fn counts(ui: &mut Ui, args: &ToolbarArgs<'_>) -> Option<ToolbarCommand> {
     let missing = args.group.and_then(|id| args.membership.missing.get(&id)).map_or(0, Vec::len);
     let elsewhere = args.group.and_then(|id| args.membership.elsewhere.get(&id)).copied().unwrap_or(0);
-    let mut count = format!("{} {}", grouped(args.shown), if args.shown == 1 { "item" } else { "items" });
+    let mut count = plural(args.shown, "item");
     let selected = args.mode_view.selection.len();
     if selected > 1 {
         count.push_str(&format!(" · {} selected", grouped(selected)));

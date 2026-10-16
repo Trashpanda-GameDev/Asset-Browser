@@ -59,6 +59,14 @@ pub struct NowPlaying {
     pub error: Option<String>,
 }
 
+impl NowPlaying {
+    /// How far through the sound playback is, from 0 to 1; `length` stands in until the player
+    /// knows the sound's own.
+    pub fn progress(&self, length: f64) -> f32 {
+        (self.position / self.duration.unwrap_or(length).max(f64::EPSILON)) as f32
+    }
+}
+
 pub struct Player {
     shared: Arc<Shared>,
     commands: Sender<Command>,

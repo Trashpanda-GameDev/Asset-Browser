@@ -42,6 +42,30 @@ pub fn format_time(seconds: f64) -> String {
     }
 }
 
+/// 1 → "1 file", 1200 → "1,200 files"
+pub fn plural(count: usize, noun: &str) -> String {
+    if count == 1 { format!("1 {noun}") } else { format!("{} {noun}s", grouped(count)) }
+}
+
+/// A picture's size in pixels: "1024 × 512".
+pub fn dimensions([w, h]: [u32; 2]) -> String {
+    format!("{w} × {h}")
+}
+
+/// 44100 → "44.1 kHz"
+pub fn sample_rate(hz: u32) -> String {
+    format!("{:.1} kHz", hz as f32 / 1000.0)
+}
+
+/// 1 → "mono", 2 → "stereo", 6 → "6 ch"
+pub fn channels(count: u16) -> String {
+    match count {
+        1 => "mono".to_owned(),
+        2 => "stereo".to_owned(),
+        n => format!("{n} ch"),
+    }
+}
+
 /// A modification time (ns since the Unix epoch) relative to now: "5 min ago", "3 days ago", and
 /// the date ("12 May 2024") beyond a week. Dates are UTC: there's no time zone database here, and
 /// a date that's off by a few hours doesn't matter for telling files apart.

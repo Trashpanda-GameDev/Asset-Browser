@@ -12,7 +12,7 @@ use egui_phosphor::regular as icon;
 use crate::asset::KindSet;
 use crate::groups::{FAVORITES, Group, GroupKind, Groups, Membership, UNCATEGORIZED, UNCATEGORIZED_NAME};
 
-use super::format::grouped;
+use super::format::{grouped, plural};
 use super::keymap::{self, Action};
 use super::{theme, widgets};
 
@@ -565,8 +565,4 @@ pub fn drag_indicator(ctx: &egui::Context) {
     let rect = Rect::from_min_size(pointer + vec2(14.0, 10.0), galley.size() + vec2(20.0, 10.0));
     painter.rect_filled(rect, CornerRadius::same(13), theme::ACCENT.gamma_multiply(0.9));
     painter.galley(rect.min + vec2(10.0, 5.0), galley, theme::TEXT);
-}
-
-pub fn plural(count: usize, noun: &str) -> String {
-    if count == 1 { format!("1 {noun}") } else { format!("{} {noun}s", grouped(count)) }
 }

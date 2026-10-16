@@ -13,7 +13,8 @@ use crate::groups::UNCATEGORIZED;
 use crate::library;
 use crate::scan::ScannedFile;
 use crate::ui::format::grouped;
-use crate::ui::organize::{GroupCommand, Targets, plural};
+use crate::ui::format::plural;
+use crate::ui::organize::{GroupCommand, Targets};
 use crate::ui::{theme, widgets};
 use crate::{diag, platform};
 

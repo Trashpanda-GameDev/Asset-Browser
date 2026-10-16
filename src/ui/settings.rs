@@ -16,8 +16,7 @@ use crate::storage::{Part, Usage};
 use crate::ui::keymap::{self, Action, Keymap, Shortcut};
 use crate::updates::{RELEASES, Status, Updates};
 
-use super::format::{format_age, format_size, grouped};
-use super::organize::plural;
+use super::format::{format_age, format_size, grouped, plural};
 use super::updates::UpdateAction;
 use super::{theme, widgets};
 
