@@ -33,7 +33,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/imaging/psd.rs` | Reads a PSD/PSB's flattened picture at reduced size |
 | `src/model/` | 3D models: the loaders, the CPU thumbnail renderer, and the lighting shared with the 3D view |
 | `src/detail.rs` | Loads the preview pane's large picture (or a GIF's frames) or whole model |
-| `src/groups.rs` | Favorites, collections and categories, and where their members are in the library |
+| `src/groups/` | Favorites, collections and categories (`mod.rs`), how they're saved (`store.rs`), and where their members are in the library (`membership.rs`) |
 | `src/sheets.rs` | Sprite sheets: reading Aseprite / TexturePacker data, guessing grids, per-file choices |
 | `src/animated.rs` | Animated GIFs as sheets of their own frames, within a memory budget |
 | `src/app/` | The window's state (`BrowserApp`, in `mod.rs`) and what it does, a file an area: the library's folders and scans (`library.rs`), what's browsed and selected (`view.rs`), keys and asset actions (`actions.rs`), favorites, collections and categories (`organizing.rs`), deleting (`deleting.rs`), settings (`settings.rs`), the window's parts (`header.rs`, `toolbar.rs`, `sidebar.rs`, `panels.rs`, `toast.rs`), and the screenshots tool's hooks (`screenshots.rs`) |

@@ -14,21 +14,26 @@
 //! lowercase, as the library matches paths. So it survives the file being edited (which changes
 //! its cache key) and opening a parent folder instead of the one it was added from.
 
-use std::collections::{HashMap, HashSet};
+mod membership;
+mod store;
+
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, params};
 
-use crate::asset::KindSet;
 pub use crate::library::path_key;
-use crate::library::{Library, Located};
 use crate::{db, diag};
+pub use membership::Membership;
+use store::{load, now_ms, open_db};
 
 pub const FAVORITES: i64 = 0;
+
 /// Not a stored group: every asset in no category, worked out by `Membership`.
 pub const UNCATEGORIZED: i64 = -1;
+
 pub const UNCATEGORIZED_NAME: &str = "Uncategorized";
+
 /// How many colours categories cycle through. The palette is the UI's (`theme::CATEGORY_COLORS`), and
 /// the compiler holds it to this many.
 pub const CATEGORY_COLOR_COUNT: u8 = 8;
@@ -326,141 +331,11 @@ fn favorites_group() -> Group {
     }
 }
 
-fn open_db(path: &Path) -> rusqlite::Result<Connection> {
-    let conn = db::open_user_data(path)?;
-    // Favorites is always there, as group 0.
-    conn.execute("INSERT OR IGNORE INTO groups(id, kind, name, color, created) VALUES(0, 0, 'Favorites', 0, 0)", [])?;
-    Ok(conn)
-}
-
-fn load(conn: &Connection) -> rusqlite::Result<Vec<Group>> {
-    let mut statement = conn.prepare("SELECT id, kind, name, color FROM groups ORDER BY kind, id")?;
-    let rows = statement.query_map([], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?))
-    })?;
-    let mut list = Vec::new();
-    for row in rows {
-        let (id, kind, name, color) = row?;
-        let Some(kind) = GroupKind::from_db(kind) else { continue };
-        list.push(Group {
-            id,
-            kind,
-            lower: name.to_lowercase(),
-            name,
-            color: (color.rem_euclid(CATEGORY_COLOR_COUNT as i64)) as u8,
-            members: Vec::new(),
-            keys: HashSet::new(),
-            next_seq: 0,
-        });
-    }
-    let mut statement = conn.prepare("SELECT grp, key, path, seq FROM members ORDER BY grp, seq")?;
-    let rows = statement.query_map([], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?))
-    })?;
-    let mut by_id: HashMap<i64, usize> = list.iter().enumerate().map(|(index, group)| (group.id, index)).collect();
-    if !by_id.contains_key(&FAVORITES) {
-        list.insert(0, favorites_group());
-        by_id = list.iter().enumerate().map(|(index, group)| (group.id, index)).collect();
-    }
-    for row in rows {
-        let (grp, key, path, seq) = row?;
-        let Some(&index) = by_id.get(&grp) else { continue };
-        let group = &mut list[index];
-        if group.keys.insert(key.clone()) {
-            group.members.push(Member { key, path });
-            group.next_seq = group.next_seq.max(seq + 1);
-        }
-    }
-    Ok(list)
-}
-
-fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
-}
-
-/// Where each group's members are in the open library. Rebuilt whenever the library or a group
-/// changes; cheap, since each member costs one binary search.
-#[derive(Default)]
-pub struct Membership {
-    /// Per group: its members in the library, as entry indices, in the group's order.
-    pub entries: HashMap<i64, Vec<u32>>,
-    /// Per entry that's in any group: those groups, in `Groups::all` order.
-    of_entry: HashMap<u32, Vec<i64>>,
-    /// Per group: how many members of each kind are in the library.
-    totals: HashMap<i64, [u32; 3]>,
-    /// Per group: members under the library's folder that aren't there any more (moved,
-    /// renamed or deleted), by key.
-    pub missing: HashMap<i64, Vec<String>>,
-    /// Per group: how many members are outside the library's folder.
-    pub elsewhere: HashMap<i64, usize>,
-}
-
-impl Membership {
-    pub fn build(library: &Library, groups: &Groups) -> Self {
-        let mut membership = Membership::default();
-        let mut categorized = vec![false; library.entries.len()];
-        for group in groups.all() {
-            let mut entries = Vec::new();
-            let mut totals = [0u32; 3];
-            for member in &group.members {
-                match library.locate(&member.key) {
-                    Located::Found(index) => {
-                        entries.push(index);
-                        totals[library.entries[index as usize].kind.index()] += 1;
-                        membership.of_entry.entry(index).or_default().push(group.id);
-                        if group.kind == GroupKind::Category {
-                            categorized[index as usize] = true;
-                        }
-                    }
-                    Located::Missing => membership.missing.entry(group.id).or_default().push(member.key.clone()),
-                    Located::Outside => *membership.elsewhere.entry(group.id).or_default() += 1,
-                }
-            }
-            membership.entries.insert(group.id, entries);
-            membership.totals.insert(group.id, totals);
-        }
-        // Uncategorized: what no category holds, in library order.
-        let mut totals = [0u32; 3];
-        let uncategorized: Vec<u32> = (0..library.entries.len() as u32)
-            .filter(|&index| !categorized[index as usize])
-            .inspect(|&index| totals[library.entries[index as usize].kind.index()] += 1)
-            .collect();
-        membership.entries.insert(UNCATEGORIZED, uncategorized);
-        membership.totals.insert(UNCATEGORIZED, totals);
-        membership
-    }
-
-    /// The groups the entry is in.
-    pub fn groups_of(&self, index: u32) -> &[i64] {
-        self.of_entry.get(&index).map_or(&[], Vec::as_slice)
-    }
-
-    pub fn is_favorite(&self, index: u32) -> bool {
-        self.groups_of(index).contains(&FAVORITES)
-    }
-
-    pub fn totals(&self, id: i64) -> [u32; 3] {
-        self.totals.get(&id).copied().unwrap_or_default()
-    }
-
-    /// Members of the enabled kinds in the library.
-    pub fn total(&self, id: i64, kinds: KindSet) -> u32 {
-        kinds.count(self.totals(id))
-    }
-
-    /// Whether `word` (lowercase) is in the name of a category the entry is in: how the search
-    /// box finds assets by category.
-    pub fn category_matches(&self, groups: &Groups, index: u32, word: &str) -> bool {
-        self.groups_of(index).iter().any(|&id| {
-            groups.get(id).is_some_and(|group| group.kind == GroupKind::Category && group.lower.contains(word))
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asset::AssetKind;
+    use crate::asset::{AssetKind, KindSet};
+    use crate::library::Library;
     use crate::scan::ScannedFile;
     use crate::test_support::TempDir;
 
