@@ -19,7 +19,7 @@ use crate::imaging::Pixels;
 use crate::sheets::{self, Frame, Guess, Saved, Sheet, Source, Split};
 
 use super::browse::fit_rect;
-use super::image_view::ImageView;
+use super::image_view::{Content, ImageView, Picture, Place};
 use super::{theme, widgets};
 
 /// Frames per second when the frames have no timing of their own and no speed was picked.
@@ -206,19 +206,10 @@ impl SheetView {
         sheet.animations.get(self.animation.min(sheet.animations.len().saturating_sub(1)))
     }
 
-    /// Draws the current frame in `rect` through the picture view (zoom, pan, backdrop), and
-    /// keeps the animation moving. `key` is the asset's, for the view to keep its zoom.
-    #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
-    pub fn draw(
-        &mut self,
-        ui: &mut Ui,
-        rect: Rect,
-        key: i64,
-        texture: TextureId,
-        sheet_size: [u32; 2],
-        view: &mut ImageView,
-        checker: TextureId,
-    ) {
+    /// Draws the current frame from `sheet`, the whole sheet's picture, through the picture view
+    /// (zoom, pan, backdrop), and keeps the animation moving.
+    pub fn draw(&mut self, ui: &mut Ui, view: &mut ImageView, place: &Place, sheet_picture: &Picture) {
+        let (rect, texture, sheet_size) = (place.rect, sheet_picture.texture, sheet_picture.size);
         let now = ui.input(|input| input.time);
         let position = self.position(now);
         let (Some(sheet), Some(animation)) = (self.sheet.as_ref(), self.current_animation()) else { return };
@@ -229,7 +220,7 @@ impl SheetView {
             .iter()
             .filter_map(|&index| sheet.frames.get(index))
             .fold([1, 1], |[w, h], frame| [w.max(frame.size[0]), h.max(frame.size[1])]);
-        view.show_with(ui, rect, key, size, true, checker, |painter, area| {
+        view.show_with(ui, place, Content { size, pixel_art: true }, |painter, area| {
             let scale = area.width() / size[0] as f32;
             let inset = vec2((size[0] - frame.size[0]) as f32, (size[1] - frame.size[1]) as f32) * scale / 2.0;
             let shown = vec2(frame.size[0] as f32, frame.size[1] as f32) * scale;

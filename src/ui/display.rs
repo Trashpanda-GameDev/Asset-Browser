@@ -5,7 +5,7 @@
 use eframe::egui::{Color32, Ui};
 use egui_phosphor::regular as icon;
 
-use super::widgets;
+use super::{theme, widgets};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Display {
@@ -40,6 +40,14 @@ impl Backdrop {
             Self::Checker => "checker",
             Self::Dark => "dark",
             Self::Light => "light",
+        }
+    }
+
+    /// The picture view's background with this backdrop.
+    pub fn fill(self) -> Color32 {
+        match self {
+            Self::Light => Self::LIGHT,
+            Self::Checker | Self::Dark => theme::WELL,
         }
     }
 

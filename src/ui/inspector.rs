@@ -24,7 +24,7 @@ use super::asset_actions::{self, AssetAction};
 use super::browse::{Look, draw_preview};
 use super::display::{self, Display};
 use super::format::{channels, dimensions, format_age, format_size, format_time, grouped, sample_rate};
-use super::image_view::{ImageView, Picture};
+use super::image_view::{ImageView, Picture, Place};
 use super::keymap::{self, Action};
 use super::mode::Selection;
 use super::organize::{self, GroupCommand, Targets};
@@ -42,6 +42,9 @@ pub struct Inspector {
     pub image: ImageView,
     pub viewport: Viewport,
     pub sheet: SheetView,
+    /// The display as the app has it, with what the pane's buttons change this frame: handed
+    /// back in the output.
+    display: Display,
     /// The large preview of the focused asset, by key.
     detail: Option<(i64, DetailState)>,
 }
@@ -151,7 +154,7 @@ impl Inspector {
         } = args;
         // The picture and 3D views draw with the app's display; their buttons change it here, to
         // be handed back.
-        self.image.backdrop = display.backdrop;
+        self.display = display;
         (self.viewport.auto_rotate, self.viewport.wireframe) = (display.turntable, display.wireframe);
         let Some(focus) = selection.focus.filter(|&focus| (focus as usize) < library.entries().len()) else {
             self.viewport.release();
@@ -240,7 +243,7 @@ impl Inspector {
 
             if selection.len() > 1 {
                 ui.add_space(10.0);
-                let look = Look::new(ui, self.image.backdrop);
+                let look = Look::new(ui, self.display.backdrop);
                 if let Some(index) = selection_strip(ui, library, selection, previews, look) {
                     output.focus = Some(index);
                 }
@@ -248,7 +251,7 @@ impl Inspector {
         });
         output.sheet_choices = self.sheet.take_choices();
         let shown = Display {
-            backdrop: self.image.backdrop,
+            backdrop: self.display.backdrop,
             turntable: self.viewport.auto_rotate,
             wireframe: self.viewport.wireframe,
         };
@@ -319,6 +322,7 @@ impl Inspector {
     fn image_section(&mut self, ui: &mut Ui, entry: &Entry, previews: &Previews, width: f32) {
         let height = (width * 0.85).clamp(180.0, 440.0);
         let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+        let place = Place { rect, key: entry.key, backdrop: self.display.backdrop, checker: previews.checker.id() };
         let now = ui.input(|input| input.time);
         // The full picture, once loaded: what the sprite sheet player draws from.
         let loaded = match &self.detail {
@@ -330,7 +334,8 @@ impl Inspector {
         let animating = self.sheet.animate && self.sheet.sheet.is_some() && loaded.is_some();
 
         if let (Some((texture, size, _)), true) = (&loaded, animating) {
-            self.sheet.draw(ui, rect, entry.key, *texture, *size, &mut self.image, previews.checker.id());
+            let sheet_picture = Picture { texture: *texture, size: *size, pixel_art: false };
+            self.sheet.draw(ui, &mut self.image, &place, &sheet_picture);
         } else {
             let picture = match (&loaded, previews.texture(entry.key)) {
                 (Some((texture, size, _)), _) => Some(Picture { texture: *texture, size: *size, pixel_art: false }),
@@ -342,14 +347,14 @@ impl Inspector {
                 (None, None) => None,
             };
             match picture {
-                Some(picture) => self.image.show(ui, rect, entry.key, &picture, previews.checker.id()),
-                None => placeholder(ui, rect, entry, previews, Look::new(ui, self.image.backdrop)),
+                Some(picture) => self.image.show(ui, &place, &picture),
+                None => placeholder(ui, rect, entry, previews, Look::new(ui, self.display.backdrop)),
             }
         }
         if matches!(&self.detail, Some((key, DetailState::Loading)) if *key == entry.key) {
             spinner_badge(ui, rect);
         }
-        let (sheet, backdrop) = (&mut self.sheet, &mut self.image.backdrop);
+        let (sheet, backdrop) = (&mut self.sheet, &mut self.display.backdrop);
         overlay(ui, rect, |ui| {
             display::backdrop_buttons(ui, backdrop);
             if let Some((_, _, pixels)) = &loaded {
@@ -387,7 +392,7 @@ impl Inspector {
         // Until the model is loaded (or when it can't be shown in 3D), the thumbnail stands in.
         ui.painter().rect_filled(rect, theme::CARD_RADIUS, theme::WELL);
         let inner = rect.shrink(16.0);
-        draw_preview(ui.painter(), inner, entry, previews, None, Look::new(ui, self.image.backdrop), true);
+        draw_preview(ui.painter(), inner, entry, previews, None, Look::new(ui, self.display.backdrop), true);
         let note = match &self.detail {
             Some((key, DetailState::Loading)) if *key == entry.key => {
                 spinner_badge(ui, rect);
