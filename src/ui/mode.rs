@@ -124,6 +124,7 @@ impl ModeView {
         if in_group { (self.group_sort, self.group_descending) } else { (self.sort, self.descending) }
     }
 
+    #[expect(clippy::fn_params_excessive_bools, reason = "refactor: an enum instead of bool flags")]
     pub fn set_order(&mut self, in_group: bool, sort: SortBy, descending: bool) {
         if in_group {
             (self.group_sort, self.group_descending) = (sort, descending);

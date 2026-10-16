@@ -31,6 +31,7 @@ struct Options {
     sheet: Option<PathBuf>,
 }
 
+#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 fn main() {
     let mut args = std::env::args().skip(1);
     let mut root = None;
@@ -200,6 +201,7 @@ fn spread<'a>(library: &'a Library, kind: AssetKind, options: &Options, count: u
 }
 
 /// Makes previews for `sample` twice: into an empty cache, then from it.
+#[expect(clippy::cognitive_complexity, clippy::too_many_lines, reason = "refactor: split into named steps")]
 fn previews(label: &str, library: &Library, sample: &[&Entry], db_path: &Path, options: &Options) {
     if sample.is_empty() {
         return;

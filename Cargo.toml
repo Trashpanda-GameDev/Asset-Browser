@@ -71,3 +71,18 @@ codegen-units = 1
 [build-dependencies]
 # Puts the icon and the app's name into the Windows exe (`build.rs`).
 winresource = "0.1"
+
+[lints.clippy]
+# The rules in docs/architecture.md; their thresholds are in clippy.toml. Code that breaks one is marked
+# #[expect(clippy::..., reason = "...")], and a mark the code no longer needs fails the build.
+too_many_lines = "warn"
+cognitive_complexity = "warn"
+struct_excessive_bools = "warn"
+fn_params_excessive_bools = "warn"
+needless_pass_by_value = "warn"
+match_same_arms = "warn"
+single_match_else = "warn"
+unused_self = "warn"
+# Exceptions say why, and are #[expect]s, which can't outlive what they excuse.
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"

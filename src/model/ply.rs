@@ -179,6 +179,7 @@ impl Values<'_> {
 /// More list entries than this means a damaged file, not a polygon.
 const MAX_LIST: f64 = 4096.0;
 
+#[expect(clippy::cognitive_complexity, clippy::too_many_lines, reason = "refactor: split into named steps")]
 fn parse(bytes: &[u8], dir: &Path, options: &LoadOptions) -> Result<Model, String> {
     let header = parse_header(bytes)?;
     let mut values = Values { encoding: header.encoding, bytes, at: header.data };

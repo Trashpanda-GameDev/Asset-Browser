@@ -160,6 +160,7 @@ struct Reader<'a> {
 }
 
 impl Reader<'_> {
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn add_mesh(&mut self, data: &[u8]) {
         let mut points: Vec<[f32; 3]> = Vec::new();
         let mut uvs: Vec<[f32; 2]> = Vec::new();

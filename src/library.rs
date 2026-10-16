@@ -540,6 +540,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::cognitive_complexity, reason = "refactor: split into smaller tests")]
     fn several_roots_make_one_library() {
         // Forward slashes, which every OS splits paths on, so the second root is named "Audio" on
         // Linux and macOS too.

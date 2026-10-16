@@ -57,6 +57,7 @@ use settings::Clearing;
 pub use crate::ui::format::{format_size, format_time, grouped};
 pub use screenshots::ScreenshotView;
 
+#[expect(clippy::struct_excessive_bools, reason = "refactor: bools that are states become enums")]
 pub struct BrowserApp {
     ctx: egui::Context,
     db_path: PathBuf,
@@ -130,6 +131,7 @@ pub struct BrowserApp {
 }
 
 impl BrowserApp {
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub fn new(cc: &eframe::CreationContext<'_>, start_root: Option<PathBuf>) -> Self {
         theme::apply(&cc.egui_ctx);
         theme::color_title_bar(&cc.egui_ctx, cc);

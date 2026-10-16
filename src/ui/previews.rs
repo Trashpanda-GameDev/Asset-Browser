@@ -83,6 +83,7 @@ impl Previews {
 
     /// Forgets what's held of the cache's parts that were cleared, so they're made again as
     /// they're shown: thumbnails (and model pictures), waveforms, model facts.
+    #[expect(clippy::fn_params_excessive_bools, reason = "refactor: an enum instead of bool flags")]
     pub fn forget(&mut self, thumbnails: bool, waveforms: bool, models: bool) {
         if thumbnails {
             self.textures.clear();

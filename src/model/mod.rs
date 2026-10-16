@@ -368,6 +368,7 @@ impl Builder {
 
     /// Checks and packs everything into a `Model`. Triangles touching a vertex whose position
     /// isn't a finite number are dropped; other broken attributes get neutral values.
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn finish(mut self, format: impl Into<String>) -> Result<Model, String> {
         check_triangle_count(self.added_triangles)?;
         let mut bad = vec![false; self.vertices.len()];

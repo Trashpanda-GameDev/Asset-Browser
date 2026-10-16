@@ -12,6 +12,7 @@ use super::BrowserApp;
 
 impl BrowserApp {
     /// Applies what the user asked for from the sidebar, a menu, a star, a drop or the pane.
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub(super) fn run_group_command(&mut self, command: GroupCommand) {
         let name_of = |groups: &Groups, id: i64| groups.get(id).map_or_else(String::new, |group| group.name.clone());
         // These can take assets out of the group being browsed (Uncategorized included).

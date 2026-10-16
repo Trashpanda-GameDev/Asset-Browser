@@ -236,6 +236,11 @@ fn output_stream<T: SizedSample + FromSample<f32>>(
         .map_err(|err| err.to_string())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "refactor: take fewer, grouped arguments; split into named steps"
+)]
 fn decoder_loop(
     shared: &Shared,
     mut buffer: rtrb::Producer<f32>,
@@ -472,6 +477,7 @@ struct Resampler {
 }
 
 impl Resampler {
+    #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
     fn process(
         &mut self,
         input: &[f32],

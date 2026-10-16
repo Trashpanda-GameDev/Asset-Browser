@@ -1,6 +1,7 @@
 # Working on Asset Browser
 
-How the code is laid out, how it stays fast, and the tools for measuring it and taking pictures of it.
+How the code is laid out, how it stays fast, and the tools for measuring it and taking pictures of it. The rules the
+code follows, and which part may use which, are in [how the code fits together](architecture.md).
 [Back to the README](../README.md)
 
 It's written in Rust with [egui](https://github.com/emilk/egui) on wgpu. Windows comes first; it's written to build

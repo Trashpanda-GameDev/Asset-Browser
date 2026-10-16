@@ -88,6 +88,7 @@ impl FolderTree {
     }
 
     /// Draws the tree; returns what was asked of a folder.
+    #[expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "refactor: split into named steps")]
     pub fn show(&mut self, ui: &mut Ui, library: &Library, kinds: [bool; 3], selected: u32) -> Option<FolderAction> {
         let rows = self.rows(library, kinds);
         let mut action = None;

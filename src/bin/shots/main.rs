@@ -175,6 +175,7 @@ struct Shots {
 }
 
 impl eframe::App for Shots {
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.app.ui(ui, frame);
         let ctx = ui.ctx().clone();

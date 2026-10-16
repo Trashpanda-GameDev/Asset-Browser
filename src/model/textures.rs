@@ -413,6 +413,7 @@ fn decode_image(bytes: &[u8], name: &Path) -> Option<(u32, u32, Vec<u8>)> {
 }
 
 /// Decides how alpha is used, then scales the picture to fit `max`.
+#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
 fn finish(name: &str, w: u32, h: u32, mut rgba: Vec<u8>, max: u32, alpha: Alpha) -> Option<Decoded> {
     if w == 0 || h == 0 || rgba.len() != w as usize * h as usize * 4 {
         return None;

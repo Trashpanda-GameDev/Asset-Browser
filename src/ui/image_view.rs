@@ -75,6 +75,7 @@ impl Default for ImageView {
 }
 
 impl ImageView {
+    #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
     pub fn show(&mut self, ui: &mut Ui, rect: Rect, key: i64, picture: &Picture, checker: TextureId) {
         let texture = picture.texture;
         self.show_with(ui, rect, key, picture.size, picture.pixel_art, checker, |painter, area| {
@@ -84,7 +85,12 @@ impl ImageView {
 
     /// Shows `size` pixels of something, zoomed and panned like a picture: `draw` paints it into
     /// the area it covers on screen (clipped to `rect`).
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::cognitive_complexity,
+        clippy::too_many_lines,
+        clippy::too_many_arguments,
+        reason = "refactor: split into named steps; take fewer, grouped arguments"
+    )]
     pub fn show_with(
         &mut self,
         ui: &mut Ui,
@@ -191,6 +197,7 @@ impl ImageView {
     }
 
     /// The picture point (0..1) under a screen position.
+    #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
     fn picture_point(&self, rect: Rect, at: Pos2, scale: f32, w: f32, h: f32) -> Vec2 {
         self.center + (at - rect.center()) / vec2(w * scale, h * scale)
     }

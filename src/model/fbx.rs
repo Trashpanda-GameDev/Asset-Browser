@@ -16,6 +16,7 @@ const MEMORY_LIMIT: usize = 1 << 30;
 /// vertex per corner all at once: 3 MB of them.
 const CHUNK_CORNERS: usize = 1 << 16;
 
+#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
     let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
     let filename = path.to_string_lossy();

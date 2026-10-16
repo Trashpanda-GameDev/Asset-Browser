@@ -222,6 +222,7 @@ fn play_button(ui: &mut Ui, glyph: &str) -> egui::Response {
 }
 
 /// A waveform to click or drag on to jump. Starts the sound if it isn't playing.
+#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
 pub fn scrubber(
     ui: &mut Ui,
     height: f32,
@@ -281,6 +282,7 @@ pub fn scrubber(
 
 /// Draws a waveform as one mesh: a bar per column from the lowest to the highest sample in it.
 /// Columns before `progress` (0..1) use `played`.
+#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
 pub fn draw_waveform(
     painter: &egui::Painter,
     rect: Rect,

@@ -225,6 +225,7 @@ impl Settings {
         }
     }
 
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn keyboard_page(&mut self, ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command>) {
         note(ui, "Click a shortcut, then press the keys for it. Moves select as they go with Shift held too.");
         let mut group = "";
@@ -291,6 +292,7 @@ impl Settings {
         }
     }
 
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn storage_page(&mut self, ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command>) {
         // Measured when first shown, and again after clearing.
         if self.usage.is_none() && self.measuring.is_none() && !args.clearing {
@@ -465,6 +467,7 @@ impl Settings {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 fn updates_page(ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command>) {
     let updates = args.updates;
     let version = updates.version();

@@ -144,6 +144,7 @@ impl Layout {
 }
 
 /// Copies a `w` × `h` frame into the sheet at `x`, `y`.
+#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
 fn blit(sheet: &mut [u8], sheet_w: u32, frame: &[u8], w: u32, h: u32, x: u32, y: u32) {
     let row = w as usize * 4;
     for line in 0..h as usize {

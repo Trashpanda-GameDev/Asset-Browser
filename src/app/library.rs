@@ -249,6 +249,7 @@ impl BrowserApp {
 
     /// Scans `targets` (some of the library's folders) in the background, then builds the
     /// library with what was found and the files the other folders have now.
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub(super) fn scan(&mut self, targets: Vec<PathBuf>) {
         if targets.is_empty() {
             return;

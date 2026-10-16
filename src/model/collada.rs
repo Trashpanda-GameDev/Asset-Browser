@@ -287,6 +287,7 @@ impl<'a, 'input> Reader<'a, 'input> {
 
     /// The primitive's corners as vertices (merged where all their indices match) and triangles,
     /// in the geometry's own space; and whether normals came with it.
+    #[expect(clippy::cognitive_complexity, clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn read_primitive(&mut self, primitive: Node<'a, 'input>) -> Option<(Vec<Vertex>, Vec<u32>, bool)> {
         // Inputs of the primitive; VERTEX expands into the `vertices` element's inputs.
         let mut inputs: Vec<Input> = Vec::new();

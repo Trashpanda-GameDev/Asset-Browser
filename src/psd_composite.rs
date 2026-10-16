@@ -27,6 +27,7 @@ pub fn read(path: &Path, max: u32) -> Result<Sampled, String> {
     read_inner(path, max).map_err(|err| format!("PSD: {err}"))
 }
 
+#[expect(clippy::cognitive_complexity, clippy::too_many_lines, reason = "refactor: split into named steps")]
 fn read_inner(path: &Path, max: u32) -> Result<Sampled, String> {
     let file = File::open(path).map_err(|err| err.to_string())?;
     let mut r = Reader { inner: BufReader::with_capacity(64 * 1024, file), pos: 0 };

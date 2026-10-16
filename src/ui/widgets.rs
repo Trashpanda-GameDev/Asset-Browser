@@ -82,6 +82,7 @@ pub struct Segment<'a> {
 
 /// A row of mutually exclusive choices in one pill; the highlight slides to the chosen one.
 /// Returns the index clicked, if any.
+#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 pub fn segmented(ui: &mut Ui, id: Id, segments: &[Segment<'_>], selected: usize) -> Option<usize> {
     const PAD: f32 = 3.0;
     const HEIGHT: f32 = 30.0;

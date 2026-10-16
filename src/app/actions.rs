@@ -66,6 +66,7 @@ impl BrowserApp {
 
     /// Runs before any widget is drawn and consumes the keys it handles, so a focused button
     /// can't also react to Space or Enter.
+    #[expect(clippy::cognitive_complexity, clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub(super) fn handle_keys(&mut self, ctx: &egui::Context) {
         // A "Delete?" dialog takes the keys itself (Enter, Esc), and so do the settings and "What's
         // new" (Esc, a shortcut being changed).

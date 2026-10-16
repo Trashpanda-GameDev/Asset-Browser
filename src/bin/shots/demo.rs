@@ -59,6 +59,7 @@ pub fn arrive(root: &Path, i: usize) -> io::Result<()> {
 }
 
 /// Favorites, collections and categories over the library in `root`, in the app's user data.
+#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 pub fn organize(root: &Path) {
     let mut groups = Groups::open(&db::user_data_path());
     let paths = |files: &[&str]| files.iter().map(|file| root.join(file)).collect::<Vec<_>>();
@@ -331,6 +332,7 @@ fn polygon(points: Vec<(f32, f32)>) -> impl Fn(f32, f32) -> bool {
 }
 
 /// A star's corners, `count` points, the first straight up (turned by `turn`).
+#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
 fn star_points(cx: f32, cy: f32, outer: f32, inner: f32, count: usize, turn: f32) -> Vec<(f32, f32)> {
     (0..count * 2)
         .map(|i| {
@@ -603,6 +605,7 @@ fn star() -> Canvas {
 
 // Tiles ----------------------------------------------------------------------------------------
 
+#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 fn tiles(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     let tile = |name: &str, color: &dyn Fn(f32, f32) -> Rgba| Canvas::paint(128, 128, color).save(&dir.join(name));
@@ -1000,6 +1003,7 @@ fn gif(path: &Path, w: u16, h: u16, delay: u16, frames: Vec<Canvas>) -> io::Resu
 
 const RATE: u32 = 44_100;
 
+#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 fn sounds(dir: &Path) -> io::Result<()> {
     let (sfx, music) = (dir.join("SFX"), dir.join("Music"));
     fs::create_dir_all(&sfx)?;
@@ -1269,6 +1273,7 @@ impl Mesh {
     }
 
     /// A triangle, turned to face away from `inside`.
+    #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
     fn tri(&mut self, material: usize, a: Vec3, b: Vec3, c: Vec3, inside: Vec3) {
         let centre = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, (a[2] + b[2] + c[2]) / 3.0];
         let (b, c) = if dot(cross(sub(b, a), sub(c, a)), sub(centre, inside)) < 0.0 { (c, b) } else { (b, c) };
@@ -1297,6 +1302,7 @@ impl Mesh {
 
     /// A shape turned around an upright axis through `at`: `profile` is (radius, height) from the
     /// bottom up, closed by flat caps where it doesn't end on the axis.
+    #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
     fn lathe(&mut self, material: usize, at: Vec3, profile: &[(f32, f32)], segments: usize, caps: Option<usize>) {
         let point = |(r, h): (f32, f32), i: usize| {
             let a = i as f32 / segments as f32 * TAU;
@@ -1368,6 +1374,7 @@ impl Mesh {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 fn models(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir)?;
 

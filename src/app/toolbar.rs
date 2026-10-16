@@ -14,6 +14,7 @@ use super::BrowserApp;
 
 impl BrowserApp {
     /// Above the assets: where you are, how many there are, and how they're shown.
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub(super) fn toolbar(&mut self, ui: &mut egui::Ui) {
         let Some(library) = &self.library else { return };
         // A folder's path, or the group's name with what's not here.

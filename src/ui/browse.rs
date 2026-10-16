@@ -415,6 +415,7 @@ impl Tile<'_, '_> {
 }
 
 /// Draws an asset's preview into `rect`: its thumbnail, waveform, or a placeholder while it's made.
+#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
 pub fn draw_preview(
     painter: &egui::Painter,
     rect: Rect,
@@ -478,6 +479,7 @@ pub fn draw_preview(
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
 fn draw_texture(
     painter: &egui::Painter,
     area: Rect,
@@ -563,6 +565,7 @@ impl Column {
         }
     }
 
+    #[expect(clippy::match_same_arms, reason = "each column's width is its own; equal widths are a coincidence")]
     fn width(self) -> Width {
         match self {
             Self::Star => Width::Fixed(26.0),
@@ -667,6 +670,7 @@ struct ListRow<'a, 'b> {
 
 impl ListRow<'_, '_> {
     /// Draws the row; returns what its star asked for.
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn show(
         self,
         ui: &Ui,

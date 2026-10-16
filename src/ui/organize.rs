@@ -87,6 +87,7 @@ pub struct Sidebar<'a> {
 }
 
 impl Sidebar<'_> {
+    #[expect(clippy::cognitive_complexity, clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub fn show(self, ui: &mut Ui) -> Vec<GroupCommand> {
         let mut commands = Vec::new();
         let dragging = egui::DragAndDrop::payload::<DraggedAssets>(ui.ctx()).map(|payload| payload.0.len());

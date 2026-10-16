@@ -491,6 +491,7 @@ fn resize_options(alpha: bool) -> fr::ResizeOptions {
 }
 
 /// Fits `w` × `h` pixels (already reduced from `src_w` × `src_h`, or not) into `max`.
+#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
 pub(crate) fn shrink(
     w: u32,
     h: u32,

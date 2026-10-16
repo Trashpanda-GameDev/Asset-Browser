@@ -118,6 +118,7 @@ impl Framing {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 fn draw_triangles(model: &Model, camera: &Camera, size: usize) -> Vec<u8> {
     let side = size * SUPERSAMPLE;
     let view: Vec<[f32; 3]> = model.vertices.iter().map(|vertex| camera.to_view(vertex.position)).collect();

@@ -92,6 +92,7 @@ pub(super) const DEFAULT_CREASE: Smoothing<'static> = Smoothing::Crease(0.642_78
 /// Gives every triangle corner a normal: the area-weighted average of the faces around its
 /// position that are smoothed together with its own, then merges corners that came out equal.
 /// Positions are matched by value, since files often split vertices at UV seams.
+#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 pub(super) fn smooth_normals(vertices: &[Vertex], indices: &[u32], smoothing: Smoothing) -> (Vec<Vertex>, Vec<u32>) {
     let triangles = indices.as_chunks::<3>().0;
     let mut position_ids: HashMap<[u32; 3], u32> = HashMap::with_capacity(vertices.len());

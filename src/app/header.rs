@@ -15,6 +15,7 @@ use crate::ui::{theme, widgets};
 use super::BrowserApp;
 
 impl BrowserApp {
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub(super) fn header(&mut self, ui: &mut egui::Ui) {
         let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin::symmetric(12, 8));
         let mut action = None;

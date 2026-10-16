@@ -22,6 +22,7 @@ use crate::ui::{theme, widgets};
 use super::BrowserApp;
 
 impl BrowserApp {
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub(super) fn status_bar(&mut self, ui: &mut egui::Ui) {
         let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin::symmetric(12, 4));
         let mut show = None;
@@ -180,6 +181,7 @@ impl BrowserApp {
         });
     }
 
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub(super) fn central(&mut self, ui: &mut egui::Ui) {
         let frame = Frame::new().fill(theme::BG).inner_margin(Margin { left: 12, right: 6, top: 6, bottom: 0 });
         let mut output = None;

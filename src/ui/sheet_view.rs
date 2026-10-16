@@ -26,6 +26,7 @@ use super::{theme, widgets};
 /// Frames per second when the frames have no timing of their own and no speed was picked.
 const DEFAULT_FPS: f32 = 8.0;
 
+#[expect(clippy::struct_excessive_bools, reason = "refactor: bools that are states become enums")]
 pub struct SheetView {
     store: SheetStore,
     /// The picture the state below is for (its `groups::path_key`).
@@ -176,7 +177,7 @@ impl SheetView {
 
     /// Draws the current frame in `rect` through the picture view (zoom, pan, backdrop), and
     /// keeps the animation moving. `key` is the asset's, for the view to keep its zoom.
-    #[expect(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
     pub fn draw(
         &mut self,
         ui: &mut Ui,
@@ -213,6 +214,7 @@ impl SheetView {
     }
 
     /// Transport, animations, grid and the sheet overview, under the playing frame.
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub fn controls(&mut self, ui: &mut Ui, texture: TextureId, sheet_size: [u32; 2], pixels: &ThumbPixels) {
         let now = ui.input(|input| input.time);
         let mut changed_grid = None;

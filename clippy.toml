@@ -1,0 +1,7 @@
+# Thresholds for the rules in docs/architecture.md. The lints are turned on in Cargo.toml's [lints].
+too-many-lines-threshold = 60
+cognitive-complexity-threshold = 15
+too-many-arguments-threshold = 5
+# Two bools in a parameter list, or more than three in a struct, become an enum.
+max-fn-params-bools = 1
+max-struct-bools = 3

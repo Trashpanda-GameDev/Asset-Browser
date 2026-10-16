@@ -19,6 +19,7 @@ pub enum UpdateAction {
 }
 
 /// Draws it, for the right-to-left end of the status bar. Returns what was clicked.
+#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 pub fn status(ui: &mut Ui, updates: &Updates) -> Option<UpdateAction> {
     let small = |text: String, color: Color32| RichText::new(text).size(11.5).color(color);
     let version = updates.version();

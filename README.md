@@ -69,5 +69,6 @@ With [Rust](https://rustup.rs) installed:
 cargo run --release
 ```
 
-[Working on it](docs/development.md) shows how the code is laid out and how it stays fast, and
-[releasing](docs/releasing.md) takes one command, `npm run deploy`.
+[Working on it](docs/development.md) shows how the code is laid out and how it stays fast,
+[how the code fits together](docs/architecture.md) has the rules it follows, and [releasing](docs/releasing.md) takes
+one command, `npm run deploy`.

@@ -115,6 +115,11 @@ impl Viewport {
     }
 
     /// Draws `model` (with cache key `key`) in `rect`. Returns false if there's no GPU to draw with.
+    #[expect(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "refactor: take fewer, grouped arguments; split into named steps"
+    )]
     pub fn show(&mut self, ui: &mut Ui, rect: Rect, render_state: &RenderState, key: i64, model: &Model) -> bool {
         let gpu = self.gpu.get_or_insert_with(|| Gpu::new(render_state));
         if self.scene.as_ref().is_none_or(|scene| scene.key != key) {
@@ -230,6 +235,7 @@ impl Drop for Viewport {
 }
 
 impl Gpu {
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn new(state: &RenderState) -> Self {
         let device = state.device.clone();
         let samples = [4, 2]
@@ -461,6 +467,7 @@ impl Gpu {
 }
 
 impl Scene {
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn upload(gpu: &Gpu, key: i64, model: &Model) -> Self {
         let device = &gpu.device;
         let center = model.bounds.center();
@@ -603,6 +610,7 @@ impl Target {
 }
 
 /// A texture with its mip chain, so shrunk-down textures don't shimmer.
+#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
 fn upload_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -774,6 +782,7 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
 }
 
 /// The WGSL, with the shared lighting constants filled in.
+#[expect(clippy::too_many_lines, reason = "refactor: the shader's text goes into a .wgsl file of its own")]
 fn shader_source() -> String {
     let v = |c: [f32; 3]| format!("vec3<f32>({:?}, {:?}, {:?})", c[0], c[1], c[2]);
     let n = |c: [f32; 3]| v(normalize(c));

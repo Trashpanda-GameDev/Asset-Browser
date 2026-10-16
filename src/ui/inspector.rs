@@ -138,6 +138,7 @@ impl Inspector {
         }
     }
 
+    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub fn show(&mut self, ui: &mut Ui, args: InspectorArgs<'_>) -> InspectorOutput {
         let mut output = InspectorOutput::default();
         let InspectorArgs { library, selection, previews, sound, render_state, totals, kinds, groups, membership } =
@@ -305,6 +306,7 @@ impl Inspector {
         self.sheet.controls(ui, texture, size, &pixels);
     }
 
+    #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
     fn image_section(&mut self, ui: &mut Ui, entry: &Entry, path_key: &str, previews: &Previews, width: f32) {
         let height = (width * 0.85).clamp(180.0, 440.0);
         let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
@@ -355,6 +357,7 @@ impl Inspector {
         });
     }
 
+    #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
     fn model_section(
         &mut self,
         ui: &mut Ui,
