@@ -22,8 +22,7 @@ use super::{LoadOptions, Model, ModelError, Vertex, percent_decode};
 
 pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
     let dir = super::folder(file);
-    let ::gltf::Gltf { document, mut blob } =
-        ::gltf::Gltf::from_slice_without_validation(bytes).map_err(|err| format!("glTF: {err}"))?;
+    let ::gltf::Gltf { document, mut blob } = ::gltf::Gltf::from_slice_without_validation(bytes)?;
     check(&document)?;
     let buffers: Vec<Option<Vec<u8>>> = document
         .buffers()
@@ -699,7 +698,9 @@ mod tests {
         // Out-of-range index.
         let json = quad_json(r#"{"byteLength":140}"#, "", r#","material":7"#, "");
         assert!(parse(&glb(&json, &quad_buffer()), Path::new("test.glb"), &options()).is_err());
-        assert!(parse(b"{ not json", Path::new("test.glb"), &options()).is_err());
+        let not_json = parse(b"{ not json", Path::new("test.glb"), &options()).err().unwrap();
+        assert!(matches!(not_json, ModelError::Gltf(_)), "the glTF reader's own error");
+        assert!(not_json.to_string().starts_with("glTF: "), "{not_json}");
         let draco =
             quad_json(r#"{"byteLength":140}"#, "", "", r#","extensionsRequired":["KHR_draco_mesh_compression"]"#);
         let err = parse(&glb(&draco, &quad_buffer()), Path::new("test.glb"), &options()).err().unwrap().to_string();

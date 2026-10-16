@@ -203,6 +203,12 @@ const MAX_TRIANGLES: u64 = 4_000_000;
 pub enum ModelError {
     #[error("{0}")]
     Read(#[from] std::io::Error),
+    /// What the XML reader found wrong with a Collada file.
+    #[error("Collada: {0}")]
+    Collada(#[from] roxmltree::Error),
+    /// What the glTF reader found wrong.
+    #[error("glTF: {0}")]
+    Gltf(#[from] ::gltf::Error),
     #[error("Blender files can't be read without Blender, only their saved preview")]
     Blender,
     #[error("unsupported model format .{0}")]

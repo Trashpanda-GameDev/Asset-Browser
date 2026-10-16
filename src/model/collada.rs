@@ -20,7 +20,7 @@ use super::{LoadOptions, Model, ModelError, Vertex, flip_v, srgb_to_linear};
 pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
     let text = String::from_utf8_lossy(bytes);
     let parsing = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
-    let doc = roxmltree::Document::parse_with_options(&text, parsing).map_err(|err| format!("Collada: {err}"))?;
+    let doc = roxmltree::Document::parse_with_options(&text, parsing)?;
     let root = doc.root_element();
     if root.tag_name().name() != "COLLADA" {
         return Err("not a Collada file".into());
@@ -585,7 +585,9 @@ mod tests {
 
     #[test]
     fn broken_collada() {
-        assert!(parse(b"<COLLADA><unclosed>", Path::new("test.dae"), &LoadOptions::default()).is_err());
+        let unclosed = parse(b"<COLLADA><unclosed>", Path::new("test.dae"), &LoadOptions::default()).err().unwrap();
+        assert!(matches!(unclosed, ModelError::Collada(_)), "the XML reader's own error");
+        assert!(unclosed.to_string().starts_with("Collada: "), "{unclosed}");
         assert!(parse(b"<svg/>", Path::new("test.dae"), &LoadOptions::default()).is_err());
         let no_geometry =
             QUAD.replace("<p>0 0 1 1 2 2 3 3</p>", "<p>0 0 1</p>").replace("<p>0 2 1</p>", "<p>9 9 9</p>");
