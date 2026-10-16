@@ -208,8 +208,9 @@ fn previews(label: &str, library: &Library, sample: &[&Entry], db_path: &Path, o
     let names: HashMap<i64, (&str, u64)> =
         sample.iter().map(|entry| (entry.key, (entry.rel.as_str(), entry.size))).collect();
     let order: HashMap<i64, usize> = sample.iter().enumerate().map(|(i, entry)| (entry.key, i)).collect();
+    let nothing: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
     for pass in ["cold", "warm"] {
-        let service = ThumbService::start_with_threads(db_path.to_path_buf(), options.threads, Arc::new(|| {}));
+        let service = ThumbService::start_with_threads(db_path, options.threads, &nothing);
         let jobs = sample
             .iter()
             .map(|entry| ThumbJob { key: entry.key, path: library.path_of(entry), kind: entry.kind })

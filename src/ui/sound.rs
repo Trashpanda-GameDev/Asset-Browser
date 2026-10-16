@@ -242,19 +242,11 @@ pub fn scrubber(
         _ => None,
     };
     let color = entry.kind.color();
-    match waveform {
-        Some(waveform) => draw_waveform(
-            &painter,
-            rect.shrink2(vec2(8.0, 10.0)),
-            waveform,
-            color.gamma_multiply(0.45),
-            color,
-            progress,
-        ),
-        None => {
-            let text = if failed { "Couldn't read this sound" } else { "Reading…" };
-            painter.text(rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(13.0), theme::TEXT_FAINT);
-        }
+    if let Some(waveform) = waveform {
+        draw_waveform(&painter, rect.shrink2(vec2(8.0, 10.0)), waveform, color.gamma_multiply(0.45), color, progress);
+    } else {
+        let text = if failed { "Couldn't read this sound" } else { "Reading…" };
+        painter.text(rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(13.0), theme::TEXT_FAINT);
     }
     let inner = rect.shrink2(vec2(8.0, 0.0));
     let fraction_at = |x: f32| ((x - inner.left()) / inner.width()).clamp(0.0, 1.0);

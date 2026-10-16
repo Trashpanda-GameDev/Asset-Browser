@@ -323,26 +323,21 @@ impl Inspector {
         }
         let animating = self.sheet.animate && self.sheet.sheet.is_some() && loaded.is_some();
 
-        match (&loaded, animating) {
-            (Some((texture, size, _, _)), true) => {
-                self.sheet.draw(ui, rect, entry.key, *texture, *size, &mut self.image, previews.checker.id());
-            }
-            _ => {
-                let picture = match (&loaded, previews.texture(entry.key)) {
-                    (Some((texture, size, _, _)), _) => {
-                        Some(Picture { texture: *texture, size: *size, pixel_art: false })
-                    }
-                    (None, Some(thumbnail)) => Some(Picture {
-                        texture: thumbnail.handle.id(),
-                        size: thumbnail.src_size,
-                        pixel_art: thumbnail.unscaled,
-                    }),
-                    (None, None) => None,
-                };
-                match picture {
-                    Some(picture) => self.image.show(ui, rect, entry.key, &picture, previews.checker.id()),
-                    None => placeholder(ui, rect, entry, previews, Look::new(ui, self.image.backdrop)),
-                }
+        if let (Some((texture, size, _, _)), true) = (&loaded, animating) {
+            self.sheet.draw(ui, rect, entry.key, *texture, *size, &mut self.image, previews.checker.id());
+        } else {
+            let picture = match (&loaded, previews.texture(entry.key)) {
+                (Some((texture, size, _, _)), _) => Some(Picture { texture: *texture, size: *size, pixel_art: false }),
+                (None, Some(thumbnail)) => Some(Picture {
+                    texture: thumbnail.handle.id(),
+                    size: thumbnail.src_size,
+                    pixel_art: thumbnail.unscaled,
+                }),
+                (None, None) => None,
+            };
+            match picture {
+                Some(picture) => self.image.show(ui, rect, entry.key, &picture, previews.checker.id()),
+                None => placeholder(ui, rect, entry, previews, Look::new(ui, self.image.backdrop)),
             }
         }
         if matches!(&self.detail, Some((key, DetailState::Loading)) if *key == entry.key) {

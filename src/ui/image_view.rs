@@ -110,7 +110,7 @@ impl ImageView {
 
         let [w, h] = size.map(|side| side.max(1) as f32);
         let pixels_per_point = ui.ctx().pixels_per_point();
-        let fit = self.fit_scale(rect, w, h, pixel_art, pixels_per_point);
+        let fit = Self::fit_scale(rect, w, h, pixel_art, pixels_per_point);
         let mut scale = self.zoom.unwrap_or(fit);
 
         // Scroll to zoom around the pointer; the picture point under it stays put.
@@ -180,7 +180,7 @@ impl ImageView {
     }
 
     /// Screen points per picture pixel that fit the whole picture in `rect`.
-    fn fit_scale(&self, rect: Rect, w: f32, h: f32, pixel_art: bool, pixels_per_point: f32) -> f32 {
+    fn fit_scale(rect: Rect, w: f32, h: f32, pixel_art: bool, pixels_per_point: f32) -> f32 {
         let room = rect.shrink(12.0);
         let scale = (room.width() / w).min(room.height() / h);
         if pixel_art && scale * pixels_per_point >= 1.0 {

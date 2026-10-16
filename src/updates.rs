@@ -236,7 +236,7 @@ fn check_and_download(manager: &UpdateManager, tx: &Sender<Event>, repaint: &(dy
     let update = match manager.check_for_updates() {
         Ok(UpdateCheck::UpdateAvailable(update)) => update,
         Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => return send(Event::UpToDate),
-        Err(err) => return send(failed("check for updates", err)),
+        Err(err) => return send(failed("check for updates", &err)),
     };
     send(Event::Downloading(update.TargetFullRelease.Version.clone()));
     // Velopack reports every 5%, until the download ends and drops its end of the channel.
@@ -252,13 +252,13 @@ fn check_and_download(manager: &UpdateManager, tx: &Sender<Event>, repaint: &(dy
     });
     send(match downloaded {
         Ok(()) => Event::Downloaded(update),
-        Err(err) => failed("download the update", err),
+        Err(err) => failed("download the update", &err),
     });
 }
 
 /// Logged, but shown only when the check was asked for: being offline isn't worth a warning.
-fn failed(action: &'static str, err: velopack::Error) -> Event {
-    diag::note(&format!("Couldn't {action}"), &err);
+fn failed(action: &'static str, err: &velopack::Error) -> Event {
+    diag::note(&format!("Couldn't {action}"), err);
     Event::Failed { action, error: err.to_string() }
 }
 

@@ -118,23 +118,23 @@ impl BrowserApp {
             self.add_root(&folder);
         }
     }
+}
 
-    /// While something is dragged over the window: what dropping it does.
-    pub(super) fn draw_drop_hint(&self, ctx: &egui::Context) {
-        if ctx.input(|input| input.raw.hovered_files.is_empty()) {
-            return;
-        }
-        let screen = ctx.content_rect();
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop-hint")));
-        painter.rect_filled(screen, 0.0, theme::BG.gamma_multiply(0.8));
-        let area = screen.shrink(24.0);
-        painter.rect_stroke(area, 14.0, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
-        painter.text(
-            area.center(),
-            egui::Align2::CENTER_CENTER,
-            format!("{}  Drop a folder to add it to the library", icon::FOLDER_PLUS),
-            egui::FontId::new(18.0, theme::semibold()),
-            theme::TEXT,
-        );
+/// While something is dragged over the window: what dropping it does.
+pub(super) fn draw_drop_hint(ctx: &egui::Context) {
+    if ctx.input(|input| input.raw.hovered_files.is_empty()) {
+        return;
     }
+    let screen = ctx.content_rect();
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop-hint")));
+    painter.rect_filled(screen, 0.0, theme::BG.gamma_multiply(0.8));
+    let area = screen.shrink(24.0);
+    painter.rect_stroke(area, 14.0, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
+    painter.text(
+        area.center(),
+        egui::Align2::CENTER_CENTER,
+        format!("{}  Drop a folder to add it to the library", icon::FOLDER_PLUS),
+        egui::FontId::new(18.0, theme::semibold()),
+        theme::TEXT,
+    );
 }

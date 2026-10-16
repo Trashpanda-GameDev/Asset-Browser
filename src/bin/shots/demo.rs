@@ -1214,7 +1214,8 @@ fn synth(seconds: f32, mut f: impl FnMut(f32) -> f32) -> Vec<f32> {
 
 /// 16-bit mono WAV.
 fn wav(path: &Path, samples: Vec<f32>) -> io::Result<()> {
-    let data: Vec<u8> = samples.iter().flat_map(|s| ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes()).collect();
+    let data: Vec<u8> =
+        samples.into_iter().flat_map(|s| ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes()).collect();
     let mut out = Vec::with_capacity(44 + data.len());
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());

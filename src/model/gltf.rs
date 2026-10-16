@@ -124,15 +124,14 @@ fn check(document: &Document) -> Result<(), String> {
 /// default scene, else the first, else every node that isn't another's child.
 fn world_matrices(document: &Document) -> Vec<Option<Mat4>> {
     let count = document.nodes().count();
-    let roots: Vec<::gltf::Node> = match document.default_scene().or_else(|| document.scenes().next()) {
-        Some(scene) => scene.nodes().collect(),
-        None => {
-            let mut is_child = vec![false; count];
-            for child in document.nodes().flat_map(|node| node.children()) {
-                is_child[child.index()] = true;
-            }
-            document.nodes().filter(|node| !is_child[node.index()]).collect()
+    let roots: Vec<::gltf::Node> = if let Some(scene) = document.default_scene().or_else(|| document.scenes().next()) {
+        scene.nodes().collect()
+    } else {
+        let mut is_child = vec![false; count];
+        for child in document.nodes().flat_map(|node| node.children()) {
+            is_child[child.index()] = true;
         }
+        document.nodes().filter(|node| !is_child[node.index()]).collect()
     };
     let mut world = vec![None; count];
     let mut stack: Vec<(::gltf::Node, Mat4)> = roots.into_iter().map(|node| (node, IDENTITY)).collect();

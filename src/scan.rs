@@ -4,7 +4,7 @@
 //! lines: one rayon task per directory. On Windows, `DirEntry::metadata` comes from the directory
 //! listing itself, so each file costs no extra system call.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -38,7 +38,7 @@ struct Shared {
 pub fn scan(root: &Path) -> ScanResult {
     let start = Instant::now();
     let shared = Shared { files: Mutex::new(Vec::new()), dirs: AtomicUsize::new(0), skipped: AtomicUsize::new(0) };
-    rayon::scope(|scope| walk(scope, root.to_path_buf(), String::new(), &shared));
+    rayon::scope(|scope| walk(scope, root, "", &shared));
     ScanResult {
         files: shared.files.into_inner().unwrap_or_default(),
         dirs_visited: shared.dirs.into_inner(),
@@ -47,8 +47,8 @@ pub fn scan(root: &Path) -> ScanResult {
     }
 }
 
-fn walk<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, rel: String, shared: &'s Shared) {
-    let Ok(read) = std::fs::read_dir(&dir) else {
+fn walk<'s>(scope: &rayon::Scope<'s>, dir: &Path, rel: &str, shared: &'s Shared) {
+    let Ok(read) = std::fs::read_dir(dir) else {
         return;
     };
     shared.dirs.fetch_add(1, Ordering::Relaxed);
@@ -67,7 +67,7 @@ fn walk<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, rel: String, shared: &'s Sha
         let child_rel = if rel.is_empty() { name.to_owned() } else { format!("{rel}/{name}") };
         if file_type.is_dir() {
             let path = entry.path();
-            scope.spawn(move |scope| walk(scope, path, child_rel, shared));
+            scope.spawn(move |scope| walk(scope, &path, &child_rel, shared));
         } else if file_type.is_file() {
             let kind = Path::new(name).extension().and_then(|ext| ext.to_str()).and_then(AssetKind::from_extension);
             let Some(kind) = kind else {

@@ -76,6 +76,7 @@ pub(super) fn determinant(m: &Mat4) -> f32 {
 }
 
 /// Which faces around a shared position get one smooth normal.
+#[derive(Clone, Copy)]
 pub(super) enum Smoothing<'a> {
     /// Faces meeting at less than this angle (as its cosine) are smoothed together, so boxes
     /// keep their edges and curved surfaces look round.

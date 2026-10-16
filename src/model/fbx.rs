@@ -94,12 +94,11 @@ pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> 
         .collect();
 
     let meta = &scene.metadata;
-    let format = match meta.file_format {
-        ufbx::FileFormat::Obj => "OBJ".to_owned(),
-        _ => {
-            let encoding = if meta.ascii { "ASCII" } else { "binary" };
-            format!("FBX {}.{} {encoding}", meta.version / 1000, meta.version % 1000 / 100)
-        }
+    let format = if meta.file_format == ufbx::FileFormat::Obj {
+        "OBJ".to_owned()
+    } else {
+        let encoding = if meta.ascii { "ASCII" } else { "binary" };
+        format!("FBX {}.{} {encoding}", meta.version / 1000, meta.version % 1000 / 100)
     };
     builder.finish(format)
 }

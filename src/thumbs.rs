@@ -123,7 +123,7 @@ pub fn default_threads() -> usize {
 
 impl ThumbService {
     /// `on_result` runs on a worker thread after each thumbnail, e.g. to wake the UI.
-    pub fn start(db_path: PathBuf, on_result: Arc<dyn Fn() + Send + Sync>) -> Self {
+    pub fn start(db_path: &Path, on_result: &Arc<dyn Fn() + Send + Sync>) -> Self {
         Self::start_with_threads(db_path, default_threads(), on_result)
     }
 
@@ -133,7 +133,7 @@ impl ThumbService {
     /// 100/s. A spinning disk serves queued requests in the order that needs the least seeking,
     /// so it does best with many queued, and it tops out near 100 random files/s however
     /// they're sent. Capping reads made it slower, so there is no cap.
-    pub fn start_with_threads(db_path: PathBuf, threads: usize, on_result: Arc<dyn Fn() + Send + Sync>) -> Self {
+    pub fn start_with_threads(db_path: &Path, threads: usize, on_result: &Arc<dyn Fn() + Send + Sync>) -> Self {
         let threads = threads.max(1);
         let shared = Arc::new(Shared { state: Mutex::default(), wake_workers: Condvar::new() });
         let stats = Arc::new(ThumbStats::default());
@@ -141,7 +141,7 @@ impl ThumbService {
         let (store_tx, store_rx) = crossbeam_channel::unbounded();
 
         let writer = {
-            let db_path = db_path.clone();
+            let db_path = db_path.to_path_buf();
             std::thread::Builder::new()
                 .name("thumb-writer".into())
                 .spawn(move || writer_loop(&db_path, &store_rx))
@@ -156,7 +156,7 @@ impl ThumbService {
                     on_result: on_result.clone(),
                     stats: stats.clone(),
                 };
-                let db_path = db_path.clone();
+                let db_path = db_path.to_path_buf();
                 std::thread::Builder::new()
                     .name(format!("thumb-{index}"))
                     .spawn(move || worker.run(&db_path))

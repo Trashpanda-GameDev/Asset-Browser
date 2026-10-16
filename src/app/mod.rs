@@ -138,7 +138,8 @@ impl BrowserApp {
             .map_err(|err| diag::report(&format!("Cache unavailable ({})", db_path.display()), err))
             .ok();
         let ctx = cc.egui_ctx.clone();
-        let thumbs = ThumbService::start(db_path.clone(), std::sync::Arc::new(move || ctx.request_repaint()));
+        let repaint: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || ctx.request_repaint());
+        let thumbs = ThumbService::start(&db_path, &repaint);
         let user_path = db::user_data_path();
         let user_conn = db::open_user(&user_path)
             .map_err(|err| {
@@ -258,7 +259,7 @@ impl eframe::App for BrowserApp {
         }
         self.draw_toast(&ctx);
         organize::drag_indicator(&ctx);
-        self.draw_drop_hint(&ctx);
+        sidebar::draw_drop_hint(&ctx);
         // Keep the playhead moving while something is audible.
         if self.sound.is_audible() {
             ctx.request_repaint_after(Duration::from_millis(33));

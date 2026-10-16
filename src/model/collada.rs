@@ -361,15 +361,14 @@ impl<'a, 'input> Reader<'a, 'input> {
         for polygon in polygons {
             ids.clear();
             for corner in polygon.chunks_exact(stride) {
-                let index = match merged.get(corner) {
-                    Some(&index) => index,
-                    None => {
-                        let Some(vertex) = vertex(corner) else { break };
-                        vertices.push(vertex);
-                        let index = (vertices.len() - 1) as u32;
-                        merged.insert(corner, index);
-                        index
-                    }
+                let index = if let Some(&index) = merged.get(corner) {
+                    index
+                } else {
+                    let Some(vertex) = vertex(corner) else { break };
+                    vertices.push(vertex);
+                    let index = (vertices.len() - 1) as u32;
+                    merged.insert(corner, index);
+                    index
                 };
                 ids.push(index);
             }
