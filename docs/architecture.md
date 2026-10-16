@@ -4,8 +4,9 @@ The rules the code follows so it stays easy to change: which part may use which,
 each other, and how errors, stored data and tests are handled. [Working on Asset Browser](development.md) has the map
 of the files. [Back to the README](../README.md)
 
-All of the code follows these rules: the architecture test lists no exceptions, and no function carries a mark
-for breaking one. Code that has to break a rule says so where it does, as below.
+The rules that tools check hold everywhere: the architecture test lists no exceptions, and no function carries a
+mark for breaking one. Code that has to break a rule says so where it does, as below. One rule is only partly
+followed yet: most modules still give errors as a `String` (see Errors).
 
 ## Layers
 
@@ -67,7 +68,9 @@ Not checked by a tool, but expected:
 
 - A module that can fail returns its own error type: an enum with `thiserror`, whose message is what the user reads
   (`platform::CopyError` is a small one; `model::ModelError` keeps the messages the thumbnail cache stores with a
-  failed file). Errors from a library pass through as they are (`trash::Error`).
+  failed file). Errors from a library pass through as they are (`trash::Error`). Most modules still return their
+  message as a `String` (`imaging`, `thumbs`, `audio`, `storage` and the readers inside `model`): each moves to an
+  error type of its own when it's next worked on, keeping its messages (the thumbnail cache stores them).
 - The app shows errors with `diag::report` (the log, and the status bar); `diag::note` only logs, for errors not worth
   showing, such as an update check while offline.
 - No error is dropped without saying why: a `let _ =` on a `Result` has a comment.
