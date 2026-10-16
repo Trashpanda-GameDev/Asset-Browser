@@ -73,7 +73,7 @@ pub fn make_image(path: &Path, resizer: &mut fr::Resizer, max: u32) -> Result<Pi
     if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("psd")) {
         // Reads only the part of the file it needs, so it opens the file itself.
         let sampled = psd::read(path, max)?;
-        return shrink(sampled.w, sampled.h, sampled.rgba, sampled.src_w, sampled.src_h, max, resizer);
+        return shrink(sampled, max, resizer);
     }
     let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
     // Trust the content over the extension (a PNG named .jpg is common); TGA has no signature,
@@ -98,7 +98,7 @@ pub fn make_image(path: &Path, resizer: &mut fr::Resizer, max: u32) -> Result<Pi
     let image = reader()?.decode().map_err(|err| err.to_string())?;
     let (w, h) = (image.width(), image.height());
     if image.color().has_alpha() {
-        shrink(w, h, image.into_rgba8().into_raw(), w, h, max, resizer)
+        shrink(Pixels { w, h, src_w: w, src_h: h, rgba: image.into_rgba8().into_raw() }, max, resizer)
     } else {
         shrink_rgb(w, h, image.into_rgb8().into_raw(), max, resizer)
     }
@@ -108,17 +108,9 @@ fn resize_options(alpha: bool) -> fr::ResizeOptions {
     fr::ResizeOptions::new().resize_alg(fr::ResizeAlg::Convolution(fr::FilterType::CatmullRom)).use_alpha(alpha)
 }
 
-/// Fits `w` × `h` pixels (already reduced from `src_w` × `src_h`, or not) into `max`.
-#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
-pub(crate) fn shrink(
-    w: u32,
-    h: u32,
-    rgba: Vec<u8>,
-    src_w: u32,
-    src_h: u32,
-    max: u32,
-    resizer: &mut fr::Resizer,
-) -> Result<Pixels, String> {
+/// Fits a picture (already reduced from `src_w` × `src_h`, or not) into `max`.
+pub(crate) fn shrink(picture: Pixels, max: u32, resizer: &mut fr::Resizer) -> Result<Pixels, String> {
+    let Pixels { w, h, src_w, src_h, rgba } = picture;
     if w == 0 || h == 0 {
         return Err("image has no pixels".into());
     }
@@ -305,7 +297,7 @@ mod tests {
         let mut resizer = fr::Resizer::new();
         // Half transparent, so the resizer needs its premultiplied copy: 2048 x 2048 x 4 bytes.
         let rgba: Vec<u8> = (0..2048 * 2048).flat_map(|i| [200, 100, 50, (i % 2 * 255) as u8]).collect();
-        let small = shrink(2048, 2048, rgba, 2048, 2048, 64, &mut resizer).unwrap();
+        let small = shrink(Pixels { w: 2048, h: 2048, src_w: 2048, src_h: 2048, rgba }, 64, &mut resizer).unwrap();
         assert_eq!((small.w, small.h), (64, 64));
         assert!(resizer.size_of_internal_buffers() > RESIZER_KEEP, "it keeps the copy for next time");
         trim_resizer(&mut resizer);

@@ -56,12 +56,13 @@ pub fn load_gif(
         let delay = browser_delay(numer / denom.max(1));
         let picture = frame.into_buffer();
         let (w, h) = picture.dimensions();
-        let small = shrink(w, h, picture.into_raw(), width, height, layout.longest, resizer)?;
+        let picture = Pixels { w, h, src_w: width, src_h: height, rgba: picture.into_raw() };
+        let small = shrink(picture, layout.longest, resizer)?;
         if (small.w, small.h) != (layout.frame_w, layout.frame_h) {
             return Err("a frame came out a different size".to_owned());
         }
         let [x, y] = layout.cell(index as u32);
-        blit(&mut rgba, layout.width, &small.rgba, small.w, small.h, x, y);
+        blit(&mut rgba, layout.width, &small, [x, y]);
         let (frame_w, frame_h) = (layout.frame_w, layout.frame_h);
         frames.push(Frame {
             rect: [x, y, frame_w, frame_h],
@@ -143,13 +144,12 @@ impl Layout {
     }
 }
 
-/// Copies a `w` × `h` frame into the sheet at `x`, `y`.
-#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
-fn blit(sheet: &mut [u8], sheet_w: u32, frame: &[u8], w: u32, h: u32, x: u32, y: u32) {
-    let row = w as usize * 4;
-    for line in 0..h as usize {
+/// Copies a frame into the sheet, `sheet_w` pixels wide, with its top left at `x`, `y`.
+fn blit(sheet: &mut [u8], sheet_w: u32, frame: &Pixels, [x, y]: [u32; 2]) {
+    let row = frame.w as usize * 4;
+    for line in 0..frame.h as usize {
         let at = ((y as usize + line) * sheet_w as usize + x as usize) * 4;
-        sheet[at..at + row].copy_from_slice(&frame[line * row..(line + 1) * row]);
+        sheet[at..at + row].copy_from_slice(&frame.rgba[line * row..(line + 1) * row]);
     }
 }
 

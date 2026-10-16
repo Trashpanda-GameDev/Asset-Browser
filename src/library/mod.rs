@@ -373,22 +373,29 @@ mod tests {
         assert!(library.entries.iter().enumerate().all(|(index, entry)| by_key[&entry.key] == index as u32));
     }
 
-    #[test]
-    #[expect(clippy::cognitive_complexity, reason = "refactor: split into smaller tests")]
-    fn several_roots_make_one_library() {
-        // Forward slashes, which every OS splits paths on, so the second root is named "Audio" on
-        // Linux and macOS too.
-        let library = Library::build(vec![
+    /// Two folders: `F:\Resources` with ui/a.png, and `D:/Audio` with ui/a.png and hit.wav. Forward
+    /// slashes, which every OS splits paths on, so the second is named "Audio" on Linux and macOS too.
+    fn two_roots() -> Library {
+        Library::build(vec![
             (PathBuf::from("F:\\Resources"), vec![file("ui/a.png", AssetKind::Image, 1, 1)]),
             (
                 PathBuf::from("D:/Audio"),
                 vec![file("ui/a.png", AssetKind::Image, 1, 1), file("hit.wav", AssetKind::Audio, 1, 1)],
             ),
-        ]);
+        ])
+    }
+
+    #[test]
+    fn several_roots_make_one_tree() {
+        let library = two_roots();
         assert_eq!(library.home(), 0, "with several roots, the tree starts above them");
         assert_eq!(library.dirs[0].totals, [2, 1, 0]);
         assert_eq!(library.dirs[Library::root_dir(1) as usize].name, "Audio");
-        // The same relative path in two roots is two files, in two folders.
+    }
+
+    #[test]
+    fn the_same_path_in_two_roots_is_two_files() {
+        let library = two_roots();
         let ui_resources = library.find_dir("f:/resources/ui").unwrap();
         let ui_audio = library.find_dir("d:/audio/ui").unwrap();
         assert_ne!(ui_resources, ui_audio);
@@ -400,7 +407,11 @@ mod tests {
             library.entries[a as usize].key, library.entries[b as usize].key,
             "each root's files have their own cache keys"
         );
+    }
 
+    #[test]
+    fn a_path_is_found_in_its_root() {
+        let library = two_roots();
         let found = library.locate("d:/audio/hit.wav");
         assert!(matches!(found, Located::Found(index) if library.entries[index as usize].rel == "hit.wav"));
         assert_eq!(library.locate("d:/audio/gone.wav"), Located::Missing);
@@ -409,9 +420,13 @@ mod tests {
         assert_eq!(library.path_of(hit), Path::new("D:/Audio").join("hit.wav"));
         assert_eq!(library.folder_label(hit), "Audio");
         assert_eq!(library.root_index(Path::new("D:/Audio/")), Some(1));
+    }
 
+    #[test]
+    fn a_roots_files_rebuild_the_library() {
         // Taking a root's files back out gives what built it, so the library can be rebuilt
         // without it, or with it rescanned.
+        let library = two_roots();
         let audio: Vec<String> = library.files_of(1).into_iter().map(|file| file.rel).collect();
         assert_eq!(audio, ["hit.wav", "ui/a.png"]);
         let without = Library::build(vec![(PathBuf::from("F:\\Resources"), library.files_of(0))]);
