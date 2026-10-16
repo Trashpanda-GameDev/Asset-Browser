@@ -14,7 +14,19 @@ const LAYERS: [(&str, &[&str]); 5] = [
     ("foundation", &["paths", "db", "diag", "platform"]),
     (
         "domain",
-        &["asset", "library", "scan", "groups", "sheets", "model", "imaging", "animated", "psd_composite", "changelog"],
+        &[
+            "asset",
+            "library",
+            "scan",
+            "groups",
+            "sheets",
+            "model",
+            "imaging",
+            "preview_key",
+            "animated",
+            "psd_composite",
+            "changelog",
+        ],
     ),
     ("services", &["thumbs", "audio", "detail", "deletion", "updates", "watch", "storage", "memory"]),
     ("ui", &["ui", "keymap"]),
@@ -22,7 +34,7 @@ const LAYERS: [(&str, &[&str]); 5] = [
 ];
 
 /// A module using one in a higher layer: (module, the module it uses).
-const UPWARD_EXCEPTIONS: [(&str, &str); 4] = [("db", "asset"), ("db", "model"), ("db", "scan"), ("library", "thumbs")];
+const UPWARD_EXCEPTIONS: [(&str, &str); 3] = [("db", "asset"), ("db", "model"), ("db", "scan")];
 
 /// Modules below `ui` that use egui.
 const EGUI_EXCEPTIONS: [&str; 1] = ["asset"];

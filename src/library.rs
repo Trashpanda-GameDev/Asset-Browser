@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::asset::AssetKind;
+use crate::preview_key::cache_key;
 use crate::scan::ScannedFile;
-use crate::thumbs::cache_key;
 
 /// One of the folders the library is made of.
 pub struct Root {
