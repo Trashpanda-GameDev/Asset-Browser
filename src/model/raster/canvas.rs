@@ -1,7 +1,7 @@
 //! The picture being drawn: samples with their depth and triangle, resolved to pixels at the end.
 
-use super::colour::linear_to_srgb8;
-use super::{SAMPLES, SUPERSAMPLE};
+use super::SUPERSAMPLE;
+use super::colour::{self, linear_to_srgb8};
 
 /// Per sample colour, for the stick figures.
 pub(super) struct Canvas {
@@ -35,8 +35,7 @@ impl Canvas {
                 }
             }
             if count > 0 {
-                let rgb = sum.map(|c| lut[((c / count as f32) * 4095.0 + 0.5) as usize & 4095]);
-                *pixel = [rgb[0], rgb[1], rgb[2], (count as f32 / SAMPLES as f32 * 255.0).round() as u8];
+                *pixel = colour::pixel(lut, sum.map(|c| c / count as f32), count);
             }
         }
         out
