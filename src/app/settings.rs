@@ -169,7 +169,10 @@ impl BrowserApp {
                         self.browsing.view_dirty = true;
                     }
                 }
-                Part::SheetChoices => self.inspector.sheet.forget_choices(),
+                Part::SheetChoices => {
+                    self.organizing.sheets.clear();
+                    self.inspector.sheet.clear();
+                }
                 Part::LibraryFolders => {
                     self.folders.roots.clear();
                     self.save_roots();

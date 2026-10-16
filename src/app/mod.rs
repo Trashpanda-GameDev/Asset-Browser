@@ -32,7 +32,6 @@ use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use rusqlite::Connection;
 
-use crate::groups::Groups;
 use crate::library::Library;
 use crate::thumbs::ThumbService;
 use crate::ui::folders::FolderTree;
@@ -120,7 +119,7 @@ impl BrowserApp {
             library: None,
             folders: Folders::new(watch),
             browsing: Browsing::default(),
-            organizing: Organizing::new(Groups::open(&paths::user_data_file())),
+            organizing: Organizing::open(&paths::user_data_file()),
             deletion: Deletion::default(),
             preferences: Preferences::default(),
             chrome: Chrome {
@@ -131,7 +130,7 @@ impl BrowserApp {
             },
             thumbs,
             previews: Previews::new(&cc.egui_ctx),
-            inspector: Inspector::new(&cc.egui_ctx, &paths::user_data_file()),
+            inspector: Inspector::new(&cc.egui_ctx),
             sound: Sound::start(&cc.egui_ctx),
             updates,
         };

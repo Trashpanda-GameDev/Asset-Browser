@@ -3,13 +3,12 @@
 //! the whole sheet with the frames outlined and the current one marked (click a frame to show
 //! it).
 //!
-//! What the user chooses for a picture (to animate it, their grid, the speed) is saved per file
-//! in the user data file, so it's the same next time.
+//! What the user chooses for a picture (to animate it, their grid, the speed) is handed to the app
+//! to save per file in the user data file (`take_choices`), and given back with the picture next
+//! time (`apply`).
 //!
 //! An animated GIF plays here too, as a sheet of its own frames (`animated`). The frame is drawn
 //! through the picture view (`ImageView`), so it zooms and pans like a picture.
-
-use std::path::Path;
 
 use eframe::egui::{
     self, Align2, Color32, Mesh, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, TextureId, Ui, pos2, vec2,
@@ -17,7 +16,7 @@ use eframe::egui::{
 use egui_phosphor::regular as icon;
 
 use crate::imaging::Pixels;
-use crate::sheets::{self, Frame, Guess, Saved, Sheet, SheetStore, Source, Split};
+use crate::sheets::{self, Frame, Guess, Saved, Sheet, Source, Split};
 
 use super::browse::fit_rect;
 use super::image_view::ImageView;
@@ -28,7 +27,6 @@ const DEFAULT_FPS: f32 = 8.0;
 
 #[expect(clippy::struct_excessive_bools, reason = "refactor: bools that are states become enums")]
 pub struct SheetView {
-    store: SheetStore,
     /// The picture the state below is for (its `groups::path_key`).
     key: Option<String>,
     /// What was detected, to go back to from the user's own grid.
@@ -48,12 +46,13 @@ pub struct SheetView {
     fps_chosen: bool,
     /// Play the frame durations the file gives (a data file's, a GIF's) instead of `fps`.
     file_timing: bool,
+    /// What the user changed, until the app takes it to save: the picture's key and the choices.
+    changed: Option<(String, Saved)>,
 }
 
-impl SheetView {
-    pub fn new(path: &Path) -> Self {
+impl Default for SheetView {
+    fn default() -> Self {
         Self {
-            store: SheetStore::open(path),
             key: None,
             detected: None,
             sheet: None,
@@ -65,29 +64,22 @@ impl SheetView {
             fps: DEFAULT_FPS,
             fps_chosen: false,
             file_timing: true,
+            changed: None,
         }
     }
+}
 
+impl SheetView {
     pub fn is_for(&self, key: &str) -> bool {
         self.key.as_deref() == Some(key)
     }
 
-    /// Takes a newly shown picture: what was detected in it, and the user's choices for it.
-    pub fn load(&mut self, key: String, detected: Option<Sheet>, pixels: &Pixels, now: f64) {
-        let saved = self.store.get(&key);
-        // A data file's or a GIF's own frames aren't overridden by a grid.
-        let from_file = matches!(detected, Some(Sheet { source: Source::Data(_) | Source::Animated { .. }, .. }));
-        self.sheet = match saved.and_then(|saved| saved.grid) {
-            Some(grid) if !from_file => Some(sheets::from_grid(grid, pixels, Guess::User)),
-            _ => detected.clone(),
-        };
-        self.animate = match saved {
-            Some(saved) => saved.animate && self.sheet.is_some(),
-            None => self.sheet.as_ref().is_some_and(Sheet::is_certain),
-        };
-        let chosen = saved.and_then(|saved| saved.fps);
-        self.fps = chosen.map_or(DEFAULT_FPS, |fps| fps.clamp(1.0, 60.0));
-        self.fps_chosen = chosen.is_some();
+    /// Takes a newly shown picture, as detected: its frames play if they're certain.
+    pub fn load(&mut self, key: String, detected: Option<Sheet>, now: f64) {
+        self.sheet = detected.clone();
+        self.animate = self.sheet.as_ref().is_some_and(Sheet::is_certain);
+        self.fps = DEFAULT_FPS;
+        self.fps_chosen = false;
         self.detected = detected;
         self.key = Some(key);
         self.animation = 0;
@@ -97,7 +89,22 @@ impl SheetView {
         self.file_timing = true;
     }
 
-    /// The pane moved to something that isn't a picture.
+    /// What the user chose for the picture last time, over what was detected.
+    pub fn apply(&mut self, saved: Saved, pixels: &Pixels) {
+        // A data file's or a GIF's own frames aren't overridden by a grid.
+        let from_file = matches!(self.detected, Some(Sheet { source: Source::Data(_) | Source::Animated { .. }, .. }));
+        if let Some(grid) = saved.grid
+            && !from_file
+        {
+            self.sheet = Some(sheets::from_grid(grid, pixels, Guess::User));
+        }
+        self.animate = saved.animate && self.sheet.is_some();
+        self.fps = saved.fps.map_or(DEFAULT_FPS, |fps| fps.clamp(1.0, 60.0));
+        self.fps_chosen = saved.fps.is_some();
+    }
+
+    /// The pane moved to something that isn't a picture, or the choices were forgotten: the
+    /// picture is taken again as detected.
     pub fn clear(&mut self) {
         self.key = None;
         self.sheet = None;
@@ -105,10 +112,10 @@ impl SheetView {
         self.animate = false;
     }
 
-    /// Forgets every picture's saved choices; the picture shown is detected again.
-    pub fn forget_choices(&mut self) {
-        self.store.clear();
-        self.clear();
+    /// What the user changed since it was last asked, once: the picture's key and the choices to
+    /// save.
+    pub fn take_choices(&mut self) -> Option<(String, Saved)> {
+        self.changed.take()
     }
 
     /// How many frames were found, for the button that starts playing them.
@@ -125,10 +132,11 @@ impl SheetView {
             self.sheet = Some(sheets::from_grid(grid, pixels, Guess::Default));
         }
         self.started = now;
-        self.save();
+        self.choices_changed();
     }
 
-    fn save(&self) {
+    /// Keeps the user's choices for this picture for `take_choices`.
+    fn choices_changed(&mut self) {
         let Some(key) = &self.key else { return };
         // The grid is only kept when it's the user's own; otherwise detection decides each time.
         let grid = self.sheet.as_ref().and_then(|sheet| match sheet.source {
@@ -136,7 +144,7 @@ impl SheetView {
             _ => None,
         });
         let fps = self.fps_chosen.then_some(self.fps);
-        self.store.set(key, &Saved { animate: self.animate, grid, fps });
+        self.changed = Some((key.clone(), Saved { animate: self.animate, grid, fps }));
     }
 
     /// Where in the animation playback is (a position in its frame list).
@@ -402,7 +410,7 @@ impl SheetView {
             None => {}
         }
         if save {
-            self.save();
+            self.choices_changed();
         }
     }
 }
@@ -446,4 +454,51 @@ fn draw_frame(painter: &egui::Painter, canvas: Rect, texture: TextureId, sheet_s
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
     painter.add(Shape::mesh(mesh));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sheets::Grid;
+
+    fn grid(columns: u32) -> Grid {
+        Grid { columns, rows: 1, margin: 0, spacing: 0, split: Split::Rows }
+    }
+
+    #[test]
+    fn the_users_choices_go_over_what_was_detected() {
+        let pixels = Pixels { w: 64, h: 16, src_w: 64, src_h: 16, rgba: vec![255; 64 * 16 * 4] };
+        let mut view = SheetView::default();
+        // Counted from the file name: certain, so it plays.
+        view.load("walk_strip4.png".into(), Some(sheets::from_grid(grid(4), &pixels, Guess::FileName)), 0.0);
+        assert!(view.animate);
+        assert_eq!((view.fps, view.fps_chosen), (DEFAULT_FPS, false));
+
+        view.apply(Saved { animate: false, grid: Some(grid(2)), fps: Some(90.0) }, &pixels);
+        assert!(!view.animate);
+        assert!(
+            matches!(view.sheet.as_ref().map(|sheet| &sheet.source), Some(Source::Grid(g, Guess::User)) if *g == grid(2))
+        );
+        assert_eq!((view.fps, view.fps_chosen), (60.0, true));
+        // Showing what was saved is no change to save.
+        assert!(view.take_choices().is_none());
+
+        // Playing them is.
+        view.toggle(&pixels, 1.0);
+        let (key, saved) = view.take_choices().unwrap();
+        assert_eq!(key, "walk_strip4.png");
+        assert_eq!(saved, Saved { animate: true, grid: Some(grid(2)), fps: Some(60.0) });
+    }
+
+    #[test]
+    fn a_grid_never_goes_over_a_data_files_frames() {
+        let pixels = Pixels { w: 64, h: 16, src_w: 64, src_h: 16, rgba: vec![255; 64 * 16 * 4] };
+        let from_data =
+            Sheet { source: Source::Data("walk.json".into()), ..sheets::from_grid(grid(4), &pixels, Guess::Gaps) };
+        let mut view = SheetView::default();
+        view.load("walk.png".into(), Some(from_data), 0.0);
+        view.apply(Saved { animate: true, grid: Some(grid(2)), fps: None }, &pixels);
+        assert!(matches!(view.sheet.as_ref().map(|sheet| &sheet.source), Some(Source::Data(_))));
+        assert!(view.animate);
+    }
 }

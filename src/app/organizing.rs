@@ -1,17 +1,23 @@
 //! Favorites, collections and categories: what's asked of them from the sidebar, the menus, the
-//! stars, drops and the pane, and "Delete this collection?".
+//! stars, drops and the pane, and "Delete this collection?". And how the user cut each picture
+//! into a sprite sheet.
+
+use std::path::Path;
 
 use eframe::egui::{self, Align, Layout, RichText};
 use egui_phosphor::regular as icon;
 
+use crate::asset::AssetKind;
 use crate::groups::{self, FAVORITES, Groups, Membership};
+use crate::library::Library;
+use crate::sheets::{Saved, SheetStore};
 use crate::ui::organize::{GroupCommand, GroupEdit, plural};
 use crate::ui::{theme, widgets};
 
 use super::BrowserApp;
 
 /// Favorites, collections and categories, where their members are in the library, and what's
-/// being done to them.
+/// being done to them; and the user's sprite sheet choices.
 pub(super) struct Organizing {
     pub(super) groups: Groups,
     pub(super) membership: Membership,
@@ -20,11 +26,56 @@ pub(super) struct Organizing {
     pub(super) edit: Option<GroupEdit>,
     /// A group waiting for "Delete?" to be confirmed.
     pub(super) confirm_delete: Option<i64>,
+    pub(super) sheets: SheetChoices,
 }
 
 impl Organizing {
-    pub(super) fn new(groups: Groups) -> Self {
-        Self { groups, membership: Membership::default(), membership_dirty: true, edit: None, confirm_delete: None }
+    /// Both kept in the user data file at `path`.
+    pub(super) fn open(path: &Path) -> Self {
+        Self {
+            groups: Groups::open(path),
+            membership: Membership::default(),
+            membership_dirty: true,
+            edit: None,
+            confirm_delete: None,
+            sheets: SheetChoices { store: SheetStore::open(path), shown: None },
+        }
+    }
+}
+
+/// What the user chose for each picture's sprite sheet (to play it, their grid, the speed), read
+/// for the picture in the pane once rather than every frame.
+pub(super) struct SheetChoices {
+    store: SheetStore,
+    /// The focused picture's key (`groups::path_key`) and its saved choices.
+    shown: Option<(String, Option<Saved>)>,
+}
+
+impl SheetChoices {
+    /// The saved choices for the focused entry, when it's a picture.
+    pub(super) fn of_focus(&mut self, library: &Library, focus: Option<u32>) -> Option<Saved> {
+        let entry = library.entries().get(focus? as usize).filter(|entry| entry.kind == AssetKind::Image)?;
+        let key = groups::path_key(&library.path_of(entry));
+        match &self.shown {
+            Some((shown, saved)) if *shown == key => *saved,
+            _ => {
+                let saved = self.store.get(&key);
+                self.shown = Some((key, saved));
+                saved
+            }
+        }
+    }
+
+    pub(super) fn save(&mut self, key: String, saved: Saved) {
+        if self.store.set(&key, &saved) {
+            self.shown = Some((key, Some(saved)));
+        }
+    }
+
+    /// Forgets every picture's choices (Settings → Storage).
+    pub(super) fn clear(&mut self) {
+        self.store.clear();
+        self.shown = None;
     }
 }
 

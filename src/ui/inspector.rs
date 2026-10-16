@@ -17,7 +17,7 @@ use crate::groups::{FAVORITES, GroupKind, Groups, Membership};
 use crate::imaging::Pixels;
 use crate::library::{Entry, Library};
 use crate::model::Model;
-use crate::sheets::{Sheet, Source};
+use crate::sheets::{Saved, Sheet, Source};
 
 use super::browse::{Look, MenuAction, channels, draw_preview};
 use super::format::{format_age, format_size, format_time, grouped};
@@ -66,6 +66,8 @@ pub struct InspectorArgs<'a> {
     pub kinds: KindSet,
     pub groups: &'a Groups,
     pub membership: &'a Membership,
+    /// What the user chose for the focused picture's sprite sheet before, if it's a picture.
+    pub sheet_choices: Option<Saved>,
 }
 
 #[derive(Default)]
@@ -74,16 +76,17 @@ pub struct InspectorOutput {
     pub focus: Option<u32>,
     pub action: Option<MenuAction>,
     pub command: Option<GroupCommand>,
+    /// The user changed a picture's sprite sheet: its key and the choices to save.
+    pub sheet_choices: Option<(String, Saved)>,
 }
 
 impl Inspector {
-    /// `user_data` is where per-picture sprite sheet choices are saved.
-    pub fn new(ctx: &egui::Context, user_data: &std::path::Path) -> Self {
+    pub fn new(ctx: &egui::Context) -> Self {
         let ctx = ctx.clone();
         Self {
             image: ImageView::default(),
             viewport: Viewport::default(),
-            sheet: SheetView::new(user_data),
+            sheet: SheetView::default(),
             loader: DetailLoader::start(Arc::new(move || ctx.request_repaint())),
             detail: None,
         }
@@ -141,8 +144,18 @@ impl Inspector {
     #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     pub fn show(&mut self, ui: &mut Ui, args: InspectorArgs<'_>) -> InspectorOutput {
         let mut output = InspectorOutput::default();
-        let InspectorArgs { library, selection, previews, sound, render_state, totals, kinds, groups, membership } =
-            args;
+        let InspectorArgs {
+            library,
+            selection,
+            previews,
+            sound,
+            render_state,
+            totals,
+            kinds,
+            groups,
+            membership,
+            sheet_choices,
+        } = args;
         let Some(focus) = selection.focus.filter(|&focus| (focus as usize) < library.entries().len()) else {
             self.viewport.release();
             empty_state(ui, totals, kinds);
@@ -162,7 +175,9 @@ impl Inspector {
         if entry.kind != AssetKind::Model {
             self.viewport.release();
         }
-        if entry.kind != AssetKind::Image {
+        if entry.kind == AssetKind::Image {
+            self.load_sheet(library, entry, sheet_choices, ui.input(|input| input.time));
+        } else {
             self.sheet.clear();
         }
 
@@ -170,10 +185,7 @@ impl Inspector {
             ui.spacing_mut().item_spacing.y = 8.0;
             let width = ui.available_width();
             match entry.kind {
-                AssetKind::Image => {
-                    let path_key = crate::groups::path_key(&library.path_of(entry));
-                    self.image_section(ui, entry, &path_key, previews, width);
-                }
+                AssetKind::Image => self.image_section(ui, entry, previews, width),
                 AssetKind::Audio => sound_section(ui, library, focus, previews, sound),
                 AssetKind::Model => self.model_section(ui, entry, previews, render_state, width),
             }
@@ -257,7 +269,22 @@ impl Inspector {
                 }
             }
         });
+        output.sheet_choices = self.sheet.take_choices();
         output
+    }
+
+    /// Hands the sprite sheet player the focused picture once it's loaded: what was detected in
+    /// it, and what the user chose for it before.
+    fn load_sheet(&mut self, library: &Library, entry: &Entry, saved: Option<Saved>, now: f64) {
+        let Some((key, DetailState::Image { pixels, sheet, .. })) = &self.detail else { return };
+        let path_key = crate::groups::path_key(&library.path_of(entry));
+        if *key != entry.key || self.sheet.is_for(&path_key) {
+            return;
+        }
+        self.sheet.load(path_key, sheet.clone(), now);
+        if let Some(saved) = saved {
+            self.sheet.apply(saved, pixels);
+        }
     }
 
     fn detail_size(&self, key: i64) -> Option<[u32; 2]> {
@@ -306,30 +333,24 @@ impl Inspector {
         self.sheet.controls(ui, texture, size, &pixels);
     }
 
-    #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
-    fn image_section(&mut self, ui: &mut Ui, entry: &Entry, path_key: &str, previews: &Previews, width: f32) {
+    fn image_section(&mut self, ui: &mut Ui, entry: &Entry, previews: &Previews, width: f32) {
         let height = (width * 0.85).clamp(180.0, 440.0);
         let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
         let now = ui.input(|input| input.time);
         // The full picture, once loaded: what the sprite sheet player draws from.
         let loaded = match &self.detail {
-            Some((key, DetailState::Image { texture, size, pixels, sheet })) if *key == entry.key => {
-                Some((texture.id(), *size, pixels.clone(), sheet))
+            Some((key, DetailState::Image { texture, size, pixels, .. })) if *key == entry.key => {
+                Some((texture.id(), *size, pixels.clone()))
             }
             _ => None,
         };
-        if let Some((_, _, pixels, sheet)) = &loaded
-            && !self.sheet.is_for(path_key)
-        {
-            self.sheet.load(path_key.to_owned(), (*sheet).clone(), pixels, now);
-        }
         let animating = self.sheet.animate && self.sheet.sheet.is_some() && loaded.is_some();
 
-        if let (Some((texture, size, _, _)), true) = (&loaded, animating) {
+        if let (Some((texture, size, _)), true) = (&loaded, animating) {
             self.sheet.draw(ui, rect, entry.key, *texture, *size, &mut self.image, previews.checker.id());
         } else {
             let picture = match (&loaded, previews.texture(entry.key)) {
-                (Some((texture, size, _, _)), _) => Some(Picture { texture: *texture, size: *size, pixel_art: false }),
+                (Some((texture, size, _)), _) => Some(Picture { texture: *texture, size: *size, pixel_art: false }),
                 (None, Some(thumbnail)) => Some(Picture {
                     texture: thumbnail.handle.id(),
                     size: thumbnail.src_size,
@@ -348,7 +369,7 @@ impl Inspector {
         let (sheet, backdrop) = (&mut self.sheet, &mut self.image.backdrop);
         overlay(ui, rect, |ui| {
             image_view::backdrop_buttons(ui, backdrop);
-            if let Some((_, _, pixels, _)) = &loaded {
+            if let Some((_, _, pixels)) = &loaded {
                 widgets::divider(ui);
                 if animation_button(ui, sheet.animate, sheet.frame_count()).clicked() {
                     sheet.toggle(pixels, now);

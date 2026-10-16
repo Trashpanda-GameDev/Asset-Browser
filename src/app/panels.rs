@@ -124,9 +124,10 @@ impl BrowserApp {
                     Some(id) => self.organizing.membership.totals(id),
                     None => library.dirs().get(self.browsing.selected_dir as usize).map_or([0; 3], |dir| dir.totals),
                 };
+                let selection = &self.browsing.modes[self.browsing.mode.index()].selection;
                 let args = InspectorArgs {
                     library,
-                    selection: &self.browsing.modes[self.browsing.mode.index()].selection,
+                    selection,
                     previews: &mut self.previews,
                     sound: &mut self.sound,
                     render_state: self.render_state.as_ref(),
@@ -134,10 +135,14 @@ impl BrowserApp {
                     kinds: self.browsing.mode.kinds(),
                     groups: &self.organizing.groups,
                     membership: &self.organizing.membership,
+                    sheet_choices: self.organizing.sheets.of_focus(library, selection.focus),
                 };
                 output = Some(self.inspector.show(ui, args));
             });
         let Some(output) = output else { return };
+        if let Some((key, choices)) = output.sheet_choices {
+            self.organizing.sheets.save(key, choices);
+        }
         if let Some(command) = output.command {
             self.run_group_command(command);
         }

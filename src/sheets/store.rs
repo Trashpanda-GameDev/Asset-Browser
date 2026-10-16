@@ -68,8 +68,9 @@ impl SheetStore {
         }
     }
 
-    pub fn set(&self, key: &str, saved: &Saved) {
-        let Some(conn) = &self.conn else { return };
+    /// Whether it was saved.
+    pub fn set(&self, key: &str, saved: &Saved) -> bool {
+        let Some(conn) = &self.conn else { return false };
         let grid = saved.grid;
         let result = conn.execute(
             "INSERT OR REPLACE INTO sheets(key, animate, columns, rows, margin, spacing, split, fps)
@@ -85,8 +86,6 @@ impl SheetStore {
                 saved.fps.unwrap_or(0.0),
             ],
         );
-        if let Err(err) = result {
-            diag::report("Saving sprite sheet settings", err);
-        }
+        result.map_err(|err| diag::report("Saving sprite sheet settings", err)).is_ok()
     }
 }
