@@ -24,7 +24,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/watch.rs` | Told by the OS when the library's folders change, to rescan them once the changes settle |
 | `src/library.rs` | The library's folders: sorted entries, one folder tree over all of them, filtering |
 | `src/paths.rs` | Where the cache, the user's own data and the log are kept (`ASSET_BROWSER_HOME` moves all three) |
-| `src/db.rs` | SQLite: folder index, thumbnail, waveform and model-facts caches, settings |
+| `src/db.rs` | SQLite: opening a file, transactions, the user data file's tables and migrations; the folder index, thumbnail, waveform and model-facts caches, settings |
 | `src/thumbs.rs` | Preview worker pool and cache writer |
 | `src/preview_key.rs` | The key a file's previews are cached under, with the versions to bump when previews are made differently |
 | `src/imaging.rs` | Reading pictures and shrinking them, within a memory budget shared by the threads that decode |

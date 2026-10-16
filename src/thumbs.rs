@@ -223,7 +223,7 @@ impl Worker {
     fn run(self, db_path: &Path) {
         imaging::join_decode_budget();
         // Without a cache, thumbnails are still made, just never reused.
-        let conn = db::open(db_path).map_err(|err| diag::report("Thumbnail worker cache", err)).ok();
+        let conn = db::open_cache(db_path).map_err(|err| diag::report("Thumbnail worker cache", err)).ok();
         let mut resizer = fr::Resizer::new();
         loop {
             let job = {
@@ -346,7 +346,7 @@ fn decode_waveform(stored: StoredWaveform) -> Result<Preview, String> {
 }
 
 fn writer_loop(db_path: &Path, jobs: &Receiver<Store>) {
-    let mut conn = match db::open(db_path) {
+    let conn = match db::open_cache(db_path) {
         Ok(conn) => conn,
         Err(err) => {
             let message = err.to_string();
@@ -376,12 +376,12 @@ fn writer_loop(db_path: &Path, jobs: &Receiver<Store>) {
             }
         }
         if !batch.is_empty()
-            && let Err(err) = db::put_cache(&mut conn, &batch)
+            && let Err(err) = db::put_cache(&conn, &batch)
         {
             diag::report("Saving previews", err);
         }
         if let Some((parts, done)) = clear {
-            let _ = done.send(storage::clear_cache(&mut conn, &parts).map_err(|err| err.to_string()));
+            let _ = done.send(storage::clear_cache(&conn, &parts).map_err(|err| err.to_string()));
         }
     }
 }
@@ -472,7 +472,7 @@ mod tests {
     #[test]
     fn model_preview_round_trips_through_the_cache() {
         let dir = TempDir::new("model_cache");
-        let mut conn = db::open(&dir.path().join("library.sqlite")).unwrap();
+        let conn = db::open_cache(&dir.path().join("library.sqlite")).unwrap();
         let info = ModelInfo {
             format: "FBX 7.4 binary".into(),
             vertices: 1234,
@@ -494,7 +494,7 @@ mod tests {
             to_cache(&job, &Ok(Preview::Model(pixels, Arc::new(info.clone())))),
             to_cache(&failed, &Err("there are no meshes in this file".into())),
         ];
-        db::put_cache(&mut conn, &writes).unwrap();
+        db::put_cache(&conn, &writes).unwrap();
 
         let Some(Ok(Preview::Model(back, back_info))) = cached_preview(&conn, &job) else { panic!("cached model") };
         assert_eq!((back.w, back.h, back.src_w, back.src_h), (4, 4, 0, 0));

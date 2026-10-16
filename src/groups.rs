@@ -20,9 +20,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, params};
 
-use crate::diag;
 pub use crate::library::path_key;
 use crate::library::{Library, Located};
+use crate::{db, diag};
 
 pub const FAVORITES: i64 = 0;
 /// Not a stored group: every asset in no category, worked out by `Membership`.
@@ -220,10 +220,9 @@ impl Groups {
             return false;
         }
         if let Some(conn) = &self.conn {
-            let deleted = conn.unchecked_transaction().and_then(|tx| {
+            let deleted = db::in_transaction(conn, |tx| {
                 tx.execute("DELETE FROM members WHERE grp = ?1", [id])?;
-                tx.execute("DELETE FROM groups WHERE id = ?1", [id])?;
-                tx.commit()
+                tx.execute("DELETE FROM groups WHERE id = ?1", [id])
             });
             if let Err(err) = deleted {
                 diag::report("Deleting a group", err);
@@ -238,10 +237,9 @@ impl Groups {
     /// are untouched.
     pub fn clear(&mut self) -> bool {
         if let Some(conn) = &self.conn {
-            let cleared = conn.unchecked_transaction().and_then(|tx| {
+            let cleared = db::in_transaction(conn, |tx| {
                 tx.execute("DELETE FROM members", [])?;
-                tx.execute("DELETE FROM groups WHERE id <> ?1", [FAVORITES])?;
-                tx.commit()
+                tx.execute("DELETE FROM groups WHERE id <> ?1", [FAVORITES])
             });
             if let Err(err) = cleared {
                 diag::report("Clearing favorites, collections and categories", err);
@@ -269,16 +267,14 @@ impl Groups {
         }
         if let Some(conn) = &self.conn {
             let now = now_ms();
-            let saved = conn.unchecked_transaction().and_then(|tx| {
-                {
-                    let mut insert = tx.prepare_cached(
-                        "INSERT OR IGNORE INTO members(grp, key, path, seq, added) VALUES(?1, ?2, ?3, ?4, ?5)",
-                    )?;
-                    for (member, seq) in &added {
-                        insert.execute(params![id, member.key, member.path, seq, now])?;
-                    }
+            let saved = db::in_transaction(conn, |tx| {
+                let mut insert = tx.prepare_cached(
+                    "INSERT OR IGNORE INTO members(grp, key, path, seq, added) VALUES(?1, ?2, ?3, ?4, ?5)",
+                )?;
+                for (member, seq) in &added {
+                    insert.execute(params![id, member.key, member.path, seq, now])?;
                 }
-                tx.commit()
+                Ok(())
             });
             if let Err(err) = saved {
                 diag::report("Saving to a group", err);
@@ -301,14 +297,12 @@ impl Groups {
             group.keys.remove(*key);
         }
         if let Some(conn) = &self.conn {
-            let saved = conn.unchecked_transaction().and_then(|tx| {
-                {
-                    let mut delete = tx.prepare_cached("DELETE FROM members WHERE grp = ?1 AND key = ?2")?;
-                    for key in &gone {
-                        delete.execute(params![id, key])?;
-                    }
+            let saved = db::in_transaction(conn, |tx| {
+                let mut delete = tx.prepare_cached("DELETE FROM members WHERE grp = ?1 AND key = ?2")?;
+                for key in &gone {
+                    delete.execute(params![id, key])?;
                 }
-                tx.commit()
+                Ok(())
             });
             if let Err(err) = saved {
                 diag::report("Removing from a group", err);
@@ -332,28 +326,9 @@ fn favorites_group() -> Group {
 }
 
 fn open_db(path: &Path) -> rusqlite::Result<Connection> {
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let conn = Connection::open(path)?;
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0))?;
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS groups(
-             id INTEGER PRIMARY KEY,
-             kind INTEGER NOT NULL,
-             name TEXT NOT NULL,
-             color INTEGER NOT NULL,
-             created INTEGER NOT NULL);
-         CREATE TABLE IF NOT EXISTS members(
-             grp INTEGER NOT NULL,
-             key TEXT NOT NULL,
-             path TEXT NOT NULL,
-             seq INTEGER NOT NULL,
-             added INTEGER NOT NULL,
-             PRIMARY KEY(grp, key)) WITHOUT ROWID;
-         INSERT OR IGNORE INTO groups(id, kind, name, color, created) VALUES(0, 0, 'Favorites', 0, 0);",
-    )?;
+    let conn = db::open_user_data(path)?;
+    // Favorites is always there, as group 0.
+    conn.execute("INSERT OR IGNORE INTO groups(id, kind, name, color, created) VALUES(0, 0, 'Favorites', 0, 0)", [])?;
     Ok(conn)
 }
 
@@ -493,6 +468,18 @@ mod tests {
         let dir = TempDir::new(name);
         let path = dir.path().join("user.sqlite");
         (dir, path)
+    }
+
+    /// Saved in the user data file: changing a number would turn people's collections into
+    /// categories.
+    #[test]
+    fn stored_kinds_never_change() {
+        let kinds = [GroupKind::Favorites, GroupKind::Collection, GroupKind::Category];
+        assert_eq!(kinds.map(GroupKind::to_db), [0, 1, 2]);
+        for kind in kinds {
+            assert_eq!(GroupKind::from_db(kind.to_db()), Some(kind));
+        }
+        assert_eq!(GroupKind::from_db(3), None);
     }
 
     #[test]

@@ -90,9 +90,9 @@ fn main() {
     );
 
     let db_path = std::env::temp_dir().join(format!("asset_browser_bench_{}.sqlite", std::process::id()));
-    let mut conn = db::open(&db_path).expect("open bench database");
+    let conn = db::open_cache(&db_path).expect("open bench database");
     let start = Instant::now();
-    db::save_index(&mut conn, &root_key, &result.files).expect("save index");
+    db::save_index(&conn, &root_key, &result.files).expect("save index");
     println!("Save index:    {:.0} ms", ms(start.elapsed()));
     let start = Instant::now();
     let loaded = db::load_index(&conn, &root_key).expect("load index").unwrap_or_default();

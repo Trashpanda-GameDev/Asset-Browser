@@ -61,3 +61,31 @@ impl AssetKind {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every cached folder index holds these numbers: changing one would file people's assets under
+    /// the wrong kind until their folders are scanned again.
+    #[test]
+    fn stored_numbers_never_change() {
+        assert_eq!(AssetKind::ALL.map(AssetKind::to_db), [0, 1, 2]);
+        for kind in AssetKind::ALL {
+            assert_eq!(AssetKind::from_db(kind.to_db()), Some(kind));
+        }
+        assert_eq!(AssetKind::from_db(3), None);
+        assert_eq!(AssetKind::from_db(-1), None);
+    }
+
+    #[test]
+    fn the_extension_decides_the_kind() {
+        assert_eq!(AssetKind::from_extension("png"), Some(AssetKind::Image));
+        assert_eq!(AssetKind::from_extension("PSD"), Some(AssetKind::Image), "any case");
+        assert_eq!(AssetKind::from_extension("Ogg"), Some(AssetKind::Audio));
+        assert_eq!(AssetKind::from_extension("glb"), Some(AssetKind::Model));
+        assert_eq!(AssetKind::from_extension("txt"), None);
+        assert_eq!(AssetKind::from_extension(""), None);
+        assert_eq!(AssetKind::from_extension("pngpngpng"), None, "longer than any asset's extension");
+    }
+}

@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::asset::AssetKind;
 use crate::model::ModelInfo;
@@ -46,21 +46,94 @@ pub enum CacheWrite {
     Model(i64, StoredThumb, ModelInfo),
 }
 
-/// Opens the user data file for the library's folders (the other user data has its own
-/// connections: `groups::Groups`, `sheets::SheetStore`).
-pub fn open_user(path: &Path) -> rusqlite::Result<Connection> {
+/// How much a file's last writes are worth after a crash or a power cut.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Durability {
+    /// Everything in the cache can be made again, so a write returns before it's on disk
+    /// (`synchronous = NORMAL`): a power cut can lose the last moments, never the file.
+    Cache,
+    /// The user's own data: a write is on disk before it returns.
+    UserData,
+}
+
+/// Opens a SQLite file the way the app opens every one: its folder made first, in WAL mode so
+/// readers carry on while one connection writes, waiting up to 10 s for another connection's write.
+pub fn connect(path: &Path, durability: Durability) -> rusqlite::Result<Connection> {
     if let Some(dir) = path.parent() {
+        // Not reported here: opening the file fails right after if its folder isn't there.
         let _ = std::fs::create_dir_all(dir);
     }
     let conn = Connection::open(path)?;
-    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.busy_timeout(Duration::from_secs(10))?;
     conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0))?;
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS library_roots(
-             position INTEGER PRIMARY KEY,
-             path TEXT NOT NULL);",
-    )?;
+    if durability == Durability::Cache {
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+    }
     Ok(conn)
+}
+
+/// Runs `work` as one transaction: everything it writes is saved, or none of it is.
+pub fn in_transaction<T>(
+    conn: &Connection,
+    work: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<T>,
+) -> rusqlite::Result<T> {
+    let tx = conn.unchecked_transaction()?;
+    let value = work(&tx)?;
+    tx.commit()?;
+    Ok(value)
+}
+
+/// The user data file's tables: the library's folders, favorites, collections and categories
+/// (`groups`), and sprite sheet choices (`sheets`). They're all made here, with the file's
+/// migrations, so its version (`user_version`) covers all of them whichever part opens it first.
+const USER_DATA_TABLES: &str = "
+    CREATE TABLE IF NOT EXISTS library_roots(
+        position INTEGER PRIMARY KEY,
+        path TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS groups(
+        id INTEGER PRIMARY KEY,
+        kind INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        color INTEGER NOT NULL,
+        created INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS members(
+        grp INTEGER NOT NULL,
+        key TEXT NOT NULL,
+        path TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        added INTEGER NOT NULL,
+        PRIMARY KEY(grp, key)) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS sheets(
+        key TEXT PRIMARY KEY,
+        animate INTEGER NOT NULL,
+        columns INTEGER,
+        rows INTEGER,
+        margin INTEGER,
+        spacing INTEGER,
+        split INTEGER,
+        fps REAL NOT NULL) WITHOUT ROWID;";
+
+/// Opens the user's own data file with all its tables, brought up to the current version. The
+/// app keeps a connection to it for the library's folders; `groups::Groups` and
+/// `sheets::SheetStore` keep their own.
+pub fn open_user_data(path: &Path) -> rusqlite::Result<Connection> {
+    let conn = connect(path, Durability::UserData)?;
+    conn.execute_batch(USER_DATA_TABLES)?;
+    migrate_user_data(&conn)?;
+    Ok(conn)
+}
+
+/// Version 1 stores a sprite sheet's default speed as 0, so changing the default reaches every
+/// picture. Before, the default (12 fps) was saved as a number: those become the default.
+fn migrate_user_data(conn: &Connection) -> rusqlite::Result<()> {
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 1 {
+        in_transaction(conn, |tx| {
+            tx.execute("UPDATE sheets SET fps = 0 WHERE fps = 12", [])?;
+            tx.pragma_update(None, "user_version", 1)
+        })?;
+    }
+    Ok(())
 }
 
 /// The folders the library is made of, in the order they were added.
@@ -71,25 +144,19 @@ pub fn load_roots(conn: &Connection) -> rusqlite::Result<Vec<PathBuf>> {
 }
 
 pub fn save_roots(conn: &Connection, roots: &[PathBuf]) -> rusqlite::Result<()> {
-    let tx = conn.unchecked_transaction()?;
-    tx.execute("DELETE FROM library_roots", [])?;
-    {
+    in_transaction(conn, |tx| {
+        tx.execute("DELETE FROM library_roots", [])?;
         let mut insert = tx.prepare("INSERT INTO library_roots(position, path) VALUES(?1, ?2)")?;
         for (position, root) in roots.iter().enumerate() {
             insert.execute(params![position as i64, root.to_string_lossy()])?;
         }
-    }
-    tx.commit()
+        Ok(())
+    })
 }
 
-pub fn open(path: &Path) -> rusqlite::Result<Connection> {
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let conn = Connection::open(path)?;
-    conn.busy_timeout(Duration::from_secs(10))?;
-    conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0))?;
-    conn.pragma_update(None, "synchronous", "NORMAL")?;
+/// Opens the cache file, making whichever of its tables aren't there yet.
+pub fn open_cache(path: &Path) -> rusqlite::Result<Connection> {
+    let conn = connect(path, Durability::Cache)?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS roots(
              id INTEGER PRIMARY KEY,
@@ -157,23 +224,22 @@ pub fn load_index(conn: &Connection, root: &str) -> rusqlite::Result<Option<Vec<
     Ok(Some(files))
 }
 
-pub fn save_index(conn: &mut Connection, root: &str, files: &[ScannedFile]) -> rusqlite::Result<()> {
+pub fn save_index(conn: &Connection, root: &str, files: &[ScannedFile]) -> rusqlite::Result<()> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
-    let tx = conn.transaction()?;
-    tx.execute(
-        "INSERT INTO roots(path, scanned_at) VALUES(?1, ?2)
-         ON CONFLICT(path) DO UPDATE SET scanned_at = excluded.scanned_at",
-        params![root, now],
-    )?;
-    let id: i64 = tx.query_row("SELECT id FROM roots WHERE path = ?1", [root], |row| row.get(0))?;
-    tx.execute("DELETE FROM files WHERE root = ?1", [id])?;
-    {
+    in_transaction(conn, |tx| {
+        tx.execute(
+            "INSERT INTO roots(path, scanned_at) VALUES(?1, ?2)
+             ON CONFLICT(path) DO UPDATE SET scanned_at = excluded.scanned_at",
+            params![root, now],
+        )?;
+        let id: i64 = tx.query_row("SELECT id FROM roots WHERE path = ?1", [root], |row| row.get(0))?;
+        tx.execute("DELETE FROM files WHERE root = ?1", [id])?;
         let mut insert = tx.prepare("INSERT INTO files(root, rel, kind, size, mtime) VALUES(?1, ?2, ?3, ?4, ?5)")?;
         for file in files {
             insert.execute(params![id, file.rel, file.kind.to_db(), file.size as i64, file.mtime])?;
         }
-    }
-    tx.commit()
+        Ok(())
+    })
 }
 
 pub fn get_thumb(conn: &Connection, key: i64) -> rusqlite::Result<Option<StoredThumb>> {
@@ -243,9 +309,8 @@ fn decode_animations(text: &str) -> Vec<(String, f32)> {
 }
 
 /// Saves a batch in one transaction.
-pub fn put_cache(conn: &mut Connection, batch: &[CacheWrite]) -> rusqlite::Result<()> {
-    let tx = conn.transaction()?;
-    {
+pub fn put_cache(conn: &Connection, batch: &[CacheWrite]) -> rusqlite::Result<()> {
+    in_transaction(conn, |tx| {
         let mut thumb = tx.prepare_cached(
             "INSERT OR REPLACE INTO thumbs(key, w, h, src_w, src_h, format, data)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -288,8 +353,8 @@ pub fn put_cache(conn: &mut Connection, batch: &[CacheWrite]) -> rusqlite::Resul
                 }
             }
         }
-    }
-    tx.commit()
+        Ok(())
+    })
 }
 
 pub fn get_setting(conn: &Connection, key: &str) -> Option<String> {
@@ -306,20 +371,18 @@ pub fn remove_setting(conn: &Connection, key: &str) -> rusqlite::Result<()> {
 
 /// Removes several settings in one transaction.
 pub fn remove_settings(conn: &Connection, keys: &[&str]) -> rusqlite::Result<()> {
-    let tx = conn.unchecked_transaction()?;
-    {
+    in_transaction(conn, |tx| {
         let mut statement = tx.prepare_cached("DELETE FROM settings WHERE key = ?1")?;
         for key in keys {
             statement.execute([key])?;
         }
-    }
-    tx.commit()
+        Ok(())
+    })
 }
 
 /// Saves several settings in one transaction.
 pub fn set_settings(conn: &Connection, settings: &[(&str, &str)]) -> rusqlite::Result<()> {
-    let tx = conn.unchecked_transaction()?;
-    {
+    in_transaction(conn, |tx| {
         let mut statement = tx.prepare_cached(
             "INSERT INTO settings(key, value) VALUES(?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -327,8 +390,8 @@ pub fn set_settings(conn: &Connection, settings: &[(&str, &str)]) -> rusqlite::R
         for (key, value) in settings {
             statement.execute(params![key, value])?;
         }
-    }
-    tx.commit()
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -342,7 +405,7 @@ mod tests {
     fn first_launch_opens_from_many_threads() {
         let dir = TempDir::new("first_launch");
         let path = dir.path().join("library.sqlite");
-        let ui = open(&path).expect("UI connection");
+        let ui = open_cache(&path).expect("UI connection");
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(21));
         let threads: Vec<_> = (0..21)
             .map(|i| {
@@ -350,10 +413,10 @@ mod tests {
                 let barrier = barrier.clone();
                 std::thread::spawn(move || {
                     barrier.wait();
-                    let mut conn = open(&path).map_err(|err| format!("open {i}: {err}"))?;
+                    let conn = open_cache(&path).map_err(|err| format!("open {i}: {err}"))?;
                     let thumb =
                         StoredThumb { w: 1, h: 1, src_w: 1, src_h: 1, format: FORMAT_RAW_RGBA, data: vec![0; 4] };
-                    put_cache(&mut conn, &[CacheWrite::Thumb(i, thumb)]).map_err(|err| format!("write {i}: {err}"))
+                    put_cache(&conn, &[CacheWrite::Thumb(i, thumb)]).map_err(|err| format!("write {i}: {err}"))
                 })
             })
             .collect();
@@ -369,13 +432,13 @@ mod tests {
     fn library_folders_keep_their_order() {
         let dir = TempDir::new("roots");
         let path = dir.path().join("user.sqlite");
-        let conn = open_user(&path).expect("user data");
+        let conn = open_user_data(&path).expect("user data");
         assert!(load_roots(&conn).unwrap().is_empty());
         let roots = [PathBuf::from("F:\\Resources"), PathBuf::from("D:\\Audio"), PathBuf::from("C:\\Art")];
         save_roots(&conn, &roots).unwrap();
         save_roots(&conn, &roots[1..]).unwrap();
         drop(conn);
-        let conn = open_user(&path).expect("user data again");
+        let conn = open_user_data(&path).expect("user data again");
         assert_eq!(load_roots(&conn).unwrap(), roots[1..], "saving replaces the list");
     }
 }

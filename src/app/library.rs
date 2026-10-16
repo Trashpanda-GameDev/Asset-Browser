@@ -266,7 +266,7 @@ impl BrowserApp {
         let db_path = self.db_path.clone();
         let ctx = self.ctx.clone();
         let spawned = std::thread::Builder::new().name("scan".into()).spawn(move || {
-            let mut conn = db::open(&db_path).map_err(|err| diag::report("Saving the index", err)).ok();
+            let conn = db::open_cache(&db_path).map_err(|err| diag::report("Saving the index", err)).ok();
             let (mut elapsed, mut assets, mut dirs_visited, mut skipped) = (Duration::ZERO, 0, 0, 0);
             let mut fresh = Vec::new();
             let mut unreadable = Vec::new();
@@ -285,7 +285,7 @@ impl BrowserApp {
                     unreadable.push(root.clone());
                     continue;
                 }
-                if let Some(conn) = &mut conn
+                if let Some(conn) = &conn
                     && let Err(err) = db::save_index(conn, &root_string(root), &result.files)
                 {
                     diag::report("Saving the index", err);

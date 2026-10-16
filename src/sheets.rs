@@ -14,7 +14,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::diag;
+use crate::{db, diag};
 
 /// Alpha below this counts as transparent when looking for gaps between frames.
 const CLEAR_ALPHA: u8 = 8;
@@ -458,37 +458,7 @@ pub struct SheetStore {
 
 impl SheetStore {
     pub fn open(path: &Path) -> Self {
-        let opened = (|| -> rusqlite::Result<Connection> {
-            if let Some(dir) = path.parent() {
-                let _ = std::fs::create_dir_all(dir);
-            }
-            let conn = Connection::open(path)?;
-            conn.busy_timeout(std::time::Duration::from_secs(5))?;
-            conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0))?;
-            conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS sheets(
-                     key TEXT PRIMARY KEY,
-                     animate INTEGER NOT NULL,
-                     columns INTEGER,
-                     rows INTEGER,
-                     margin INTEGER,
-                     spacing INTEGER,
-                     split INTEGER,
-                     fps REAL NOT NULL) WITHOUT ROWID;",
-            )?;
-            // Version 1 of the user data file stores the default speed as 0, so changing the
-            // default reaches every picture. Before, the default (12 fps) was saved as a number:
-            // those become the default.
-            let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-            if version < 1 {
-                let tx = conn.unchecked_transaction()?;
-                tx.execute("UPDATE sheets SET fps = 0 WHERE fps = 12", [])?;
-                tx.pragma_update(None, "user_version", 1)?;
-                tx.commit()?;
-            }
-            Ok(conn)
-        })();
-        match opened {
+        match db::open_user_data(path) {
             Ok(conn) => Self { conn: Some(conn) },
             Err(err) => {
                 diag::report("Sprite sheet settings unavailable", err);
@@ -659,6 +629,16 @@ mod tests {
         assert_eq!(sheet.frames[0].offset, [2, 3]);
         assert_eq!(sheet.frames[0].size, [36, 56]);
         assert!(sheet.frames[2].rotated);
+    }
+
+    /// Saved in the user data file with each picture's grid.
+    #[test]
+    fn stored_splits_never_change() {
+        let splits = [Split::Rows, Split::Columns, Split::All];
+        assert_eq!(splits.map(Split::to_db), [0, 1, 2]);
+        for split in splits {
+            assert_eq!(Split::from_db(split.to_db()), split);
+        }
     }
 
     #[test]

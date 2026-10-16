@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 
+use crate::db::{self, Durability};
 use crate::diag;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -109,11 +110,12 @@ pub struct Usage {
 /// the counts still given; only a file that can't be opened or counted fails.
 pub fn measure(cache: &Path, user: &Path) -> Result<Usage, String> {
     let mut usage = Usage { cache_file: file_size(cache), user_file: file_size(user), ..Usage::default() };
-    for (path, parts) in [(cache, &Part::CACHE[..]), (user, &Part::USER[..])] {
+    let files = [(cache, &Part::CACHE[..], Durability::Cache), (user, &Part::USER[..], Durability::UserData)];
+    for (path, parts, durability) in files {
         if !path.exists() {
             continue;
         }
-        if let Err(err) = measure_file(path, parts, &mut usage) {
+        if let Err(err) = measure_file(path, durability, parts, &mut usage) {
             let message = format!("{}: {err}", path.display());
             diag::report("Measuring the files", &message);
             return Err(message);
@@ -122,10 +124,8 @@ pub fn measure(cache: &Path, user: &Path) -> Result<Usage, String> {
     Ok(usage)
 }
 
-fn measure_file(path: &Path, parts: &[Part], usage: &mut Usage) -> Result<(), String> {
-    // Opened as the app's other connections are.
-    let conn = Connection::open(path).map_err(|err| format!("opening it: {err}"))?;
-    conn.busy_timeout(Duration::from_secs(10)).map_err(|err| format!("opening it: {err}"))?;
+fn measure_file(path: &Path, durability: Durability, parts: &[Part], usage: &mut Usage) -> Result<(), String> {
+    let conn = db::connect(path, durability).map_err(|err| format!("opening it: {err}"))?;
     // The space each table takes, from SQLite's page statistics, tried three times.
     let mut bytes = None;
     for attempt in 1..=3 {
@@ -189,14 +189,15 @@ fn table_bytes(conn: &Connection) -> rusqlite::Result<HashMap<String, u64>> {
 
 /// Empties the cache's `parts`, then rewrites the file without the space they took. On the cache
 /// writer's thread, so no preview is being saved meanwhile; readers carry on.
-pub fn clear_cache(conn: &mut Connection, parts: &[Part]) -> rusqlite::Result<()> {
-    let tx = conn.transaction()?;
-    for part in parts.iter().filter(|part| !part.in_user_data()) {
-        for table in part.tables() {
-            tx.execute(&format!("DELETE FROM {table}"), [])?;
+pub fn clear_cache(conn: &Connection, parts: &[Part]) -> rusqlite::Result<()> {
+    db::in_transaction(conn, |tx| {
+        for part in parts.iter().filter(|part| !part.in_user_data()) {
+            for table in part.tables() {
+                tx.execute(&format!("DELETE FROM {table}"), [])?;
+            }
         }
-    }
-    tx.commit()?;
+        Ok(())
+    })?;
     conn.execute_batch("VACUUM")?;
     // The log took the whole rewritten file; this hands that space back too.
     conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
@@ -205,7 +206,7 @@ pub fn clear_cache(conn: &mut Connection, parts: &[Part]) -> rusqlite::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{self, CacheWrite, StoredThumb};
+    use crate::db::{CacheWrite, StoredThumb};
     use crate::test_support::TempDir;
     use rusqlite::OptionalExtension;
 
@@ -214,7 +215,7 @@ mod tests {
         let temp = TempDir::new("storage");
         let dir = temp.path();
         let path = dir.join("library.sqlite");
-        let mut conn = db::open(&path).unwrap();
+        let conn = db::open_cache(&path).unwrap();
         let thumb = || StoredThumb {
             w: 64,
             h: 64,
@@ -224,7 +225,7 @@ mod tests {
             data: vec![7; 64 * 64 * 4],
         };
         let writes: Vec<CacheWrite> = (0..200).map(|key| CacheWrite::Thumb(key, thumb())).collect();
-        db::put_cache(&mut conn, &writes).unwrap();
+        db::put_cache(&conn, &writes).unwrap();
         db::set_setting(&conn, "ui.mode", "all").unwrap();
 
         let usage = measure(&path, &dir.join("user.sqlite")).unwrap();
@@ -235,7 +236,7 @@ mod tests {
         assert_eq!(usage.parts[&Part::Settings].count, 1);
         assert!(usage.cache_file >= bytes);
 
-        clear_cache(&mut conn, &[Part::Thumbnails]).unwrap();
+        clear_cache(&conn, &[Part::Thumbnails]).unwrap();
         let after = measure(&path, &dir.join("user.sqlite")).unwrap();
         assert_eq!(after.parts[&Part::Thumbnails].count, 0);
         assert_eq!(after.parts[&Part::Settings].count, 1, "the rest is kept");
@@ -251,9 +252,9 @@ mod tests {
     #[test]
     fn every_part_names_tables_its_file_has() {
         let temp = TempDir::new("storage_tables");
-        let cache = db::open(&temp.path().join("library.sqlite")).unwrap();
+        let cache = db::open_cache(&temp.path().join("library.sqlite")).unwrap();
         let user_path = temp.path().join("user.sqlite");
-        let user = db::open_user(&user_path).unwrap();
+        let user = db::open_user_data(&user_path).unwrap();
         drop(crate::groups::Groups::open(&user_path));
         drop(crate::sheets::SheetStore::open(&user_path));
         for part in Part::CACHE.into_iter().chain(Part::USER) {

@@ -136,14 +136,14 @@ impl BrowserApp {
         theme::apply(&cc.egui_ctx);
         theme::color_title_bar(&cc.egui_ctx, cc);
         let db_path = paths::cache_file();
-        let conn = db::open(&db_path)
+        let conn = db::open_cache(&db_path)
             .map_err(|err| diag::report(&format!("Cache unavailable ({})", db_path.display()), err))
             .ok();
         let ctx = cc.egui_ctx.clone();
         let repaint: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || ctx.request_repaint());
         let thumbs = ThumbService::start(&db_path, &repaint);
         let user_path = paths::user_data_file();
-        let user_conn = db::open_user(&user_path)
+        let user_conn = db::open_user_data(&user_path)
             .map_err(|err| {
                 diag::report(&format!("The library's folders can't be saved ({})", user_path.display()), err)
             })

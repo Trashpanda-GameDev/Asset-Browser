@@ -70,7 +70,10 @@ Not checked by a tool, but expected:
 
 - `library.sqlite` is a cache: everything in it can be made again from the files, except the settings.
 - `user.sqlite` holds what only the user can make: the library's folders, favorites, collections, categories and
-  sprite-sheet choices. It changes shape only through a migration that keeps what's there.
+  sprite-sheet choices. Its tables are all made in one place (`db::open_user_data`), and it changes shape only
+  through a migration there that keeps what's there.
+- Every SQLite file is opened with `db::connect`, and several writes that belong together go in one
+  `db::in_transaction`.
 - Every settings key and every number stored for an enum (asset kinds, group kinds) has one owner, and a test pins
   its value: changing one loses what people saved.
 - Changing how a cache stores something means bumping its version number, which clears that part of everyone's cache.

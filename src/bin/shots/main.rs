@@ -308,7 +308,7 @@ fn main() -> eframe::Result {
         demo::organize(&library);
         // As if Auto-play had been turned off and the turntable on: no sound plays by itself while
         // the clips move through them, and the models turn.
-        let settings = db::open(&paths::cache_file())
+        let settings = db::open_cache(&paths::cache_file())
             .and_then(|conn| db::set_settings(&conn, &[("sound.autoplay", "0"), ("model.turntable", "1")]));
         if let Err(err) = settings {
             eprintln!("couldn't set the demo's settings: {err}");
