@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn damaged_files_never_panic() {
         for original in [legacy(4, false), legacy(8, true)] {
-            for bytes in crate::model::test_files::damaged(&original, 300) {
+            for bytes in crate::test_support::damaged(&original, 300) {
                 if let Ok(preview) = read_from(&bytes[..]) {
                     let _ = crop_to_content(&preview);
                 }

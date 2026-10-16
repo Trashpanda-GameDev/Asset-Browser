@@ -45,3 +45,33 @@ impl Drop for TempDir {
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
+
+/// Damaged copies of a good file, for parsers to survive: cut short at many points, and with
+/// bytes overwritten at random (a fixed seed, so a failure repeats).
+pub fn damaged(original: &[u8], copies: usize) -> Vec<Vec<u8>> {
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut random = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let mut out: Vec<Vec<u8>> =
+        (0..=original.len()).step_by(original.len() / 64 + 1).map(|len| original[..len].to_vec()).collect();
+    for _ in 0..copies {
+        let mut copy = original.to_vec();
+        for _ in 0..1 + random() % 4 {
+            let at = (random() % copy.len().max(1) as u64) as usize;
+            if let Some(byte) = copy.get_mut(at) {
+                // Mostly extreme values, which find overflows; sometimes anything.
+                *byte = match random() % 3 {
+                    0 => 0xff,
+                    1 => 0x00,
+                    _ => random() as u8,
+                };
+            }
+        }
+        out.push(copy);
+    }
+    out
+}

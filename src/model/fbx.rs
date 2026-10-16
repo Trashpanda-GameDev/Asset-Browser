@@ -536,7 +536,7 @@ Connections:  {
             }
         }
         cases.extend(
-            crate::model::test_files::damaged(SKELETON.as_bytes(), 200).into_iter().map(|bytes| ("damaged.fbx", bytes)),
+            crate::test_support::damaged(SKELETON.as_bytes(), 200).into_iter().map(|bytes| ("damaged.fbx", bytes)),
         );
         for (name, bytes) in cases {
             let path = dir.write(name, &bytes);

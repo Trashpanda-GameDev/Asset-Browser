@@ -138,7 +138,7 @@ mod tests {
     fn damaged_files_never_panic() {
         let ascii = b"solid part\n facet normal 0 0 1\n  outer loop\n   vertex 0 0 0\n   vertex 1 0 0\n   vertex 0 1 0\n  endloop\n endfacet\nendsolid part\n";
         for original in [binary_file(&[TRIANGLE, TRIANGLE], b""), ascii.to_vec()] {
-            for bytes in crate::model::test_files::damaged(&original, 300) {
+            for bytes in crate::test_support::damaged(&original, 300) {
                 let _ = parse(&bytes);
             }
         }

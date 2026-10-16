@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn damaged_files_never_panic() {
-        for bytes in crate::model::test_files::damaged(QUAD.as_bytes(), 300) {
+        for bytes in crate::test_support::damaged(QUAD.as_bytes(), 300) {
             let _ = parse(&String::from_utf8_lossy(&bytes), Path::new("."), &LoadOptions { max_texture: 0 });
         }
         // Numbers that overflow arithmetic.

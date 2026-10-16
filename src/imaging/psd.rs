@@ -266,3 +266,88 @@ fn be16(b: &[u8]) -> u16 {
 fn be32(b: &[u8]) -> u32 {
     u32::from_be_bytes([b[0], b[1], b[2], b[3]])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TempDir;
+
+    /// The colour of pixel (x, y) in the test pictures.
+    fn color(x: u32, y: u32) -> [u8; 3] {
+        [(x * 40) as u8, (y * 60) as u8, 128]
+    }
+
+    /// A `w` × `h` RGB PSD at 8 bits, its pixels `color(x, y)`: raw, or PackBits-compressed with
+    /// every row one literal run.
+    fn psd(w: u32, h: u32, rle: bool) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(b"8BPS");
+        out.extend_from_slice(&1u16.to_be_bytes());
+        out.extend_from_slice(&[0; 6]);
+        out.extend_from_slice(&3u16.to_be_bytes());
+        out.extend_from_slice(&h.to_be_bytes());
+        out.extend_from_slice(&w.to_be_bytes());
+        out.extend_from_slice(&8u16.to_be_bytes());
+        out.extend_from_slice(&3u16.to_be_bytes());
+        // No colour mode data, image resources or layers.
+        out.extend_from_slice(&[0; 12]);
+        out.extend_from_slice(&u16::from(rle).to_be_bytes());
+        let row = |channel: usize, y: u32| (0..w).map(move |x| color(x, y)[channel]);
+        if rle {
+            for _ in 0..3 * h {
+                out.extend_from_slice(&(w as u16 + 1).to_be_bytes());
+            }
+            for channel in 0..3 {
+                for y in 0..h {
+                    out.push(w as u8 - 1);
+                    out.extend(row(channel, y));
+                }
+            }
+        } else {
+            for channel in 0..3 {
+                for y in 0..h {
+                    out.extend(row(channel, y));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn reads_the_flattened_picture_raw_or_packed() {
+        let dir = TempDir::new("psd");
+        for rle in [false, true] {
+            let path = dir.write(&format!("picture_{rle}.psd"), &psd(5, 4, rle));
+            let pixels = read(&path, 64).unwrap();
+            assert_eq!((pixels.w, pixels.h, pixels.src_w, pixels.src_h), (5, 4, 5, 4));
+            for (i, px) in pixels.rgba.as_chunks::<4>().0.iter().enumerate() {
+                let (x, y) = (i as u32 % 5, i as u32 / 5);
+                assert_eq!(px[..3], color(x, y), "pixel {x}, {y} (rle {rle})");
+                assert_eq!(px[3], 255, "no transparency without merged alpha");
+            }
+        }
+    }
+
+    #[test]
+    fn a_big_picture_is_read_at_every_nth_pixel() {
+        let dir = TempDir::new("psd_shrunk");
+        // At most 2 × `max` pixels wide: every 2nd pixel of 6 is 3.
+        let pixels = read(&dir.write("big.psd", &psd(6, 4, true)), 1).unwrap();
+        assert_eq!((pixels.w, pixels.h, pixels.src_w, pixels.src_h), (2, 2, 6, 4));
+        let first_row: Vec<[u8; 3]> =
+            pixels.rgba.as_chunks::<4>().0[..2].iter().map(|px| [px[0], px[1], px[2]]).collect();
+        assert_eq!(first_row, [color(0, 0), color(3, 0)]);
+    }
+
+    #[test]
+    fn other_files_are_errors() {
+        let dir = TempDir::new("psd_wrong");
+        let not_psd = dir.write("picture.psd", b"\x89PNG\r\n\x1a\n not a photoshop file");
+        assert_eq!(read(&not_psd, 64).err().as_deref(), Some("PSD: not a Photoshop file"));
+        let mut zip = psd(2, 2, false);
+        zip[38] = 0;
+        zip[39] = 2;
+        let zip = dir.write("zip.psd", &zip);
+        assert!(read(&zip, 64).err().is_some_and(|err| err.contains("ZIP")));
+    }
+}

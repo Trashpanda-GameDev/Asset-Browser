@@ -699,7 +699,7 @@ mod tests {
             r#","material":0"#,
             r#","materials":[{"pbrMetallicRoughness":{"baseColorFactor":[1,0,0,1]}}]"#,
         );
-        for bytes in crate::model::test_files::damaged(&glb(&json, &quad_buffer()), 400) {
+        for bytes in crate::test_support::damaged(&glb(&json, &quad_buffer()), 400) {
             let _ = load_bytes(&bytes, Path::new("."), &options());
         }
         // Valid JSON with different numbers: every digit in turn made 9, and 0.

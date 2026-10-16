@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn damaged_files_never_panic() {
-        for bytes in crate::model::test_files::damaged(&file(true), 500) {
+        for bytes in crate::test_support::damaged(&file(true), 500) {
             let _ = parse(&bytes, Path::new("."), &LoadOptions { max_texture: 0 });
         }
     }

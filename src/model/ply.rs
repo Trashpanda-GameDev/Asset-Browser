@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn damaged_files_never_panic() {
         for original in [ASCII.as_bytes().to_vec(), binary(false), binary(true)] {
-            for bytes in crate::model::test_files::damaged(&original, 300) {
+            for bytes in crate::test_support::damaged(&original, 300) {
                 let _ = parse(&bytes, Path::new("."), &options());
             }
         }
