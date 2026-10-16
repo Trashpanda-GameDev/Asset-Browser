@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use eframe::egui::{
     self, Align, Color32, CornerRadius, FontId, Frame, Layout, Margin, Rect, RichText, Sense, Ui, UiBuilder, Vec2,
@@ -16,8 +16,8 @@ use crate::storage::{Part, Usage};
 use crate::ui::keymap::{self, Action, Keymap, Shortcut};
 use crate::updates::{RELEASES, Status, Updates};
 
-use super::format::{format_age, format_size, grouped, plural};
-use super::updates::UpdateAction;
+use super::format::{format_size, grouped, plural};
+use super::updates::{self, UpdateAction};
 use super::{theme, widgets};
 
 /// The window's size, and the list of pages' width.
@@ -481,10 +481,7 @@ fn updates_page(ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command
     );
     ui.label(RichText::new(kind).color(theme::TEXT_FAINT));
     ui.add_space(6.0);
-    let checked = updates
-        .checked()
-        .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
-        .map(|at| format!(", checked {}", format_age(at.as_nanos() as i64)));
+    let checked = updates::checked_ago(updates).map(|ago| format!(", checked {ago}"));
     let (text, color) = match updates.status() {
         Status::NotInstalled => (
             "This copy doesn't update itself: installed and portable copies do, from the releases on GitHub."
@@ -493,13 +490,8 @@ fn updates_page(ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command
         ),
         Status::Checking => ("Checking for updates…".to_owned(), theme::TEXT_WEAK),
         Status::UpToDate => (format!("Up to date{}.", checked.unwrap_or_default()), theme::TEXT_WEAK),
-        Status::Downloading { version: new, percent } => (format!("Downloading {new}… {percent}%"), theme::TEXT_WEAK),
-        Status::Ready { version: new } => (
-            format!(
-                "Asset Browser {new} is downloaded. Restart to use it now, or it's installed when you close the app."
-            ),
-            theme::TEXT,
-        ),
+        Status::Downloading { version: new, percent } => (updates::downloading(new, *percent), theme::TEXT_WEAK),
+        Status::Ready { version: new } => (updates::ready(new), theme::TEXT),
         Status::Failed { action, error } => (format!("Couldn't {action}: {error}"), theme::ERROR),
     };
     ui.horizontal(|ui| {

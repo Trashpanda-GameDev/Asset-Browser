@@ -21,8 +21,22 @@ pub enum UpdateAction {
     Restart,
 }
 
+/// How long ago the last check for updates was: "5 min ago".
+pub fn checked_ago(updates: &Updates) -> Option<String> {
+    let at = updates.checked()?.duration_since(UNIX_EPOCH).ok()?;
+    Some(format_age(at.as_nanos() as i64))
+}
+
+pub fn downloading(new: &str, percent: u8) -> String {
+    format!("Downloading {new}… {percent}%")
+}
+
+/// What to do about an update that has downloaded.
+pub fn ready(new: &str) -> String {
+    format!("Asset Browser {new} is downloaded. Restart to use it now, or it's installed when you close the app.")
+}
+
 /// Draws it, for the right-to-left end of the status bar. Returns what was clicked.
-#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 pub fn status(ui: &mut Ui, updates: &Updates) -> Option<UpdateAction> {
     let small = |text: String, color: Color32| RichText::new(text).size(11.5).color(color);
     let version = updates.version();
@@ -58,10 +72,7 @@ pub fn status(ui: &mut Ui, updates: &Updates) -> Option<UpdateAction> {
             None
         }
         Status::UpToDate => {
-            let when = updates
-                .checked()
-                .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
-                .map_or(String::new(), |at| format!(" (checked {})", format_age(at.as_nanos() as i64)));
+            let when = checked_ago(updates).map_or(String::new(), |ago| format!(" (checked {ago})"));
             version_label(ui, format!("{about}. Up to date{when}.\nClick to check again."))
         }
         Status::Failed { action, error } if answering.is_some() => {
@@ -73,7 +84,7 @@ pub fn status(ui: &mut Ui, updates: &Updates) -> Option<UpdateAction> {
             version_label(ui, format!("{about}. Couldn't {action}: {error}\nClick to try again."))
         }
         Status::Downloading { version: new, percent } => {
-            ui.label(small(format!("Downloading {new}… {percent}%"), theme::TEXT_FAINT))
+            ui.label(small(downloading(new, *percent), theme::TEXT_FAINT))
                 .on_hover_text(format!("{about}. Downloading Asset Browser {new}."));
             ui.add(egui::Spinner::new().size(12.0));
             None
@@ -81,10 +92,7 @@ pub fn status(ui: &mut Ui, updates: &Updates) -> Option<UpdateAction> {
         Status::Ready { version: new } => {
             let text = small(format!("{}  Restart to update", icon::ARROW_CLOCKWISE), theme::ACCENT);
             let button = egui::Button::new(text).fill(theme::ACCENT_SOFT).small();
-            let hover = format!(
-                "Asset Browser {new} is downloaded. Restart to use it now, or it's installed when you close the app."
-            );
-            ui.add(button).on_hover_text(hover).clicked().then_some(UpdateAction::Restart)
+            ui.add(button).on_hover_text(ready(new)).clicked().then_some(UpdateAction::Restart)
         }
     }
 }
