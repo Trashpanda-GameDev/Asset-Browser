@@ -5,8 +5,7 @@ each other, and how errors, stored data and tests are handled. [Working on Asset
 of the files. [Back to the README](../README.md)
 
 The rules that tools check hold everywhere: the architecture test lists no exceptions, and no function carries a
-mark for breaking one. Code that has to break a rule says so where it does, as below. One rule is only partly
-followed yet: most modules still give errors as a `String` (see Errors).
+mark for breaking one. Code that has to break a rule says so where it does, as below.
 
 ## Layers
 
@@ -66,14 +65,35 @@ Not checked by a tool, but expected:
 
 ## Errors
 
-- A module that can fail returns its own error type: an enum with `thiserror`, whose message is what the user reads
-  (`platform::CopyError` is a small one; `model::ModelError` keeps the messages the thumbnail cache stores with a
-  failed file). Errors from a library pass through as they are (`trash::Error`). Most modules still return their
-  message as a `String` (`imaging`, `thumbs`, `audio`, `storage` and the readers inside `model`): each moves to an
-  error type of its own when it's next worked on, keeping its messages (the thumbnail cache stores them).
+- A module that can fail returns its own error type: an enum with `thiserror`, whose message is what the user reads.
+  A library's error comes in with `#[from]` and keeps the library's message (`imaging::PictureError::Decode`); the
+  module's own cases have words of their own (`audio::SoundError::NoAudio`). An error from another module comes in
+  the same way and says what that one says (`thumbs::PreviewError::Model`).
+- A module that only passes on what the database or the OS said returns that error as it is (`rusqlite::Error` from
+  the stores, `trash::Error` from `platform::move_to_trash`).
+- The thumbnail cache keeps a failed file's message with it, so the file isn't tried again (`ModelError`,
+  `PictureError` and `SoundError`, through `PreviewError`). A changed message would reach only files that fail from
+  then on, so messages stay as they are, and tests pin them.
+- An error becomes text only where it's kept or shown: the cache's record of a failure, the message under the player,
+  the one in the inspector. What a model reader found wrong with one file is text inside its error
+  (`ModelError::Unreadable`), since nothing acts on it but the user.
 - The app shows errors with `diag::report` (the log, and the status bar); `diag::note` only logs, for errors not worth
   showing, such as an update check while offline.
 - No error is dropped without saying why: a `let _ =` on a `Result` has a comment.
+
+The error types:
+
+| Module | Error types |
+|---|---|
+| `platform` | `CopyError`: files couldn't be put on the clipboard |
+| `imaging` | `PictureError`: a picture couldn't be read or made smaller; `psd::PsdError` for PSD files |
+| `animated` | `GifError`: a GIF's frames couldn't be read |
+| `audio` | `OutputError`: no sound output; `SoundError`: a sound can't be played or measured |
+| `model` | `ModelError`: a model can't be shown |
+| `thumbs` | `PreviewError`: a file has no preview; `ClearError`: the cache wasn't cleared |
+| `detail` | `DetailError`: no large preview in the inspector |
+| `storage` | `StorageError`, `FileError`: the files couldn't be measured |
+| `deletion` | `DeleteError`: why files were kept |
 
 ## Stored data
 
@@ -100,9 +120,9 @@ Not checked by a tool, but expected:
 ## Adding things
 
 - **A kind of file:** its extension in `AssetKind::from_extension` (`src/asset.rs`), and what makes its preview in
-  `src/thumbs/worker.rs`.
-- **A model format:** a reader in `src/model/`, `parse(bytes, file, options)`, and a line in `model::FORMATS` with its
-  extensions (which also go in `AssetKind::from_extension`).
+  `src/thumbs/worker.rs` (its reader's error type becomes a case of `thumbs::PreviewError`).
+- **A model format:** a reader in `src/model/`, `parse(bytes, file, options)` giving a `ModelError` when it can't, and
+  a line in `model::FORMATS` with its extensions (which also go in `AssetKind::from_extension`).
 - **A keyboard shortcut:** an `Action` in `src/ui/keymap.rs` with its id (it's saved, so it never changes), label, group
   and default; what it does goes in `window_keys` (the window's own) or `asset_keys` (the selected assets), in
   `src/app/actions.rs`.
