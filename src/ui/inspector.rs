@@ -136,118 +136,23 @@ impl Inspector {
         wanted
     }
 
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
-    pub fn show(&mut self, ui: &mut Ui, args: InspectorArgs<'_>) -> InspectorOutput {
+    pub fn show(&mut self, ui: &mut Ui, mut args: InspectorArgs<'_>) -> InspectorOutput {
         let mut output = InspectorOutput::default();
-        let InspectorArgs {
-            library,
-            selection,
-            previews,
-            playback,
-            render_state,
-            totals,
-            kinds,
-            groups,
-            membership,
-            sheet_choices,
-            display,
-        } = args;
         // The picture and 3D views draw with the app's display; their buttons change it here, to
         // be handed back.
+        let display = args.display;
         self.display = display;
         (self.viewport.auto_rotate, self.viewport.wireframe) = (display.turntable, display.wireframe);
-        let Some(focus) = selection.focus.filter(|&focus| (focus as usize) < library.entries().len()) else {
+        let library = args.library;
+        let Some(focus) = args.selection.focus.filter(|&focus| (focus as usize) < library.entries().len()) else {
             self.viewport.release();
-            empty_state(ui, totals, kinds);
+            empty_state(ui, args.totals, args.kinds);
             return output;
         };
-        // What the pane's buttons act on: the whole selection when the focus is part of it.
-        let targets: Vec<u32> = if selection.contains(focus) {
-            let mut items: Vec<u32> = selection.items.iter().copied().collect();
-            items.sort_unstable();
-            items
-        } else {
-            vec![focus]
-        };
-        let entry = library.entry(focus);
-        previews.want(focus);
-        if self.want_detail(entry, previews) {
-            output.load_detail = Some(focus);
-        }
-        if entry.kind != AssetKind::Model {
-            self.viewport.release();
-        }
-        if entry.kind == AssetKind::Image {
-            self.load_sheet(library, entry, sheet_choices, ui.input(|input| input.time));
-        } else {
-            self.sheet.clear();
-        }
-
+        output.load_detail = self.follow(ui, &mut args, focus);
         egui::ScrollArea::vertical().id_salt("inspector").auto_shrink([false; 2]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
-            let width = ui.available_width();
-            match entry.kind {
-                AssetKind::Image => self.image_section(ui, entry, previews, width),
-                AssetKind::Audio => output.sound = sound_section(ui, library, focus, previews, playback),
-                AssetKind::Model => self.model_section(ui, entry, previews, render_state, width),
-            }
-            ui.add_space(4.0);
-            title(ui, library, entry);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-                output.action = asset_actions::buttons(ui, targets.len());
-                if favorite_button(ui, organize::all_in(membership, FAVORITES, &targets)).clicked() {
-                    output.command = Some(GroupCommand::ToggleFavorite(Targets::Selection));
-                }
-            });
-            ui.add_space(6.0);
-            for kind in [GroupKind::Collection, GroupKind::Category] {
-                widgets::section_label(ui, kind.title());
-                if let Some(command) = organize::chips(ui, groups, membership, &targets, kind) {
-                    output.command = Some(command);
-                }
-                ui.add_space(4.0);
-            }
-            // Every row is there from the start, with "…" until its value is known, so moving through
-            // the assets with the keys doesn't make the rows below jump as values arrive.
-            widgets::section_label(ui, "Details");
-            match entry.kind {
-                AssetKind::Image => {
-                    image_properties(ui, entry, previews, self.detail_size(entry.key), self.gif_frames(entry));
-                }
-                AssetKind::Audio => sound_properties(ui, entry, previews),
-                AssetKind::Model => self.model_properties(ui, entry, previews),
-            }
-            widgets::property(ui, "File size", format_size(entry.size));
-            widgets::property(ui, "Modified", format_age(entry.mtime));
-            // From the library folder it's in.
-            let root = &library.root(entry.root).name;
-            let folder = if entry.folder().is_empty() {
-                root.clone()
-            } else {
-                format!("{root} › {}", entry.folder().replace('/', " › "))
-            };
-            widgets::property(ui, "Folder", RichText::new(folder).color(theme::TEXT_WEAK));
-            // Last, since it only appears once the sound plays.
-            if entry.kind == AssetKind::Audio
-                && let Some(ready) = playback.now_for(entry.key).and_then(|now| now.ready_ms)
-            {
-                widgets::property(ui, "Started in", format!("{ready:.0} ms"))
-                    .on_hover_text("From the request to the first audio handed to the sound card");
-            }
-            // Below the details: a sprite sheet's or GIF's frames load after the picture is shown, and
-            // the player arriving here moves nothing above it.
-            if entry.kind == AssetKind::Image {
-                self.animation_section(ui, entry);
-            }
-
-            if selection.len() > 1 {
-                ui.add_space(10.0);
-                let look = Look::new(ui, self.display.backdrop);
-                if let Some(index) = selection_strip(ui, library, selection, previews, look) {
-                    output.focus = Some(index);
-                }
-            }
+            self.sections(ui, &mut args, focus, &mut output);
         });
         output.sheet_choices = self.sheet.take_choices();
         let shown = Display {
@@ -257,6 +162,98 @@ impl Inspector {
         };
         output.display = (shown != display).then_some(shown);
         output
+    }
+
+    /// Gets ready for the focused asset: asks for its thumbnail and large preview, lets go of the
+    /// last one's, and hands a picture to the sprite sheet player. The entry whose large preview
+    /// is to be loaded, if it is.
+    fn follow(&mut self, ui: &Ui, args: &mut InspectorArgs<'_>, focus: u32) -> Option<u32> {
+        let entry = args.library.entry(focus);
+        args.previews.want(focus);
+        let load = self.want_detail(entry, args.previews).then_some(focus);
+        if entry.kind != AssetKind::Model {
+            self.viewport.release();
+        }
+        if entry.kind == AssetKind::Image {
+            self.load_sheet(args.library, entry, args.sheet_choices, ui.input(|input| input.time));
+        } else {
+            self.sheet.clear();
+        }
+        load
+    }
+
+    /// The pane, top to bottom: the asset large, its name, what can be done with it, its groups,
+    /// its details, a sprite sheet's player, and the rest of the selection.
+    fn sections(&mut self, ui: &mut Ui, args: &mut InspectorArgs<'_>, focus: u32, output: &mut InspectorOutput) {
+        let (library, entry) = (args.library, args.library.entry(focus));
+        let width = ui.available_width();
+        match entry.kind {
+            AssetKind::Image => self.image_section(ui, entry, args.previews, width),
+            AssetKind::Audio => output.sound = sound_section(ui, library, focus, args.previews, args.playback),
+            AssetKind::Model => self.model_section(ui, entry, args, width),
+        }
+        ui.add_space(4.0);
+        title(ui, library, entry);
+        let targets = targets(args.selection, focus);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+            output.action = asset_actions::buttons(ui, targets.len());
+            if favorite_button(ui, organize::all_in(args.membership, FAVORITES, &targets)).clicked() {
+                output.command = Some(GroupCommand::ToggleFavorite(Targets::Selection));
+            }
+        });
+        ui.add_space(6.0);
+        for kind in [GroupKind::Collection, GroupKind::Category] {
+            widgets::section_label(ui, kind.title());
+            if let Some(command) = organize::chips(ui, args.groups, args.membership, &targets, kind) {
+                output.command = Some(command);
+            }
+            ui.add_space(4.0);
+        }
+        self.details(ui, args, entry);
+        // Below the details: a sprite sheet's or GIF's frames load after the picture is shown, and
+        // the player arriving here moves nothing above it.
+        if entry.kind == AssetKind::Image {
+            self.animation_section(ui, entry);
+        }
+        if args.selection.len() > 1 {
+            ui.add_space(10.0);
+            let look = Look::new(ui, self.display.backdrop);
+            if let Some(index) = selection_strip(ui, library, args.selection, args.previews, look) {
+                output.focus = Some(index);
+            }
+        }
+    }
+
+    /// The asset's details. Every row is there from the start, with "…" until its value is
+    /// known, so moving through the assets with the keys doesn't make the rows below jump as
+    /// values arrive.
+    fn details(&self, ui: &mut Ui, args: &InspectorArgs<'_>, entry: &Entry) {
+        widgets::section_label(ui, "Details");
+        match entry.kind {
+            AssetKind::Image => {
+                image_properties(ui, entry, args.previews, self.detail_size(entry.key), self.gif_frames(entry));
+            }
+            AssetKind::Audio => sound_properties(ui, entry, args.previews),
+            AssetKind::Model => self.model_properties(ui, entry, args.previews),
+        }
+        widgets::property(ui, "File size", format_size(entry.size));
+        widgets::property(ui, "Modified", format_age(entry.mtime));
+        // From the library folder it's in.
+        let root = &args.library.root(entry.root).name;
+        let folder = if entry.folder().is_empty() {
+            root.clone()
+        } else {
+            format!("{root} › {}", entry.folder().replace('/', " › "))
+        };
+        widgets::property(ui, "Folder", RichText::new(folder).color(theme::TEXT_WEAK));
+        // Last, since it only appears once the sound plays.
+        if entry.kind == AssetKind::Audio
+            && let Some(ready) = args.playback.now_for(entry.key).and_then(|now| now.ready_ms)
+        {
+            widgets::property(ui, "Started in", format!("{ready:.0} ms"))
+                .on_hover_text("From the request to the first audio handed to the sound card");
+        }
     }
 
     /// Hands the sprite sheet player the focused picture once it's loaded: what was detected in
@@ -367,15 +364,8 @@ impl Inspector {
         });
     }
 
-    #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
-    fn model_section(
-        &mut self,
-        ui: &mut Ui,
-        entry: &Entry,
-        previews: &Previews,
-        render_state: Option<&RenderState>,
-        width: f32,
-    ) {
+    fn model_section(&mut self, ui: &mut Ui, entry: &Entry, args: &InspectorArgs<'_>, width: f32) {
+        let (previews, render_state) = (&*args.previews, args.render_state);
         let height = (width * 0.9).clamp(200.0, 460.0);
         let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
         let model = match &self.detail {
@@ -523,6 +513,17 @@ fn image_properties(
 /// A detail that isn't known yet: its row is shown anyway, so the rows below stay where they are.
 fn pending() -> RichText {
     RichText::new("…").color(theme::TEXT_FAINT)
+}
+
+/// What the pane's buttons act on: the whole selection, in order, when the focus is part of it.
+fn targets(selection: &Selection, focus: u32) -> Vec<u32> {
+    if selection.contains(focus) {
+        let mut items: Vec<u32> = selection.items.iter().copied().collect();
+        items.sort_unstable();
+        items
+    } else {
+        vec![focus]
+    }
 }
 
 /// The asset's name, kind and path.
