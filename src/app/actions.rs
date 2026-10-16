@@ -113,10 +113,8 @@ impl BrowserApp {
         if pressed(Action::Search) {
             self.chrome.focus_search = true;
         }
-        for (action, mode) in
-            [Action::ModeAll, Action::ModeImages, Action::ModeSounds, Action::ModeModels].into_iter().zip(Mode::ALL)
-        {
-            if pressed(action) {
+        for mode in Mode::ALL {
+            if pressed(mode.shortcut()) {
                 self.set_mode(mode);
             }
         }

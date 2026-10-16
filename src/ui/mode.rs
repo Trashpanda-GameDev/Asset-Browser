@@ -10,6 +10,7 @@ use egui_phosphor::regular as icon;
 use crate::asset::{AssetKind, KindSet};
 use crate::library::SortBy;
 
+use super::keymap::Action;
 use super::theme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +51,26 @@ impl Mode {
         match self.kind() {
             None => "All",
             Some(kind) => kind.label(),
+        }
+    }
+
+    /// What it shows, for its button's tooltip.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::All => "Everything",
+            Self::Images => "Pictures and textures",
+            Self::Sounds => "Sounds, with a player",
+            Self::Models => "3D models, with a 3D view",
+        }
+    }
+
+    /// The shortcut that switches to it.
+    pub fn shortcut(self) -> Action {
+        match self {
+            Self::All => Action::ModeAll,
+            Self::Images => Action::ModeImages,
+            Self::Sounds => Action::ModeSounds,
+            Self::Models => Action::ModeModels,
         }
     }
 

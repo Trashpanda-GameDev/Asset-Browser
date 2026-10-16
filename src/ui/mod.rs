@@ -3,6 +3,7 @@
 pub mod browse;
 pub mod folders;
 pub mod format;
+pub mod header;
 pub mod image_view;
 pub mod inspector;
 pub mod keymap;
