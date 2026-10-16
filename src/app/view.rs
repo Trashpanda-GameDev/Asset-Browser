@@ -71,6 +71,13 @@ impl Browsing {
         self.scroll_to_focus = true;
     }
 
+    /// Orders the mode's assets: a group's own order when it has one, or the folders'.
+    pub(super) fn set_order(&mut self, sort: SortBy, descending: bool) {
+        let in_group = self.in_group_order();
+        self.mode_view_mut().set_order(in_group, sort, descending);
+        self.view_dirty = true;
+    }
+
     pub(super) fn in_group_order(&self) -> bool {
         self.group.is_some_and(|id| id != UNCATEGORIZED)
     }

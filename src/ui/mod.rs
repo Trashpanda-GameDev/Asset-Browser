@@ -14,6 +14,7 @@ pub mod settings;
 pub mod sheet_view;
 pub mod sound;
 pub mod theme;
+pub mod toolbar;
 pub mod updates;
 pub mod viewport;
 pub mod whats_new;
