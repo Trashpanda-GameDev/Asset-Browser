@@ -14,7 +14,7 @@ use ::gltf::accessor::{DataType, Dimensions};
 use ::gltf::mesh::Mode;
 use ::gltf::{Accessor, Document, Semantic};
 
-use super::builder::{Builder, Slot};
+use super::builder::{Builder, CUTOUT_ALPHA, Slot};
 use super::geometry::{self, IDENTITY, Mat4, NormalMatrix};
 use super::textures::{self, Alpha};
 use super::vector::normalize;
@@ -352,9 +352,9 @@ impl<'a> Reader<'a> {
         // glTF says how alpha is used, rather than leaving it to be guessed from the texture.
         let cutoff = match material.alpha_mode() {
             ::gltf::material::AlphaMode::Opaque => None,
-            ::gltf::material::AlphaMode::Mask => Some(material.alpha_cutoff().unwrap_or(0.5)),
+            ::gltf::material::AlphaMode::Mask => Some(material.alpha_cutoff().unwrap_or(CUTOUT_ALPHA)),
             // Blending isn't drawn; a cutout keeps foliage and hair cards readable.
-            ::gltf::material::AlphaMode::Blend => Some(0.5),
+            ::gltf::material::AlphaMode::Blend => Some(CUTOUT_ALPHA),
         };
         self.builder.set_alpha_cutoff(ours, cutoff);
         self.materials.insert(index, ours);

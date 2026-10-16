@@ -11,6 +11,13 @@ use super::{
     check_triangle_count,
 };
 
+/// Alpha below this is a hole in a cut-out material: glTF's default, and what a texture whose alpha
+/// looks like a mask gets.
+pub(super) const CUTOUT_ALPHA: f32 = 0.5;
+
+/// A colour whose channels are all above this is white: what exporters leave under a texture.
+const NEARLY_WHITE: f32 = 0.95;
+
 /// A material's base-colour texture, as a loader found it.
 #[derive(Clone, Copy)]
 pub(super) enum Slot {
@@ -92,9 +99,9 @@ impl Builder {
     pub(super) fn material(&mut self, name: String, color: [f32; 4], texture: Slot) -> u32 {
         let (texture, alpha_cutoff, color) = match texture {
             Slot::None => (None, None, color),
-            Slot::Found { index, cutout } => (Some(index), cutout.then_some(0.5), color),
+            Slot::Found { index, cutout } => (Some(index), cutout.then_some(CUTOUT_ALPHA), color),
             Slot::Missing => {
-                let white = color[..3].iter().all(|&c| c > 0.95);
+                let white = color[..3].iter().all(|&c| c > NEARLY_WHITE);
                 let [r, g, b, _] = Material::CLAY.color;
                 (None, None, if white { [r, g, b, color[3]] } else { color })
             }

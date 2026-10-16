@@ -104,23 +104,33 @@ fn read_from(mut r: impl Read) -> Result<Preview, String> {
 /// and the picture cropped to a square around what's drawn (zooming in at most 3×), so the object
 /// fills the thumbnail as the renders do. A picture with a background is left whole.
 pub fn crop_to_content(preview: &Preview) -> (u32, u32, Vec<u8>) {
+    /// Alpha below this is a clear pixel.
+    const CLEAR: u8 = 16;
+    /// The camera's frame: within this many pixels of the edges, a faint dark band (alpha below
+    /// `FRAME_ALPHA`) and a dashed line of pure black pixels.
+    const FRAME: usize = 3;
+    const FRAME_ALPHA: u8 = 160;
+    /// Room left around what's drawn, as a share of its size.
+    const MARGIN: f32 = 1.12;
+    /// The crop is at least this share of the picture's side: zooming in at most this much.
+    const MAX_ZOOM: usize = 3;
+
     let (w, h) = (preview.width as usize, preview.height as usize);
     let whole = (preview.width, preview.height, preview.rgba.clone());
     let alpha = |x: usize, y: usize| preview.rgba[(y * w + x) * 4 + 3];
-    let clear = preview.rgba.as_chunks::<4>().0.iter().filter(|p| p[3] < 16).count();
+    let clear = preview.rgba.as_chunks::<4>().0.iter().filter(|p| p[3] < CLEAR).count();
     if w < 8 || h < 8 || clear * 4 < w * h {
         return whole;
     }
-    // The frame, within 3 pixels of the edges, is a faint dark band and a dashed line of pure
-    // black pixels.
     let frame = |x: usize, y: usize| {
         let at = (y * w + x) * 4;
-        (x < 3 || y < 3 || x >= w - 3 || y >= h - 3) && (alpha(x, y) < 160 || preview.rgba[at..at + 3] == [0, 0, 0])
+        let edge = x < FRAME || y < FRAME || x >= w - FRAME || y >= h - FRAME;
+        edge && (alpha(x, y) < FRAME_ALPHA || preview.rgba[at..at + 3] == [0, 0, 0])
     };
     let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
     for y in 0..h {
         for x in 0..w {
-            if alpha(x, y) >= 16 && !frame(x, y) {
+            if alpha(x, y) >= CLEAR && !frame(x, y) {
                 (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
             }
         }
@@ -128,7 +138,7 @@ pub fn crop_to_content(preview: &Preview) -> (u32, u32, Vec<u8>) {
     if x0 > x1 {
         return whole;
     }
-    let side = (((x1 - x0 + 1).max(y1 - y0 + 1) as f32 * 1.12).ceil() as usize).max(w.min(h) / 3);
+    let side = (((x1 - x0 + 1).max(y1 - y0 + 1) as f32 * MARGIN).ceil() as usize).max(w.min(h) / MAX_ZOOM);
     let (cx, cy) = ((x0 + x1 + 1) as isize, (y0 + y1 + 1) as isize);
     let (left, top) = ((cx - side as isize) / 2, (cy - side as isize) / 2);
     let mut rgba = vec![0u8; side * side * 4];
