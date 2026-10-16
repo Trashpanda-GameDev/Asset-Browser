@@ -17,12 +17,45 @@ const MEMORY_LIMIT: usize = 1 << 30;
 /// vertex per corner all at once: 3 MB of them.
 const CHUNK_CORNERS: usize = 1 << 16;
 
-#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
 /// An FBX or OBJ file: ufbx reads it from memory, with its name to find an OBJ's .mtl beside it.
 pub(super) fn parse(bytes: &[u8], path: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
     let filename = path.to_string_lossy();
+    let scene = ufbx::load_memory(bytes, load_options(&filename, options)).map_err(|err| describe(&err))?;
+
+    let mesh_nodes: Vec<&ufbx::Node> =
+        scene.nodes.iter().map(|node| &**node).filter(|node| node.mesh.is_some()).collect();
+    let mut reader = Reader {
+        builder: Builder::default(),
+        materials: HashMap::new(),
+        textures: HashMap::new(),
+        model_path: path,
+        model_dir: super::folder(path),
+        max_texture: options.max_texture,
+        texture_files: scene.texture_files.len(),
+        has_uvs: mesh_nodes.iter().any(|node| node.mesh.as_ref().is_some_and(|mesh| mesh.vertex_uv.exists)),
+        companion: None,
+        companion_material: None,
+    };
+    let drawn = drawn_meshes(&mesh_nodes);
+    super::check_triangle_count(drawn.iter().map(|(_, mesh)| mesh.num_triangles as u64).sum())?;
+    let mut source_vertices = 0;
+    for (node, mesh) in drawn {
+        reader.add_mesh(node, mesh)?;
+        source_vertices += mesh.num_vertices as u64;
+    }
+    let mut builder = reader.builder;
+    builder.set_source_vertices(source_vertices);
+    for (parent, child) in bones(&scene) {
+        builder.add_bone(parent, child);
+    }
+    builder.set_animations(animations(&scene));
+    builder.finish(format_name(&scene.metadata))
+}
+
+/// How ufbx is asked to read a file: into our space, within a memory limit, with an OBJ's .mtl.
+fn load_options<'a>(filename: &'a str, options: &LoadOptions) -> ufbx::LoadOpts<'a> {
     let limit = || ufbx::AllocatorOpts { memory_limit: MEMORY_LIMIT, ..Default::default() };
-    let opts = ufbx::LoadOpts {
+    ufbx::LoadOpts {
         temp_allocator: limit(),
         result_allocator: limit(),
         target_axes: ufbx::CoordinateAxes::right_handed_y_up(),
@@ -41,58 +74,40 @@ pub(super) fn parse(bytes: &[u8], path: &Path, options: &LoadOptions) -> Result<
         // library's Mixamo files it's turned 90° from its skeleton and showed its side.
         evaluate_skinning: true,
         // Lets ufbx find the .mtl relative to the file, since it reads from memory.
-        filename: filename.as_ref().into(),
+        filename: filename.into(),
         ..Default::default()
-    };
-    let scene = ufbx::load_memory(bytes, opts).map_err(|err| describe(&err))?;
+    }
+}
 
-    let mesh_nodes: Vec<&ufbx::Node> =
-        scene.nodes.iter().map(|node| &**node).filter(|node| node.mesh.is_some()).collect();
-    let mut reader = Reader {
-        builder: Builder::default(),
-        materials: HashMap::new(),
-        textures: HashMap::new(),
-        model_path: path,
-        model_dir: super::folder(path),
-        max_texture: options.max_texture,
-        texture_files: scene.texture_files.len(),
-        has_uvs: mesh_nodes.iter().any(|node| node.mesh.as_ref().is_some_and(|mesh| mesh.vertex_uv.exists)),
-        companion: None,
-        companion_material: None,
-    };
-    // Hidden meshes are usually collision or helper shapes, unless everything is hidden.
+/// The meshes to draw: those with triangles that aren't hidden. Hidden meshes are usually
+/// collision or helper shapes, unless everything is hidden.
+fn drawn_meshes<'a>(mesh_nodes: &[&'a ufbx::Node]) -> Vec<(&'a ufbx::Node, &'a ufbx::Mesh)> {
     let any_visible = mesh_nodes.iter().any(|node| node.visible);
-    let drawn: Vec<(&ufbx::Node, &ufbx::Mesh)> = mesh_nodes
+    mesh_nodes
         .iter()
         .filter_map(|node| Some((*node, &**node.mesh.as_ref()?)))
         .filter(|(node, mesh)| (node.visible || !any_visible) && mesh.num_triangles > 0)
-        .collect();
-    super::check_triangle_count(drawn.iter().map(|(_, mesh)| mesh.num_triangles as u64).sum())?;
-    let mut source_vertices = 0;
-    for (node, mesh) in drawn {
-        reader.add_mesh(node, mesh)?;
-        source_vertices += mesh.num_vertices as u64;
-    }
-    let mut builder = reader.builder;
-    builder.set_source_vertices(source_vertices);
-    // The bones, drawn when the file is only a skeleton and its animation, such as a Mixamo
-    // download without skin.
-    for node in &scene.nodes {
-        let Some(parent) = node.parent.as_ref() else { continue };
-        if node.bone.is_some() && parent.bone.is_some() {
-            builder.add_bone(translation(&parent.node_to_world), translation(&node.node_to_world));
-        }
-    }
-    builder.set_animations(animations(&scene));
+        .collect()
+}
 
-    let meta = &scene.metadata;
-    let format = if meta.file_format == ufbx::FileFormat::Obj {
+/// Every bone joined to its parent bone, as their positions: drawn when the file is only a
+/// skeleton and its animation, such as a Mixamo download without skin.
+fn bones(scene: &ufbx::Scene) -> impl Iterator<Item = ([f32; 3], [f32; 3])> + '_ {
+    scene.nodes.iter().filter_map(|node| {
+        let parent = node.parent.as_ref()?;
+        (node.bone.is_some() && parent.bone.is_some())
+            .then(|| (translation(&parent.node_to_world), translation(&node.node_to_world)))
+    })
+}
+
+/// "OBJ", or the FBX version and encoding: "FBX 7.4 binary".
+fn format_name(meta: &ufbx::Metadata) -> String {
+    if meta.file_format == ufbx::FileFormat::Obj {
         "OBJ".to_owned()
     } else {
         let encoding = if meta.ascii { "ASCII" } else { "binary" };
         format!("FBX {}.{} {encoding}", meta.version / 1000, meta.version % 1000 / 100)
-    };
-    builder.finish(format)
+    }
 }
 
 /// Each animation that moves something: its name and length in seconds.
