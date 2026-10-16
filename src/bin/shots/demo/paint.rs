@@ -183,8 +183,7 @@ pub(super) fn polygon(points: Vec<(f32, f32)>) -> impl Fn(f32, f32) -> bool {
 }
 
 /// A star's corners, `count` points, the first straight up (turned by `turn`).
-#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
-pub(super) fn star_points(cx: f32, cy: f32, outer: f32, inner: f32, count: usize, turn: f32) -> Vec<(f32, f32)> {
+pub(super) fn star_points((cx, cy): (f32, f32), outer: f32, inner: f32, count: usize, turn: f32) -> Vec<(f32, f32)> {
     (0..count * 2)
         .map(|i| {
             let r = if i % 2 == 0 { outer } else { inner };

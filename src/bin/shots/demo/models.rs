@@ -27,8 +27,7 @@ impl Mesh {
     }
 
     /// A triangle, turned to face away from `inside`.
-    #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
-    fn tri(&mut self, material: usize, a: Vec3, b: Vec3, c: Vec3, inside: Vec3) {
+    fn tri(&mut self, material: usize, [a, b, c]: [Vec3; 3], inside: Vec3) {
         let centre = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, (a[2] + b[2] + c[2]) / 3.0];
         let (b, c) = if dot(cross(sub(b, a), sub(c, a)), sub(centre, inside)) < 0.0 { (c, b) } else { (b, c) };
         self.corners.extend([a, b, c]);
@@ -36,8 +35,8 @@ impl Mesh {
     }
 
     fn quad(&mut self, material: usize, [a, b, c, d]: [Vec3; 4], inside: Vec3) {
-        self.tri(material, a, b, c, inside);
-        self.tri(material, a, c, d, inside);
+        self.tri(material, [a, b, c], inside);
+        self.tri(material, [a, c, d], inside);
     }
 
     fn cuboid(&mut self, material: usize, min: Vec3, max: Vec3) {
@@ -54,23 +53,23 @@ impl Mesh {
         }
     }
 
-    /// A shape turned around an upright axis through `at`: `profile` is (radius, height) from the
-    /// bottom up, closed by flat caps where it doesn't end on the axis.
-    #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
-    fn lathe(&mut self, material: usize, at: Vec3, profile: &[(f32, f32)], segments: usize, caps: Option<usize>) {
+    /// A shape turned around the upright axis: `profile` is (radius, height) from the bottom up,
+    /// closed by flat caps where it doesn't end on the axis. `place` moves it after.
+    fn lathe(&mut self, material: usize, profile: &[(f32, f32)], segments: usize, caps: Option<usize>) {
         let point = |(r, h): (f32, f32), i: usize| {
             let a = i as f32 / segments as f32 * TAU;
-            [at[0] + r * a.cos(), at[1] + h, at[2] + r * a.sin()]
+            // + 0.0 turns -0.0 into 0.0, which the OBJ would write as -0.0000.
+            [r * a.cos() + 0.0, h, r * a.sin() + 0.0]
         };
         for pair in profile.windows(2) {
-            let inside = [at[0], at[1] + (pair[0].1 + pair[1].1) / 2.0, at[2]];
+            let inside = [0.0, (pair[0].1 + pair[1].1) / 2.0, 0.0];
             for i in 0..segments {
                 let (a, b) = (point(pair[0], i), point(pair[0], i + 1));
                 let (c, d) = (point(pair[1], i + 1), point(pair[1], i));
                 if pair[0].0 == 0.0 {
-                    self.tri(material, a, c, d, inside);
+                    self.tri(material, [a, c, d], inside);
                 } else if pair[1].0 == 0.0 {
-                    self.tri(material, a, b, c, inside);
+                    self.tri(material, [a, b, c], inside);
                 } else {
                     self.quad(material, [a, b, c, d], inside);
                 }
@@ -80,10 +79,10 @@ impl Mesh {
         let cap = caps.unwrap_or(material);
         for (end, inward) in [(first, 0.01), (last, -0.01)] {
             if end.0 > 0.0 {
-                let centre = [at[0], at[1] + end.1, at[2]];
-                let inside = [at[0], at[1] + end.1 + inward, at[2]];
+                let centre = [0.0, end.1, 0.0];
+                let inside = [0.0, end.1 + inward, 0.0];
                 for i in 0..segments {
-                    self.tri(cap, centre, point(end, i), point(end, i + 1), inside);
+                    self.tri(cap, [centre, point(end, i), point(end, i + 1)], inside);
                 }
             }
         }
@@ -128,10 +127,31 @@ impl Mesh {
     }
 }
 
-#[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
+/// Builds a model.
+type Build = fn() -> Mesh;
+
+/// Each model's file name, and how it's built.
+const MODELS: [(&str, Build); 8] = [
+    ("crate", crate_box),
+    ("barrel", barrel),
+    ("rock", rock),
+    ("crystal", crystal),
+    ("tree", tree),
+    ("mushroom", mushroom),
+    ("house", house),
+    ("donut", donut),
+];
+
 pub(super) fn models(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir)?;
+    for (name, build) in MODELS {
+        build().write(dir, name)?;
+    }
+    Ok(())
+}
 
+/// A wooden crate with a beam along each edge.
+fn crate_box() -> Mesh {
     let mut crate_box = Mesh::default();
     let (wood, frame) = (crate_box.material("wood", 0xc08a4e), crate_box.material("frame", 0x7a4f2a));
     crate_box.cuboid(wood, [-0.5, 0.0, -0.5], [0.5, 1.0, 0.5]);
@@ -148,17 +168,23 @@ pub(super) fn models(dir: &Path) -> io::Result<()> {
             crate_box.cuboid(frame, min, max);
         }
     }
-    crate_box.write(dir, "crate")?;
+    crate_box
+}
 
+/// A barrel: staves, two hoops and a lid.
+fn barrel() -> Mesh {
     let mut barrel = Mesh::default();
     let (staves, hoops, top) =
         (barrel.material("staves", 0xa86b38), barrel.material("hoops", 0x4b4f58), barrel.material("lid", 0x8a5a2f));
-    barrel.lathe(staves, [0.0; 3], &[(0.36, 0.0), (0.42, 0.2), (0.45, 0.5), (0.42, 0.8), (0.36, 1.0)], 20, Some(top));
+    barrel.lathe(staves, &[(0.36, 0.0), (0.42, 0.2), (0.45, 0.5), (0.42, 0.8), (0.36, 1.0)], 20, Some(top));
     for h in [0.16, 0.8] {
-        barrel.lathe(hoops, [0.0; 3], &[(0.432, h), (0.432, h + 0.06)], 20, None);
+        barrel.lathe(hoops, &[(0.432, h), (0.432, h + 0.06)], 20, None);
     }
-    barrel.write(dir, "barrel")?;
+    barrel
+}
 
+/// A rock: a bumpy sphere, flat underneath.
+fn rock() -> Mesh {
     let mut rock = Mesh::default();
     let stone = rock.material("stone", 0x8c8f96);
     icosphere(&mut rock, stone, 2, |p| {
@@ -167,16 +193,18 @@ pub(super) fn models(dir: &Path) -> io::Result<()> {
         let r = 0.55 * (1.0 + bump);
         [p[0] * r * 1.25, (p[1] * r * 0.8).max(-0.18) + 0.18, p[2] * r]
     });
-    rock.write(dir, "rock")?;
+    rock
+}
 
+/// A cluster of crystals on a base.
+fn crystal() -> Mesh {
     let mut crystal = Mesh::default();
     let (glow, deep) = (crystal.material("crystal", 0x7fe3ff), crystal.material("crystal_dark", 0x8a5cff));
-    crystal.lathe(glow, [0.0; 3], &[(0.0, 0.0), (0.2, 0.22), (0.2, 1.05), (0.0, 1.4)], 6, None);
+    crystal.lathe(glow, &[(0.0, 0.0), (0.2, 0.22), (0.2, 1.05), (0.0, 1.4)], 6, None);
     for (turn, tip, scale, material) in [(0.4, 0.5, 0.6, deep), (2.6, 0.45, 0.5, glow), (4.4, 0.4, 0.42, deep)] {
         let from = crystal.faces.len();
         crystal.lathe(
             material,
-            [0.0; 3],
             &[(0.0, 0.0), (0.2 * scale, 0.22 * scale), (0.2 * scale, 1.05 * scale), (0.0, 1.4 * scale)],
             6,
             None,
@@ -185,30 +213,33 @@ pub(super) fn models(dir: &Path) -> io::Result<()> {
         let (sin, cos) = f32::sin_cos(turn);
         crystal.place(from, turn, tip, [-0.17 * cos, 0.02, -0.17 * sin]);
     }
-    crystal.lathe(deep, [0.0; 3], &[(0.42, 0.0), (0.3, 0.08)], 6, Some(deep));
-    crystal.write(dir, "crystal")?;
+    crystal.lathe(deep, &[(0.42, 0.0), (0.3, 0.08)], 6, Some(deep));
+    crystal
+}
 
+/// A fir tree: a trunk and three cones of leaves.
+fn tree() -> Mesh {
     let mut tree = Mesh::default();
     let (bark, leaves) = (tree.material("bark", 0x6e4a2c), tree.material("leaves", 0x3f9a4a));
-    tree.lathe(bark, [0.0; 3], &[(0.11, 0.0), (0.09, 0.55)], 8, None);
+    tree.lathe(bark, &[(0.11, 0.0), (0.09, 0.55)], 8, None);
     for (r, base, top) in [(0.62, 0.4, 1.15), (0.5, 0.8, 1.45), (0.36, 1.15, 1.75)] {
-        tree.lathe(leaves, [0.0; 3], &[(r, base), (0.0, top)], 8, None);
+        tree.lathe(leaves, &[(r, base), (0.0, top)], 8, None);
     }
-    tree.write(dir, "tree")?;
+    tree
+}
 
+/// A mushroom: a stem, and a cap with gills under it.
+fn mushroom() -> Mesh {
     let mut mushroom = Mesh::default();
     let (stem, cap, gills) =
         (mushroom.material("stem", 0xf3e6cf), mushroom.material("cap", 0xd9342b), mushroom.material("gills", 0xe9d3b0));
-    mushroom.lathe(stem, [0.0; 3], &[(0.17, 0.0), (0.15, 0.4), (0.13, 0.58)], 14, None);
-    mushroom.lathe(
-        cap,
-        [0.0; 3],
-        &[(0.56, 0.52), (0.54, 0.62), (0.46, 0.74), (0.32, 0.84), (0.0, 0.9)],
-        18,
-        Some(gills),
-    );
-    mushroom.write(dir, "mushroom")?;
+    mushroom.lathe(stem, &[(0.17, 0.0), (0.15, 0.4), (0.13, 0.58)], 14, None);
+    mushroom.lathe(cap, &[(0.56, 0.52), (0.54, 0.62), (0.46, 0.74), (0.32, 0.84), (0.0, 0.9)], 18, Some(gills));
+    mushroom
+}
 
+/// A little house with a door, windows, a chimney and a roof.
+fn house() -> Mesh {
     let mut house = Mesh::default();
     let (walls, roof, door, glass) = (
         house.material("walls", 0xeadcc2),
@@ -229,10 +260,13 @@ pub(super) fn models(dir: &Path) -> io::Result<()> {
             [[-0.7, 0.75, side * 0.58], [0.7, 0.75, side * 0.58], [0.7, 1.3, 0.0], [-0.7, 1.3, 0.0]],
             ridge_inside,
         );
-        house.tri(walls, [side * 0.6, 0.8, -0.45], [side * 0.6, 0.8, 0.45], [side * 0.6, 1.24, 0.0], [0.0, 1.0, 0.0]);
+        house.tri(walls, [[side * 0.6, 0.8, -0.45], [side * 0.6, 0.8, 0.45], [side * 0.6, 1.24, 0.0]], [0.0, 1.0, 0.0]);
     }
-    house.write(dir, "house")?;
+    house
+}
 
+/// A donut, iced on top.
+fn donut() -> Mesh {
     let mut donut = Mesh::default();
     let (dough, icing) = (donut.material("dough", 0xd99a55), donut.material("icing", 0xff8fc1));
     let (big, small, around, across) = (0.42, 0.19, 32, 16);
@@ -250,7 +284,7 @@ pub(super) fn models(dir: &Path) -> io::Result<()> {
             donut.quad(material, [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)], inside);
         }
     }
-    donut.write(dir, "donut")
+    donut
 }
 
 /// A ball of triangles, `subdivisions` times finer than an icosahedron, its points moved by `shape`.
@@ -307,6 +341,6 @@ fn icosphere(mesh: &mut Mesh, material: usize, subdivisions: usize, shape: impl 
     }
     let centre = shape([0.0, 0.0, 0.0]);
     for [a, b, c] in triangles {
-        mesh.tri(material, shape(a), shape(b), shape(c), centre);
+        mesh.tri(material, [shape(a), shape(b), shape(c)], centre);
     }
 }

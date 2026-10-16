@@ -59,7 +59,7 @@ pub(super) fn gem(color: Rgba) -> Canvas {
     c.fill(polygon(vec![(19.0, 52.0), (64.0, 52.0), (64.0, 108.0)]), solid(lighter(color, 0.12)));
     c.fill(polygon(vec![(64.0, 52.0), (109.0, 52.0), (64.0, 108.0)]), solid(darker(color, 0.35)));
     c.fill(polygon(vec![(41.0, 52.0), (87.0, 52.0), (64.0, 108.0)]), solid(color));
-    c.fill(polygon(star_points(47.0, 39.0, 10.0, 2.5, 4, 0.0)), solid(alpha(WHITE, 0.9)));
+    c.fill(polygon(star_points((47.0, 39.0), 10.0, 2.5, 4, 0.0)), solid(alpha(WHITE, 0.9)));
     c
 }
 
@@ -69,7 +69,7 @@ fn coin() -> Canvas {
     c.fill(circle(64.0, 64.0, 46.0), radial(46.0, 44.0, 76.0, hex(0xffe58a), hex(0xd18f16)));
     c.fill(ring(64.0, 64.0, 37.0, 33.0), solid(hex(0xb47c16)));
     c.fill(
-        polygon(star_points(64.0, 66.0, 24.0, 10.0, 5, 0.0)),
+        polygon(star_points((64.0, 66.0), 24.0, 10.0, 5, 0.0)),
         radial(56.0, 54.0, 34.0, hex(0xfff3c4), hex(0xe2a52a)),
     );
     let shine = ring(64.0, 64.0, 44.0, 40.0);
@@ -170,8 +170,8 @@ fn bomb() -> Canvas {
     );
     c.fill(capsule(90.0, 32.0, 100.0, 21.0, 3.0), solid(hex(0xc8a46b)));
     c.fill(capsule(100.0, 21.0, 108.0, 17.0, 3.0), solid(hex(0xc8a46b)));
-    c.fill(polygon(star_points(110.0, 16.0, 13.0, 5.0, 8, 0.2)), solid(hex(0xffa024)));
-    c.fill(polygon(star_points(110.0, 16.0, 7.0, 3.0, 8, 0.0)), solid(hex(0xfff3a0)));
+    c.fill(polygon(star_points((110.0, 16.0), 13.0, 5.0, 8, 0.2)), solid(hex(0xffa024)));
+    c.fill(polygon(star_points((110.0, 16.0), 7.0, 3.0, 8, 0.0)), solid(hex(0xfff3a0)));
     c.fill(ellipse(44.0, 58.0, 10.0, 7.0), solid(alpha(WHITE, 0.45)));
     c
 }
@@ -194,9 +194,9 @@ fn mushroom() -> Canvas {
 
 fn star() -> Canvas {
     let mut c = Canvas::new(128, 128);
-    c.fill(polygon(star_points(64.0, 68.0, 58.0, 26.0, 5, 0.0)), solid(hex(0x7a4a00)));
+    c.fill(polygon(star_points((64.0, 68.0), 58.0, 26.0, 5, 0.0)), solid(hex(0x7a4a00)));
     c.fill(
-        polygon(star_points(64.0, 68.0, 52.0, 23.0, 5, 0.0)),
+        polygon(star_points((64.0, 68.0), 52.0, 23.0, 5, 0.0)),
         radial(52.0, 46.0, 72.0, hex(0xfff2a8), hex(0xf0a21c)),
     );
     c.fill(ellipse(52.0, 48.0, 7.0, 5.0), solid(alpha(WHITE, 0.7)));
