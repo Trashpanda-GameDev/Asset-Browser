@@ -16,6 +16,7 @@
 
 mod clip;
 mod demo;
+mod looping_gif;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

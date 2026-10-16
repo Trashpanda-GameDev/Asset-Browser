@@ -5,6 +5,8 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use crate::looping_gif::{LoopingGif, SPEED};
+
 use super::paint::{BLACK, CLEAR, Canvas, WHITE, alpha, circle, darker, ellipse, hex, lighter, mix, radial, solid};
 
 pub(super) fn characters(dir: &Path) -> io::Result<()> {
@@ -117,9 +119,7 @@ fn portal(phase: f32) -> Canvas {
 
 /// An animated GIF from `frames`, `delay` hundredths of a second each, looping.
 fn gif(path: &Path, w: u16, h: u16, delay: u16, frames: Vec<Canvas>) -> io::Result<()> {
-    let mut file = fs::File::create(path)?;
-    let mut encoder = gif::Encoder::new(&mut file, w, h, &[]).map_err(io::Error::other)?;
-    encoder.set_repeat(gif::Repeat::Infinite).map_err(io::Error::other)?;
+    let mut out = LoopingGif::create(path, w, h)?;
     for canvas in frames {
         // GIFs have no partial transparency: each pixel is there or not.
         let mut rgba: Vec<u8> = canvas
@@ -129,10 +129,10 @@ fn gif(path: &Path, w: u16, h: u16, delay: u16, frames: Vec<Canvas>) -> io::Resu
             .iter()
             .flat_map(|&[r, g, b, a]| if a >= 128 { [r, g, b, 255] } else { [0; 4] })
             .collect();
-        let mut frame = gif::Frame::from_rgba_speed(w, h, &mut rgba, 10);
+        let mut frame = gif::Frame::from_rgba_speed(w, h, &mut rgba, SPEED);
         frame.delay = delay;
         frame.dispose = gif::DisposalMethod::Background;
-        encoder.write_frame(&frame).map_err(io::Error::other)?;
+        out.write(&frame)?;
     }
     Ok(())
 }

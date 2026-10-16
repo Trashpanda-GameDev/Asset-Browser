@@ -2,14 +2,15 @@
 //! an area and made smaller. Each frame after the first holds only the box that changed since the
 //! one before (a GIF frame can cover part of the picture), so a mostly still window stays small.
 
-use std::fs::File;
-use std::io::{self, BufWriter};
+use std::io;
 use std::path::Path;
 use std::thread::JoinHandle;
 use std::time::Instant;
 
 use eframe::egui;
 use image::{RgbImage, imageops};
+
+use crate::looping_gif::{LoopingGif, SPEED};
 
 /// What to record.
 #[derive(Clone, Copy)]
@@ -102,9 +103,7 @@ fn write_gif(path: &Path, clip: Clip, frames: Vec<(f32, RgbImage)>) -> io::Resul
             small.push((at, frame));
         }
     }
-    let file = BufWriter::new(File::create(path)?);
-    let mut encoder = gif::Encoder::new(file, w as u16, h as u16, &[]).map_err(io::Error::other)?;
-    encoder.set_repeat(gif::Repeat::Infinite).map_err(io::Error::other)?;
+    let mut out = LoopingGif::create(path, w as u16, h as u16)?;
     // In hundredths of a second, rounded from the start, so the whole loop keeps its length.
     let hundredths = |seconds: f32| (seconds * 100.0).round() as u32;
     for (i, (at, frame)) in small.iter().enumerate() {
@@ -114,12 +113,12 @@ fn write_gif(path: &Path, clip: Clip, frames: Vec<(f32, RgbImage)>) -> io::Resul
             _ => changed(&small[i - 1].1, frame),
         };
         let part = imageops::crop_imm(frame, x0, y0, x1 - x0, y1 - y0).to_image();
-        let mut gif_frame = gif::Frame::from_rgb_speed((x1 - x0) as u16, (y1 - y0) as u16, part.as_raw(), 10);
+        let mut gif_frame = gif::Frame::from_rgb_speed((x1 - x0) as u16, (y1 - y0) as u16, part.as_raw(), SPEED);
         gif_frame.left = x0 as u16;
         gif_frame.top = y0 as u16;
         gif_frame.delay = (hundredths(end).saturating_sub(hundredths(*at))).max(2) as u16;
         gif_frame.dispose = gif::DisposalMethod::Keep;
-        encoder.write_frame(&gif_frame).map_err(io::Error::other)?;
+        out.write(&gif_frame)?;
     }
     Ok(())
 }
