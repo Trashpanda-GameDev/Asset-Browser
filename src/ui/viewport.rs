@@ -55,6 +55,47 @@ impl Default for Orbit {
     }
 }
 
+impl Orbit {
+    /// Dragging turns the model, right- or middle-dragging pans, scrolling zooms, a double-click
+    /// goes back to the start. Whether the user is moving the view.
+    fn take_input(&mut self, ui: &Ui, response: &egui::Response, rect: Rect, radius: f32) -> bool {
+        let mut interacting = false;
+        if response.dragged_by(egui::PointerButton::Primary) {
+            let delta = response.drag_delta();
+            self.yaw -= delta.x * 0.01;
+            self.pitch = (self.pitch + delta.y * 0.01).clamp(-1.55, 1.55);
+            interacting = true;
+        }
+        if response.dragged_by(egui::PointerButton::Secondary) || response.dragged_by(egui::PointerButton::Middle) {
+            let delta = response.drag_delta();
+            let (right, up, _) = camera_axes(self);
+            let distance = fit_distance(radius, rect.aspect_ratio()) * self.zoom;
+            let per_point = 2.0 * distance * (shading::FOV_Y / 2.0).tan() / rect.height().max(1.0);
+            for axis in 0..3 {
+                self.pan[axis] -= (right[axis] * delta.x - up[axis] * delta.y) * per_point;
+            }
+            interacting = true;
+        }
+        if response.hovered() {
+            let scroll = widgets::take_scroll(ui);
+            if scroll != 0.0 {
+                self.zoom = (self.zoom * (-scroll * 0.0015).exp()).clamp(0.05, 20.0);
+            }
+        }
+        if response.double_clicked() {
+            *self = Self::default();
+        }
+        interacting
+    }
+}
+
+/// A model to show, by the key it's cached under: a new key is a new model, viewed afresh.
+#[derive(Clone, Copy)]
+pub struct ShownModel<'a> {
+    pub key: i64,
+    pub model: &'a Model,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct Globals {
@@ -110,93 +151,40 @@ struct Target {
 }
 
 impl Viewport {
-    /// Draws `model` (with cache key `key`) in `rect`. Returns false if there's no GPU to draw with.
-    #[expect(
-        clippy::too_many_arguments,
-        clippy::too_many_lines,
-        reason = "refactor: take fewer, grouped arguments; split into named steps"
-    )]
-    pub fn show(&mut self, ui: &mut Ui, rect: Rect, render_state: &RenderState, key: i64, model: &Model) -> bool {
+    /// Draws the model in `rect`. Returns false if there's no GPU to draw with.
+    pub fn show(&mut self, ui: &mut Ui, rect: Rect, render_state: &RenderState, shown: ShownModel<'_>) -> bool {
         let gpu = self.gpu.get_or_insert_with(|| Gpu::new(render_state));
-        if self.scene.as_ref().is_none_or(|scene| scene.key != key) {
-            self.scene = Some(Scene::upload(gpu, key, model));
+        if self.scene.as_ref().is_none_or(|scene| scene.key != shown.key) {
+            self.scene = Some(Scene::upload(gpu, shown.key, shown.model));
             self.orbit = Orbit::default();
             self.drawn = None;
         }
         let Some(scene) = self.scene.as_mut() else { return false };
-
-        // Orbit, pan, zoom.
         let response = ui.interact(rect, ui.id().with("viewport"), Sense::click_and_drag());
-        let mut interacting = false;
-        if response.dragged_by(egui::PointerButton::Primary) {
-            let delta = response.drag_delta();
-            self.orbit.yaw -= delta.x * 0.01;
-            self.orbit.pitch = (self.orbit.pitch + delta.y * 0.01).clamp(-1.55, 1.55);
-            interacting = true;
-        }
-        if response.dragged_by(egui::PointerButton::Secondary) || response.dragged_by(egui::PointerButton::Middle) {
-            let delta = response.drag_delta();
-            let (right, up, _) = camera_axes(&self.orbit);
-            let distance = fit_distance(scene.radius, rect.aspect_ratio()) * self.orbit.zoom;
-            let per_point = 2.0 * distance * (shading::FOV_Y / 2.0).tan() / rect.height().max(1.0);
-            for axis in 0..3 {
-                self.orbit.pan[axis] -= (right[axis] * delta.x - up[axis] * delta.y) * per_point;
-            }
-            interacting = true;
-        }
-        if response.hovered() {
-            let scroll = widgets::take_scroll(ui);
-            if scroll != 0.0 {
-                self.orbit.zoom = (self.orbit.zoom * (-scroll * 0.0015).exp()).clamp(0.05, 20.0);
-            }
-        }
-        if response.double_clicked() {
-            self.orbit = Orbit::default();
-        }
+        let interacting = self.orbit.take_input(ui, &response, rect, scene.radius);
         if self.auto_rotate && !interacting {
             let dt = ui.input(|input| input.stable_dt).min(0.1);
             self.orbit.yaw += AUTO_ROTATE_SPEED * dt;
             ui.ctx().request_repaint();
         }
-
-        // Render at the screen's pixel density.
-        let pixels_per_point = ui.ctx().pixels_per_point();
-        let max_side = gpu.device.limits().max_texture_dimension_2d.min(4096);
-        let size = [
-            ((rect.width() * pixels_per_point).round() as u32).clamp(1, max_side),
-            ((rect.height() * pixels_per_point).round() as u32).clamp(1, max_side),
-        ];
+        let size = render_size(ui, rect, gpu);
         if self.target.as_ref().is_none_or(|target| target.size != size) {
             let old = self.target.take();
             self.target = Some(Target::new(gpu, size, old.map(|target| target.id)));
             self.drawn = None;
         }
         let Some(target) = &self.target else { return false };
-
         let globals = globals(&self.orbit, scene, size);
         if self.drawn != Some(globals) || self.drawn_wireframe != self.wireframe {
             if self.wireframe && scene.edges.is_none() {
-                scene.edges = edges(gpu, model);
+                scene.edges = edges(gpu, shown.model);
             }
             gpu.queue.write_buffer(&gpu.globals, 0, bytemuck::bytes_of(&globals));
             gpu.render(scene, target, self.wireframe);
             self.drawn = Some(globals);
             self.drawn_wireframe = self.wireframe;
         }
-
-        let painter = ui.painter_at(rect);
-        widgets::vertical_gradient(&painter, rect, theme::VIEWPORT_TOP, theme::WELL);
-        painter.image(target.id, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-        painter.rect_stroke(rect, theme::CARD_RADIUS, Stroke::new(1.0, theme::BORDER), StrokeKind::Inside);
-        if response.hovered() && !interacting {
-            painter.text(
-                rect.left_bottom() + vec2(10.0, -8.0),
-                Align2::LEFT_BOTTOM,
-                "drag to orbit · right-drag to pan · scroll to zoom",
-                FontId::proportional(theme::size::FINE),
-                theme::TEXT_FAINT,
-            );
-        }
+        paint(ui, rect, target.id, &response, interacting);
         true
     }
 
@@ -231,17 +219,9 @@ impl Drop for Viewport {
 }
 
 impl Gpu {
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn new(state: &RenderState) -> Self {
         let device = state.device.clone();
-        let samples = [4, 2]
-            .into_iter()
-            .find(|&count| {
-                state.adapter.get_texture_format_features(COLOR_FORMAT).flags.sample_count_supported(count)
-                    && state.adapter.get_texture_format_features(DEPTH_FORMAT).flags.sample_count_supported(count)
-            })
-            .unwrap_or(1);
-
+        let samples = sample_count(state);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("model"),
             source: wgpu::ShaderSource::Wgsl(shader_source().into()),
@@ -250,28 +230,7 @@ impl Gpu {
             label: Some("model globals"),
             entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT)],
         });
-        let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("model material"),
-            entries: &[
-                uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+        let material_layout = material_layout(&device);
         let shaded_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("model shaded"),
             bind_group_layouts: &[Some(&globals_layout), Some(&material_layout)],
@@ -282,92 +241,12 @@ impl Gpu {
             bind_group_layouts: &[Some(&globals_layout)],
             immediate_size: 0,
         });
-
-        let full_vertex = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4],
-        };
-        let position_only = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-        };
-        let depth = |write: bool, bias: wgpu::DepthBiasState| wgpu::DepthStencilState {
-            format: DEPTH_FORMAT,
-            depth_write_enabled: Some(write),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
-            stencil: wgpu::StencilState::default(),
-            bias,
-        };
-        let multisample = wgpu::MultisampleState { count: samples, ..Default::default() };
-        // Models are often open or one-sided, so both sides are drawn and lit, in two passes: the
-        // back faces go a hair farther away, so where a model has a front and a back face in the
-        // same place (a petal's two coloured sides) the front one shows instead of both fighting.
-        // The thumbnails do the same (`model::raster`).
-        let shaded = |label: &str, cull: wgpu::Face, bias: wgpu::DepthBiasState| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&shaded_layout),
-                vertex: wgpu::VertexState {
-                    module: &module,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[Some(full_vertex.clone())],
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: Some(cull),
-                    ..Default::default()
-                },
-                depth_stencil: Some(depth(true, bias)),
-                multisample,
-                fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: COLOR_FORMAT,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let front_faces = shaded("model front faces", wgpu::Face::Back, wgpu::DepthBiasState::default());
-        let back_faces = shaded(
-            "model back faces",
-            wgpu::Face::Front,
-            wgpu::DepthBiasState { constant: 16, slope_scale: 1.0, clamp: 0.0 },
-        );
-        let lines = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("model lines"),
-            layout: Some(&lines_layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs_line"),
-                compilation_options: Default::default(),
-                buffers: &[Some(position_only)],
-            },
-            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::LineList, ..Default::default() },
-            depth_stencil: Some(depth(false, wgpu::DepthBiasState::default())),
-            multisample,
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs_line"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: COLOR_FORMAT,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-
+        let parts = PipelineParts { device: &device, module: &module, samples };
+        let front_faces =
+            parts.shaded(&shaded_layout, "model front faces", wgpu::Face::Back, wgpu::DepthBiasState::default());
+        let back_bias = wgpu::DepthBiasState { constant: 16, slope_scale: 1.0, clamp: 0.0 };
+        let back_faces = parts.shaded(&shaded_layout, "model back faces", wgpu::Face::Front, back_bias);
+        let lines = parts.lines(&lines_layout);
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("model globals"),
             size: std::mem::size_of::<Globals>() as u64,
@@ -379,21 +258,8 @@ impl Gpu {
             layout: &globals_layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() }],
         });
-        let sampler = |magnify: wgpu::FilterMode| {
-            device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("model texture"),
-                address_mode_u: wgpu::AddressMode::Repeat,
-                address_mode_v: wgpu::AddressMode::Repeat,
-                mag_filter: magnify,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::MipmapFilterMode::Linear,
-                ..Default::default()
-            })
-        };
-        let smooth = sampler(wgpu::FilterMode::Linear);
-        let crisp = sampler(wgpu::FilterMode::Nearest);
-        let white = upload_texture(&device, &state.queue, "white", 1, 1, &[255; 4]);
-
+        let (smooth, crisp) = (sampler(&device, wgpu::FilterMode::Linear), sampler(&device, wgpu::FilterMode::Nearest));
+        let white = upload_texture(&device, &state.queue, "white", [1, 1], &[255; 4]);
         Self {
             device,
             queue: state.queue.clone(),
@@ -463,99 +329,101 @@ impl Gpu {
 }
 
 impl Scene {
-    #[expect(clippy::too_many_lines, reason = "refactor: split into named steps")]
     fn upload(gpu: &Gpu, key: i64, model: &Model) -> Self {
-        let device = &gpu.device;
-        let center = model.bounds.center();
-        let radius = model.bounds.radius().max(1e-4);
-
         let has_triangles = !model.indices.is_empty() && !model.vertices.is_empty();
-        let vertices = has_triangles.then(|| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("model vertices"),
-                contents: bytemuck::cast_slice(&model.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            })
-        });
-        let indices = has_triangles.then(|| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("model indices"),
-                contents: bytemuck::cast_slice(&model.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            })
-        });
-
-        let textures: Vec<(wgpu::TextureView, bool)> = model
-            .textures
-            .iter()
-            .map(|texture| {
-                let view =
-                    upload_texture(device, &gpu.queue, &texture.name, texture.width, texture.height, &texture.rgba);
-                (view, texture.width.max(texture.height) <= PIXEL_ART_MAX)
-            })
-            .collect();
-        let default_material = crate::model::Material {
-            name: String::new(),
-            color: [shading::DEFAULT_ALBEDO[0], shading::DEFAULT_ALBEDO[1], shading::DEFAULT_ALBEDO[2], 1.0],
-            texture: None,
-            alpha_cutoff: None,
+        let buffer = |label: &str, contents: &[u8], usage: wgpu::BufferUsages| {
+            gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents, usage })
         };
-        let bind_material = |material: &crate::model::Material| {
-            let texture = material.texture.and_then(|index| textures.get(index as usize));
-            let cutoff = material.alpha_cutoff.unwrap_or(-1.0);
-            let uniform = MaterialUniform { color: material.color, flags: [cutoff, 0.0, 0.0, 0.0] };
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("model material"),
-                contents: bytemuck::bytes_of(&uniform),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-            let (view, sampler) = match texture {
-                Some((view, true)) => (view, &gpu.crisp),
-                Some((view, false)) => (view, &gpu.smooth),
-                None => (&gpu.white, &gpu.smooth),
-            };
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("model material"),
-                layout: &gpu.material_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
-                ],
-            })
-        };
-        let parts = if !has_triangles {
-            Vec::new()
-        } else if model.parts.is_empty() {
-            vec![(0..model.indices.len() as u32, bind_material(&default_material))]
-        } else {
-            model
-                .parts
-                .iter()
-                .map(|part| {
-                    let material = model.materials.get(part.material as usize).unwrap_or(&default_material);
-                    (part.first..part.first + part.count, bind_material(material))
-                })
-                .collect()
-        };
-
-        let bones = (!model.bones.is_empty()).then(|| {
-            let points: Vec<Vertex> = model
-                .bones
-                .iter()
-                .flatten()
-                .map(|&position| Vertex { position, normal: [0.0; 3], uv: [0.0; 2], color: [1.0; 4] })
-                .collect();
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("model bones"),
-                contents: bytemuck::cast_slice(&points),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            (buffer, points.len() as u32)
-        });
-
+        let vertices = has_triangles
+            .then(|| buffer("model vertices", bytemuck::cast_slice(&model.vertices), wgpu::BufferUsages::VERTEX));
+        let indices = has_triangles
+            .then(|| buffer("model indices", bytemuck::cast_slice(&model.indices), wgpu::BufferUsages::INDEX));
+        let parts = if has_triangles { material_parts(gpu, model) } else { Vec::new() };
+        let bones = bone_lines(&gpu.device, model);
+        let (center, radius) = (model.bounds.center(), model.bounds.radius().max(1e-4));
         Self { key, vertices, indices, parts, edges: None, bones, center, radius }
     }
+}
+
+/// The model's parts, each with its material ready to draw: its colour, and its texture (with
+/// crisp sampling for small pixel art) or else plain white. A model without parts is one part in
+/// the default clay.
+fn material_parts(gpu: &Gpu, model: &Model) -> Vec<(std::ops::Range<u32>, wgpu::BindGroup)> {
+    let textures: Vec<(wgpu::TextureView, bool)> = model
+        .textures
+        .iter()
+        .map(|texture| {
+            let view =
+                upload_texture(&gpu.device, &gpu.queue, &texture.name, [texture.width, texture.height], &texture.rgba);
+            (view, texture.width.max(texture.height) <= PIXEL_ART_MAX)
+        })
+        .collect();
+    let default_material = crate::model::Material {
+        name: String::new(),
+        color: [shading::DEFAULT_ALBEDO[0], shading::DEFAULT_ALBEDO[1], shading::DEFAULT_ALBEDO[2], 1.0],
+        texture: None,
+        alpha_cutoff: None,
+    };
+    if model.parts.is_empty() {
+        return vec![(0..model.indices.len() as u32, bind_material(gpu, &textures, &default_material))];
+    }
+    model
+        .parts
+        .iter()
+        .map(|part| {
+            let material = model.materials.get(part.material as usize).unwrap_or(&default_material);
+            (part.first..part.first + part.count, bind_material(gpu, &textures, material))
+        })
+        .collect()
+}
+
+/// One material's colour, alpha cut-off and texture, bound for the shader.
+fn bind_material(
+    gpu: &Gpu,
+    textures: &[(wgpu::TextureView, bool)],
+    material: &crate::model::Material,
+) -> wgpu::BindGroup {
+    let texture = material.texture.and_then(|index| textures.get(index as usize));
+    let cutoff = material.alpha_cutoff.unwrap_or(-1.0);
+    let uniform = MaterialUniform { color: material.color, flags: [cutoff, 0.0, 0.0, 0.0] };
+    let buffer = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("model material"),
+        contents: bytemuck::bytes_of(&uniform),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    let (view, sampler) = match texture {
+        Some((view, true)) => (view, &gpu.crisp),
+        Some((view, false)) => (view, &gpu.smooth),
+        None => (&gpu.white, &gpu.smooth),
+    };
+    gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("model material"),
+        layout: &gpu.material_layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+        ],
+    })
+}
+
+/// The skeleton's bones as lines, when the model has one.
+fn bone_lines(device: &wgpu::Device, model: &Model) -> Option<(wgpu::Buffer, u32)> {
+    if model.bones.is_empty() {
+        return None;
+    }
+    let points: Vec<Vertex> = model
+        .bones
+        .iter()
+        .flatten()
+        .map(|&position| Vertex { position, normal: [0.0; 3], uv: [0.0; 2], color: [1.0; 4] })
+        .collect();
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("model bones"),
+        contents: bytemuck::cast_slice(&points),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    Some((buffer, points.len() as u32))
 }
 
 impl Target {
@@ -606,13 +474,11 @@ impl Target {
 }
 
 /// A texture with its mip chain, so shrunk-down textures don't shimmer.
-#[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
 fn upload_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     label: &str,
-    w: u32,
-    h: u32,
+    [w, h]: [u32; 2],
     rgba: &[u8],
 ) -> wgpu::TextureView {
     let levels = mip_chain(w, h, rgba);
@@ -690,6 +556,185 @@ fn edges(gpu: &Gpu, model: &Model) -> Option<(wgpu::Buffer, u32)> {
         usage: wgpu::BufferUsages::INDEX,
     });
     Some((buffer, lines.len() as u32))
+}
+
+/// The view's size in physical pixels, within what the GPU can draw.
+fn render_size(ui: &Ui, rect: Rect, gpu: &Gpu) -> [u32; 2] {
+    let pixels_per_point = ui.ctx().pixels_per_point();
+    let max_side = gpu.device.limits().max_texture_dimension_2d.min(4096);
+    [
+        ((rect.width() * pixels_per_point).round() as u32).clamp(1, max_side),
+        ((rect.height() * pixels_per_point).round() as u32).clamp(1, max_side),
+    ]
+}
+
+/// The rendered picture over the view's backdrop, its border, and how to move the view while the
+/// pointer is over it.
+fn paint(ui: &Ui, rect: Rect, picture: TextureId, response: &egui::Response, interacting: bool) {
+    let painter = ui.painter_at(rect);
+    widgets::vertical_gradient(&painter, rect, theme::VIEWPORT_TOP, theme::WELL);
+    painter.image(picture, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    painter.rect_stroke(rect, theme::CARD_RADIUS, Stroke::new(1.0, theme::BORDER), StrokeKind::Inside);
+    if response.hovered() && !interacting {
+        painter.text(
+            rect.left_bottom() + vec2(10.0, -8.0),
+            Align2::LEFT_BOTTOM,
+            "drag to orbit · right-drag to pan · scroll to zoom",
+            FontId::proportional(theme::size::FINE),
+            theme::TEXT_FAINT,
+        );
+    }
+}
+
+/// Multisampling, 4 or 2 samples where the GPU can for both colour and depth.
+fn sample_count(state: &RenderState) -> u32 {
+    [4, 2]
+        .into_iter()
+        .find(|&count| {
+            state.adapter.get_texture_format_features(COLOR_FORMAT).flags.sample_count_supported(count)
+                && state.adapter.get_texture_format_features(DEPTH_FORMAT).flags.sample_count_supported(count)
+        })
+        .unwrap_or(1)
+}
+
+/// What a material binds: its uniform, its texture and the sampler.
+fn material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("model material"),
+        entries: &[
+            uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
+/// A sampler for textures that repeat, magnified smoothly or by `magnify`.
+fn sampler(device: &wgpu::Device, magnify: wgpu::FilterMode) -> wgpu::Sampler {
+    device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("model texture"),
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        mag_filter: magnify,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
+        ..Default::default()
+    })
+}
+
+/// What the render pipelines are made from.
+struct PipelineParts<'a> {
+    device: &'a wgpu::Device,
+    module: &'a wgpu::ShaderModule,
+    samples: u32,
+}
+
+impl PipelineParts<'_> {
+    /// A pipeline for one side of the faces. Models are often open or one-sided, so both sides are
+    /// drawn and lit, in two passes: the back faces go a hair farther away, so where a model has a
+    /// front and a back face in the same place (a petal's two coloured sides) the front one shows
+    /// instead of both fighting. The thumbnails do the same (`model::raster`).
+    fn shaded(
+        &self,
+        layout: &wgpu::PipelineLayout,
+        label: &str,
+        cull: wgpu::Face,
+        bias: wgpu::DepthBiasState,
+    ) -> wgpu::RenderPipeline {
+        let full_vertex = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4],
+        };
+        self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: self.module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(full_vertex)],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(cull),
+                ..Default::default()
+            },
+            depth_stencil: Some(depth_state(true, bias)),
+            multisample: wgpu::MultisampleState { count: self.samples, ..Default::default() },
+            fragment: Some(wgpu::FragmentState {
+                module: self.module,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: COLOR_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
+    /// The pipeline for lines: the wireframe and the skeleton.
+    fn lines(&self, layout: &wgpu::PipelineLayout) -> wgpu::RenderPipeline {
+        let position_only = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+        };
+        self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("model lines"),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: self.module,
+                entry_point: Some("vs_line"),
+                compilation_options: Default::default(),
+                buffers: &[Some(position_only)],
+            },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::LineList, ..Default::default() },
+            depth_stencil: Some(depth_state(false, wgpu::DepthBiasState::default())),
+            multisample: wgpu::MultisampleState { count: self.samples, ..Default::default() },
+            fragment: Some(wgpu::FragmentState {
+                module: self.module,
+                entry_point: Some("fs_line"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: COLOR_FORMAT,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+}
+
+/// Depth testing, nearer or level passing; written by the faces, not by the lines over them.
+fn depth_state(write: bool, bias: wgpu::DepthBiasState) -> wgpu::DepthStencilState {
+    wgpu::DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: Some(write),
+        depth_compare: Some(wgpu::CompareFunction::LessEqual),
+        stencil: wgpu::StencilState::default(),
+        bias,
+    }
 }
 
 fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {

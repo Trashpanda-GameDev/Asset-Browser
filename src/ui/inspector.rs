@@ -31,7 +31,7 @@ use super::organize::{self, GroupCommand, Targets};
 use super::previews::Previews;
 use super::sheet_view::SheetView;
 use super::sound::{self, SoundArgs, SoundCommand};
-use super::viewport::Viewport;
+use super::viewport::{ShownModel, Viewport};
 use super::{theme, widgets};
 
 /// Thumbnails shown for a multiple selection; the rest are counted.
@@ -373,7 +373,9 @@ impl Inspector {
             _ => None,
         };
         let shown_3d = match (model, render_state) {
-            (Some(model), Some(render_state)) => self.viewport.show(ui, rect, render_state, entry.key, &model),
+            (Some(model), Some(render_state)) => {
+                self.viewport.show(ui, rect, render_state, ShownModel { key: entry.key, model: &model })
+            }
             _ => false,
         };
         if shown_3d {
