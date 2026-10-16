@@ -95,13 +95,14 @@ Not checked by a tool, but expected:
 
 ## Adding things
 
-- **A kind of file:** its extension in `AssetKind::from_extension` (`src/asset.rs`), and what makes its thumbnail in
-  `src/thumbs.rs`.
+- **A kind of file:** its extension in `AssetKind::from_extension` (`src/asset.rs`), and what makes its preview in
+  `src/thumbs/worker.rs`.
 - **A model format:** a reader in `src/model/`, `parse(bytes, file, options)`, and a line in `model::FORMATS` with its
   extensions (which also go in `AssetKind::from_extension`).
 - **A keyboard shortcut:** an `Action` in `src/ui/keymap.rs` with its id (it's saved, so it never changes), label, group
-  and default; what it does goes in `handle_keys` (`src/app/actions.rs`).
+  and default; what it does goes in `window_keys` (the window's own) or `asset_keys` (the selected assets), in
+  `src/app/actions.rs`.
 - **A setting:** `load_settings` and `save_settings` in `src/app/settings.rs`, under a key of its own.
-- **A settings page:** a `Page` in `src/ui/settings.rs`.
+- **A settings page:** a `Page` in `src/ui/settings/mod.rs`, and a file of its own beside it that draws it.
 - **Something for one mode:** see [adding to a mode](development.md#adding-to-a-mode).
 - **Slow work:** a service, as above.

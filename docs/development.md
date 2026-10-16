@@ -164,8 +164,8 @@ left alone.
 What belongs to one kind of asset lives in a few known places, so a new tool for it goes next to the others:
 
 - What the mode browses, its name and icon: `Mode` in `src/ui/mode.rs`.
-- Its list columns: `columns()` in `src/ui/browse.rs`.
-- Its options above the assets: the `match mode` at the end of `BrowserApp::toolbar` in `src/app/toolbar.rs`.
+- Its list columns: `columns()` in `src/ui/browse/list.rs`.
+- Its options above the assets: `mode_options` in `src/ui/toolbar.rs`, and a `ToolbarCommand` for what they change.
 - Its part of the preview pane: `image_section`, `sound_section` or `model_section`, and the matching
-  `*_properties`, in `src/ui/inspector.rs`.
+  `*_properties`, in its own file in `src/ui/inspector/`.
 - Anything it should remember: `load_settings` and `save_settings` in `src/app/settings.rs`.
