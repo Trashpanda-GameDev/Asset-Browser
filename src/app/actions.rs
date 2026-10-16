@@ -5,7 +5,7 @@ use eframe::egui;
 
 use crate::asset::AssetKind;
 use crate::library::folder_name;
-use crate::ui::browse::MenuAction;
+use crate::ui::asset_actions::AssetAction;
 use crate::ui::keymap::{Action, Keymap};
 use crate::ui::mode::{Layout as ViewLayout, Mode};
 use crate::ui::organize::{GroupCommand, Targets, plural};
@@ -17,24 +17,24 @@ use super::BrowserApp;
 const OPEN_MANY_MAX: usize = 12;
 
 impl BrowserApp {
-    pub(super) fn run_action(&mut self, action: MenuAction) {
-        if action == MenuAction::Delete {
+    pub(super) fn run_action(&mut self, action: AssetAction) {
+        if action == AssetAction::Delete {
             self.ask_to_delete_selection();
             return;
         }
         let Some(library) = &self.library else { return };
         let items = self.browsing.selected_in_order();
         match action {
-            MenuAction::Delete => {}
-            MenuAction::Open => self.open_entries(&items),
-            MenuAction::Reveal => {
+            AssetAction::Delete => {}
+            AssetAction::Open => self.open_entries(&items),
+            AssetAction::Reveal => {
                 if let Some(&first) = items.first()
                     && let Err(err) = platform::reveal(&library.path_of(library.entry(first)))
                 {
                     diag::report("Showing the file", err);
                 }
             }
-            MenuAction::CopyFiles => {
+            AssetAction::CopyFiles => {
                 let paths = self.paths_of(&items);
                 let copied = match paths.as_slice() {
                     [] => return,
@@ -46,7 +46,7 @@ impl BrowserApp {
                     Err(err) => diag::report("Copying the files", err),
                 }
             }
-            MenuAction::CopyPaths => {
+            AssetAction::CopyPaths => {
                 let paths: Vec<String> =
                     items.iter().map(|&index| platform::native(&library.path_of(library.entry(index)))).collect();
                 if !paths.is_empty() {
@@ -143,9 +143,9 @@ impl BrowserApp {
             self.browsing.view = view;
         }
         for (action, menu_action) in [
-            (Action::CopyFiles, MenuAction::CopyFiles),
-            (Action::CopyPaths, MenuAction::CopyPaths),
-            (Action::ShowInFolder, MenuAction::Reveal),
+            (Action::CopyFiles, AssetAction::CopyFiles),
+            (Action::CopyPaths, AssetAction::CopyPaths),
+            (Action::ShowInFolder, AssetAction::Reveal),
         ] {
             if pressed(action) {
                 self.run_action(menu_action);

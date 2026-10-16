@@ -1,5 +1,6 @@
 //! The window's parts; `crate::app` puts them together.
 
+pub mod asset_actions;
 pub mod browse;
 pub mod empty;
 pub mod folders;

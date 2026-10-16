@@ -14,6 +14,7 @@ use crate::audio::NowPlaying;
 use crate::groups::{GroupKind, Groups, Membership};
 use crate::library::{Entry, Library, SortBy};
 
+use super::asset_actions::{self, AssetAction};
 use super::format::{format_age, format_size, format_time, grouped};
 use super::image_view::Backdrop;
 use super::mode::{Mode, Selection};
@@ -96,24 +97,13 @@ pub struct BrowseOutput {
     pub double_clicked: Option<u32>,
     /// Right-clicked: selected first if it isn't already, so the menu acts on it.
     pub secondary_clicked: Option<u32>,
-    pub menu: Option<MenuAction>,
+    pub action: Option<AssetAction>,
     pub sort_clicked: Option<SortBy>,
     /// Favorites, collections and categories asked for.
     pub commands: Vec<GroupCommand>,
     /// Assets per row and rows per screen, for the arrow and page keys.
     pub columns: usize,
     pub page_rows: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MenuAction {
-    Open,
-    Reveal,
-    /// The files themselves on the clipboard, to paste into a folder or another app.
-    CopyFiles,
-    CopyPaths,
-    /// Ask "Delete?" for the selection (to the Recycle Bin).
-    Delete,
 }
 
 /// The tile grid.
@@ -264,49 +254,14 @@ fn item_response(browse: &Browse<'_>, index: u32, response: &egui::Response, out
     let count = if browse.selection.contains(index) { browse.selection.len() } else { 1 };
     response.context_menu(|ui| {
         ui.set_min_width(190.0);
-        if ui.button(format!("{}  Open", icon::ARROW_SQUARE_OUT)).clicked() {
-            output.menu = Some(MenuAction::Open);
-            ui.close();
-        }
-        if ui.button(format!("{}  Show in folder", icon::FOLDER_OPEN)).clicked() {
-            output.menu = Some(MenuAction::Reveal);
-            ui.close();
-        }
-        let files = if count > 1 {
-            format!("{}  Copy {count} files", icon::FILES)
-        } else {
-            format!("{}  Copy file", icon::FILES)
-        };
-        let hint = crate::ui::keymap::hint(ui.ctx(), crate::ui::keymap::Action::CopyFiles);
-        if ui.button(files).on_hover_text(format!("To paste into a folder or another app{hint}")).clicked() {
-            output.menu = Some(MenuAction::CopyFiles);
-            ui.close();
-        }
-        let copy = if count > 1 {
-            format!("{}  Copy {count} paths", icon::COPY)
-        } else {
-            format!("{}  Copy path", icon::COPY)
-        };
-        if ui.button(copy).clicked() {
-            output.menu = Some(MenuAction::CopyPaths);
-            ui.close();
-        }
+        output.action = output.action.or(asset_actions::menu_items(ui, count));
         ui.separator();
         let targets = browse.targets(index);
         if let Some(command) = organize::menu_items(ui, browse.groups, browse.membership, &targets, browse.viewing) {
             output.commands.push(command);
         }
         ui.separator();
-        let delete = if count > 1 {
-            format!("{}  Delete {count}…", icon::TRASH)
-        } else {
-            format!("{}  Delete…", icon::TRASH)
-        };
-        let hint = format!("To the {} (Del)", crate::platform::trash_name());
-        if ui.button(delete).on_hover_text(hint).clicked() {
-            output.menu = Some(MenuAction::Delete);
-            ui.close();
-        }
+        output.action = output.action.or(asset_actions::delete_menu_item(ui, count));
     });
 }
 

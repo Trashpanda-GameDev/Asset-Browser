@@ -78,6 +78,13 @@ impl Browsing {
         self.view_dirty = true;
     }
 
+    /// A column's heading was clicked: orders by it, or the other way round when it already does.
+    pub(super) fn sort_by(&mut self, sort: SortBy) {
+        let (current, descending) = self.mode_view().order(self.in_group_order());
+        let descending = if current == sort { !descending } else { sort.starts_descending() };
+        self.set_order(sort, descending);
+    }
+
     pub(super) fn in_group_order(&self) -> bool {
         self.group.is_some_and(|id| id != UNCATEGORIZED)
     }
@@ -274,22 +281,14 @@ impl BrowserApp {
         if let Some(index) = output.double_clicked {
             self.open_entries(&[index]);
         }
-        if let Some(action) = output.menu {
+        if let Some(action) = output.action {
             self.run_action(action);
         }
         for command in output.commands {
             self.run_group_command(command);
         }
         if let Some(sort) = output.sort_clicked {
-            let in_group = self.browsing.in_group_order();
-            let view = self.browsing.mode_view_mut();
-            let (current, descending) = view.order(in_group);
-            if current == sort {
-                view.set_order(in_group, sort, !descending);
-            } else {
-                view.set_order(in_group, sort, sort.starts_descending());
-            }
-            self.browsing.view_dirty = true;
+            self.browsing.sort_by(sort);
         }
     }
 

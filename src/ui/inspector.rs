@@ -20,7 +20,8 @@ use crate::model::Model;
 use crate::playback::Playback;
 use crate::sheets::{Saved, Sheet, Source};
 
-use super::browse::{Look, MenuAction, channels, draw_preview};
+use super::asset_actions::{self, AssetAction};
+use super::browse::{Look, channels, draw_preview};
 use super::format::{format_age, format_size, format_time, grouped};
 use super::image_view::{self, ImageView, Picture};
 use super::mode::Selection;
@@ -75,7 +76,7 @@ pub struct InspectorArgs<'a> {
 pub struct InspectorOutput {
     /// A thumbnail in the selection strip was clicked: show that one.
     pub focus: Option<u32>,
-    pub action: Option<MenuAction>,
+    pub action: Option<AssetAction>,
     pub command: Option<GroupCommand>,
     /// The focused asset's large preview is wanted: the entry to load it for.
     pub load_detail: Option<u32>,
@@ -180,29 +181,7 @@ impl Inspector {
             title(ui, library, entry);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-                let several = selection.len() > 1 && selection.contains(focus);
-                let hint = crate::ui::keymap::hint(ui.ctx(), crate::ui::keymap::Action::Open);
-                if widgets::button(ui, icon::ARROW_SQUARE_OUT, "Open")
-                    .on_hover_text(format!("Open in its default app{hint}"))
-                    .clicked()
-                {
-                    output.action = Some(MenuAction::Open);
-                }
-                if widgets::button(ui, icon::FOLDER_OPEN, "Show in folder").clicked() {
-                    output.action = Some(MenuAction::Reveal);
-                }
-                let files = if several { format!("Copy {} files", selection.len()) } else { "Copy file".to_owned() };
-                let hint = crate::ui::keymap::hint(ui.ctx(), crate::ui::keymap::Action::CopyFiles);
-                if widgets::button(ui, icon::FILES, &files)
-                    .on_hover_text(format!("To paste into a folder or another app{hint}"))
-                    .clicked()
-                {
-                    output.action = Some(MenuAction::CopyFiles);
-                }
-                let copy = if several { format!("Copy {} paths", selection.len()) } else { "Copy path".to_owned() };
-                if widgets::button(ui, icon::COPY, &copy).clicked() {
-                    output.action = Some(MenuAction::CopyPaths);
-                }
+                output.action = asset_actions::buttons(ui, targets.len());
                 if favorite_button(ui, organize::all_in(membership, FAVORITES, &targets)).clicked() {
                     output.command = Some(GroupCommand::ToggleFavorite(Targets::Selection));
                 }

@@ -14,6 +14,7 @@ use crate::ui::image_view::{Backdrop, ImageView};
 use crate::ui::keymap::Keymap;
 use crate::ui::mode::{Layout as ViewLayout, Mode, ModeView};
 use crate::ui::settings::{Command, Settings, SettingsArgs};
+use crate::ui::updates::UpdateAction;
 use crate::ui::whats_new::WhatsNew;
 use crate::{db, diag, paths, platform};
 
@@ -78,7 +79,15 @@ impl BrowserApp {
         }
     }
 
-    pub(super) fn restart_to_update(&mut self) {
+    /// Checks for an update, or restarts into the one downloaded.
+    pub(super) fn run_update_action(&mut self, action: UpdateAction) {
+        match action {
+            UpdateAction::Check => self.updates.check_now(),
+            UpdateAction::Restart => self.restart_to_update(),
+        }
+    }
+
+    fn restart_to_update(&mut self) {
         // Saved before the updater starts: it waits for the app to close, but if it can't watch
         // the process it goes ahead and stops it.
         self.save_settings();
@@ -113,8 +122,7 @@ impl BrowserApp {
     /// Does what the settings window asked for.
     fn run_settings_command(&mut self, ctx: &egui::Context, command: Command) {
         match command {
-            Command::CheckForUpdates => self.updates.check_now(),
-            Command::RestartToUpdate => self.restart_to_update(),
+            Command::Update(action) => self.run_update_action(action),
             Command::WhatsNew => {
                 if let Ok(current) = semver::Version::parse(&self.updates.version()) {
                     self.preferences.whats_new = Some(WhatsNew::every_version(current));

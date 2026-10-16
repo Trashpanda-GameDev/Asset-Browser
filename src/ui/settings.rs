@@ -18,6 +18,7 @@ use crate::updates::{RELEASES, Status, Updates};
 
 use super::format::{format_age, format_size, grouped};
 use super::organize::plural;
+use super::updates::UpdateAction;
 use super::{theme, widgets};
 
 /// The window's size, and the list of pages' width.
@@ -56,8 +57,7 @@ impl Page {
 
 /// What the user asked for, for the app to do.
 pub enum Command {
-    CheckForUpdates,
-    RestartToUpdate,
+    Update(UpdateAction),
     WhatsNew,
     SetShortcut(Action, Option<Shortcut>),
     ResetShortcuts,
@@ -498,7 +498,7 @@ fn updates_page(ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command
                 .fill(theme::ACCENT)
                 .min_size(vec2(0.0, 28.0));
                 if ui.add(restart).clicked() {
-                    commands.push(Command::RestartToUpdate);
+                    commands.push(Command::Update(UpdateAction::Restart));
                 }
             }
             status => {
@@ -506,7 +506,7 @@ fn updates_page(ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command
                 let check = egui::Button::new(format!("{}  Check for updates", icon::ARROW_CLOCKWISE))
                     .min_size(vec2(0.0, 28.0));
                 if ui.add_enabled(can_check, check).clicked() {
-                    commands.push(Command::CheckForUpdates);
+                    commands.push(Command::Update(UpdateAction::Check));
                 }
             }
         }

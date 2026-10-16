@@ -13,7 +13,6 @@ use crate::ui::mode::Layout as ViewLayout;
 use crate::ui::sound;
 use crate::ui::status_bar::{self, StatusArgs, StatusCommand};
 use crate::ui::theme;
-use crate::ui::updates::UpdateAction;
 
 use super::BrowserApp;
 
@@ -33,8 +32,7 @@ impl BrowserApp {
         };
         for command in status_bar::show(ui, args) {
             match command {
-                StatusCommand::Update(UpdateAction::Check) => self.updates.check_now(),
-                StatusCommand::Update(UpdateAction::Restart) => self.restart_to_update(),
+                StatusCommand::Update(action) => self.run_update_action(action),
                 StatusCommand::ShowPlaying(index) => self.reveal(index),
             }
         }

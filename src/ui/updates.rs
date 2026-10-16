@@ -13,8 +13,11 @@ use crate::updates::{Status, Updates};
 /// How long the answer to a check the user asked for stays up.
 const ANSWER_TIME: Duration = Duration::from_secs(4);
 
+/// What's asked of the updater, from the status bar or the settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UpdateAction {
     Check,
+    /// Restart into the update that has downloaded.
     Restart,
 }
 
