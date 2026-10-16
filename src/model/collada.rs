@@ -9,23 +9,18 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 
 use roxmltree::Node;
 
-use super::geometry::{self, DEFAULT_CREASE, IDENTITY, Mat4, NormalMatrix, normalize};
-use super::textures::{self, Alpha};
-use super::{Builder, LoadOptions, Model, Slot, Vertex, srgb_to_linear};
+use super::builder::{Builder, Slot, TextureFiles};
+use super::geometry::{self, DEFAULT_CREASE, IDENTITY, Mat4, NormalMatrix};
+use super::vector::normalize;
+use super::{LoadOptions, Model, ModelError, Vertex, flip_v, srgb_to_linear};
 
-pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
-    let text = String::from_utf8_lossy(&bytes);
-    parse(&text, path.parent().unwrap_or(Path::new(".")), options)
-}
-
-fn parse(text: &str, dir: &Path, options: &LoadOptions) -> Result<Model, String> {
+pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
+    let text = String::from_utf8_lossy(bytes);
     let parsing = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
-    let doc = roxmltree::Document::parse_with_options(text, parsing).map_err(|err| format!("Collada: {err}"))?;
+    let doc = roxmltree::Document::parse_with_options(&text, parsing)?;
     let root = doc.root_element();
     if root.tag_name().name() != "COLLADA" {
         return Err("not a Collada file".into());
@@ -47,16 +42,13 @@ fn parse(text: &str, dir: &Path, options: &LoadOptions) -> Result<Model, String>
         "X_UP" => [[0.0, 1.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
         _ => IDENTITY,
     };
-    let scale = [[meters, 0.0, 0.0, 0.0], [0.0, meters, 0.0, 0.0], [0.0, 0.0, meters, 0.0], [0.0, 0.0, 0.0, 1.0]];
-    let space = geometry::mul(&axes, &scale);
+    let space = geometry::mul(&axes, &geometry::scaling([meters; 3]));
 
     let mut reader = Reader {
         ids: &ids,
-        dir,
-        max_texture: options.max_texture,
         builder: Builder::default(),
         materials: HashMap::new(),
-        textures: HashMap::new(),
+        textures: TextureFiles::new(file, options),
         source_vertices: 0,
     };
     let scene = child(root, "scene")
@@ -77,10 +69,7 @@ fn parse(text: &str, dir: &Path, options: &LoadOptions) -> Result<Model, String>
         }
     }
     let mut builder = reader.builder;
-    builder.source_vertices = Some(reader.source_vertices);
-    if builder.triangle_count() == 0 {
-        return Err("there are no meshes in this file".into());
-    }
+    builder.set_source_vertices(reader.source_vertices);
     let version = root.attribute("version").unwrap_or("");
     builder.finish(format!("Collada {version}").trim_end().to_owned())
 }
@@ -104,25 +93,18 @@ fn numbers<T: std::str::FromStr>(node: Option<Node>) -> Vec<T> {
         .unwrap_or_default()
 }
 
-/// A Collada matrix: 16 numbers, row by row.
-fn matrix_from_rows(values: &[f32]) -> Option<Mat4> {
-    (values.len() >= 16).then(|| std::array::from_fn(|column| std::array::from_fn(|row| values[row * 4 + column])))
-}
-
 /// A node's own transform: its transform elements multiplied in order.
 fn local_transform(node: Node) -> Mat4 {
     let mut m = IDENTITY;
     for element in node.children().filter(Node::is_element) {
         let values: Vec<f32> = numbers(Some(element));
         let step: Option<Mat4> = match (element.tag_name().name(), values.as_slice()) {
-            ("matrix", values) => matrix_from_rows(values),
-            ("translate", [x, y, z, ..]) => {
-                Some([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [*x, *y, *z, 1.0]])
+            ("matrix", values) => geometry::from_rows(values),
+            ("translate", [x, y, z, ..]) => Some(geometry::translation([*x, *y, *z])),
+            ("scale", [x, y, z, ..]) => Some(geometry::scaling([*x, *y, *z])),
+            ("rotate", [x, y, z, degrees, ..]) => {
+                Some(geometry::rotation(normalize([*x, *y, *z]), degrees.to_radians()))
             }
-            ("scale", [x, y, z, ..]) => {
-                Some([[*x, 0.0, 0.0, 0.0], [0.0, *y, 0.0, 0.0], [0.0, 0.0, *z, 0.0], [0.0, 0.0, 0.0, 1.0]])
-            }
-            ("rotate", [x, y, z, degrees, ..]) => Some(rotation(normalize([*x, *y, *z]), degrees.to_radians())),
             _ => None,
         };
         if let Some(step) = step {
@@ -130,19 +112,6 @@ fn local_transform(node: Node) -> Mat4 {
         }
     }
     m
-}
-
-/// Rotation by `angle` radians about the unit `axis`.
-fn rotation(axis: [f32; 3], angle: f32) -> Mat4 {
-    let [x, y, z] = axis;
-    let (s, c) = angle.sin_cos();
-    let t = 1.0 - c;
-    [
-        [t * x * x + c, t * x * y + s * z, t * x * z - s * y, 0.0],
-        [t * x * y - s * z, t * y * y + c, t * y * z + s * x, 0.0],
-        [t * x * z + s * y, t * y * z - s * x, t * z * z + c, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ]
 }
 
 /// One input of a primitive: which source, at which offset in each corner's indices.
@@ -172,17 +141,125 @@ impl Source {
         let values = self.values.get(at..at.checked_add(N)?)?;
         Some(std::array::from_fn(|i| values[i]))
     }
+
+    /// How many items it holds, `stride` numbers each.
+    fn count(&self) -> usize {
+        self.values.len() / self.stride
+    }
+}
+
+/// Where a primitive's vertices come from: each attribute's source, and its offset among a
+/// corner's `stride` indices.
+struct Attributes {
+    stride: usize,
+    positions: (Source, usize),
+    normals: Option<(Source, usize)>,
+    uvs: Option<(Source, usize)>,
+    colors: Option<(Source, usize)>,
+}
+
+impl Attributes {
+    /// `None` without positions.
+    fn of(inputs: &[Input]) -> Option<Self> {
+        let stride = inputs.iter().map(|input| input.offset).max()?.checked_add(1)?;
+        let find = |semantic: &str| {
+            let input = inputs.iter().find(|input| input.semantic == semantic)?;
+            Some((source(input.source), input.offset))
+        };
+        let positions = find("POSITION")?;
+        Some(Self { stride, positions, normals: find("NORMAL"), uvs: find("TEXCOORD"), colors: find("COLOR") })
+    }
+
+    /// The vertex a corner's indices pick out; `None` when its position isn't there.
+    fn vertex(&self, corner: &[u32]) -> Option<Vertex> {
+        let at = |offset: usize| corner.get(offset).map(|&index| index as usize);
+        let attribute3 = |input: &Option<(Source, usize)>| {
+            let (source, offset) = input.as_ref()?;
+            source.get::<3>(at(*offset)?)
+        };
+        let uv = self.uvs.as_ref().and_then(|(source, offset)| source.get::<2>(at(*offset)?));
+        let color = attribute3(&self.colors).map(|rgb| {
+            let [r, g, b] = rgb.map(srgb_to_linear);
+            [r, g, b, 1.0]
+        });
+        let (positions, position_offset) = &self.positions;
+        Some(Vertex {
+            position: positions.get::<3>(at(*position_offset)?)?,
+            normal: attribute3(&self.normals).unwrap_or([0.0; 3]),
+            uv: uv.map_or([0.0; 2], flip_v),
+            color: color.unwrap_or([1.0; 4]),
+        })
+    }
+
+    /// The polygons' corners as vertices (merged where all their indices match) and triangles,
+    /// cut as strips or else as fans. A polygon with a corner that isn't there is left out.
+    fn triangles(&self, polygons: &[&[u32]], strips: bool) -> (Vec<Vertex>, Vec<u32>) {
+        let mut vertices: Vec<Vertex> = Vec::new();
+        let mut merged: HashMap<&[u32], u32> = HashMap::new();
+        let mut indices = Vec::new();
+        let mut ids: Vec<u32> = Vec::new();
+        for &polygon in polygons {
+            ids.clear();
+            for corner in polygon.chunks_exact(self.stride) {
+                let index = if let Some(&index) = merged.get(corner) {
+                    index
+                } else {
+                    let Some(vertex) = self.vertex(corner) else { break };
+                    vertices.push(vertex);
+                    let index = (vertices.len() - 1) as u32;
+                    merged.insert(corner, index);
+                    index
+                };
+                ids.push(index);
+            }
+            if ids.len() != polygon.len() / self.stride {
+                continue;
+            }
+            let corners = |triangle: [usize; 3]| triangle.map(|k| ids[k]);
+            if strips {
+                indices.extend(geometry::strip(ids.len()).flat_map(corners));
+            } else {
+                // Fans, and polygons cut into fans: convex in practice.
+                indices.extend(geometry::fan(ids.len()).flat_map(corners));
+            }
+        }
+        (vertices, indices)
+    }
+}
+
+/// A primitive's polygons as runs of corners, each corner `stride` indices: three corners each
+/// for triangles, as `vcount` says for a polylist, and otherwise a `p` each. `None` for a polylist
+/// without a `p`.
+fn polygons<'l>(primitive: Node, lists: &'l [Vec<u32>], stride: usize) -> Option<Vec<&'l [u32]>> {
+    let mut polygons: Vec<&[u32]> = Vec::new();
+    match primitive.tag_name().name() {
+        "triangles" => {
+            for list in lists {
+                polygons.extend(list.chunks_exact(stride.checked_mul(3)?));
+            }
+        }
+        "polylist" => {
+            let counts: Vec<usize> = numbers(child(primitive, "vcount"));
+            let list = lists.first()?;
+            let mut at = 0usize;
+            for count in counts {
+                let end = count.checked_mul(stride).and_then(|len| len.checked_add(at));
+                let Some(polygon) = end.and_then(|end| list.get(at..end)) else { break };
+                polygons.push(polygon);
+                at += polygon.len();
+            }
+        }
+        _ => polygons.extend(lists.iter().map(Vec::as_slice)),
+    }
+    Some(polygons)
 }
 
 struct Reader<'a, 'input> {
     ids: &'a HashMap<&'input str, Node<'a, 'input>>,
-    dir: &'a Path,
-    max_texture: u32,
     builder: Builder,
     /// Material id → ours.
     materials: HashMap<String, u32>,
-    /// Image reference → what became of it.
-    textures: HashMap<String, Slot>,
+    textures: TextureFiles<'a>,
     source_vertices: u64,
 }
 
@@ -219,7 +296,7 @@ impl<'a, 'input> Reader<'a, 'input> {
                     let Some(skin) = controller.and_then(|controller| child(controller, "skin")) else { continue };
                     let Some(geometry) = skin.attribute("source").and_then(|url| self.target(url)) else { continue };
                     let bind_shape =
-                        matrix_from_rows(&numbers::<f32>(child(skin, "bind_shape_matrix"))).unwrap_or(IDENTITY);
+                        geometry::from_rows(&numbers::<f32>(child(skin, "bind_shape_matrix"))).unwrap_or(IDENTITY);
                     let bindings = self.bindings(element);
                     self.add_geometry(geometry, &geometry::mul(&matrix, &bind_shape), &bindings);
                 }
@@ -260,9 +337,7 @@ impl<'a, 'input> Reader<'a, 'input> {
                 })
                 .collect();
             if mirrored {
-                for triangle in indices.as_chunks_mut::<3>().0 {
-                    triangle.swap(1, 2);
-                }
+                geometry::flip_winding(&mut indices);
             }
             if !has_normals {
                 (vertices, indices) = geometry::smooth_normals(&vertices, &indices, DEFAULT_CREASE);
@@ -281,15 +356,25 @@ impl<'a, 'input> Reader<'a, 'input> {
             drawn = true;
         }
         if drawn {
-            self.builder.meshes += 1;
+            self.builder.count_mesh();
         }
     }
 
     /// The primitive's corners as vertices (merged where all their indices match) and triangles,
     /// in the geometry's own space; and whether normals came with it.
     fn read_primitive(&mut self, primitive: Node<'a, 'input>) -> Option<(Vec<Vertex>, Vec<u32>, bool)> {
-        // Inputs of the primitive; VERTEX expands into the `vertices` element's inputs.
-        let mut inputs: Vec<Input> = Vec::new();
+        let attributes = Attributes::of(&self.inputs(primitive))?;
+        let lists: Vec<Vec<u32>> = elements(primitive, "p").map(|p| numbers(Some(p))).collect();
+        let polygons = polygons(primitive, &lists, attributes.stride)?;
+        let strips = primitive.tag_name().name() == "tristrips";
+        let (vertices, indices) = attributes.triangles(&polygons, strips);
+        self.source_vertices += attributes.positions.0.count() as u64;
+        Some((vertices, indices, attributes.normals.is_some()))
+    }
+
+    /// The primitive's inputs, with VERTEX expanded into the `vertices` element's own.
+    fn inputs(&self, primitive: Node<'a, 'input>) -> Vec<Input<'a, 'input>> {
+        let mut inputs = Vec::new();
         for input in elements(primitive, "input") {
             let semantic = input.attribute("semantic").unwrap_or("");
             let offset = input.attribute("offset").and_then(|o| o.parse().ok()).unwrap_or(0);
@@ -303,92 +388,7 @@ impl<'a, 'input> Reader<'a, 'input> {
                 inputs.push(Input { semantic, source, offset });
             }
         }
-        let stride = inputs.iter().map(|input| input.offset).max()?.checked_add(1)?;
-        let find = |semantic: &str| {
-            let input = inputs.iter().find(|input| input.semantic == semantic)?;
-            Some((source(input.source), input.offset))
-        };
-        let (positions, position_offset) = find("POSITION")?;
-        let (normals, uvs, colors) = (find("NORMAL"), find("TEXCOORD"), find("COLOR"));
-
-        // Polygons as runs of corners, each corner `stride` indices.
-        let lists: Vec<Vec<u32>> = elements(primitive, "p").map(|p| numbers(Some(p))).collect();
-        let mut polygons: Vec<&[u32]> = Vec::new();
-        let kind = primitive.tag_name().name();
-        match kind {
-            "triangles" => {
-                for list in &lists {
-                    polygons.extend(list.chunks_exact(stride.checked_mul(3)?));
-                }
-            }
-            "polylist" => {
-                let counts: Vec<usize> = numbers(child(primitive, "vcount"));
-                let list = lists.first()?;
-                let mut at = 0usize;
-                for count in counts {
-                    let end = count.checked_mul(stride).and_then(|len| len.checked_add(at));
-                    let Some(polygon) = end.and_then(|end| list.get(at..end)) else { break };
-                    polygons.push(polygon);
-                    at += polygon.len();
-                }
-            }
-            _ => polygons.extend(lists.iter().map(Vec::as_slice)),
-        }
-
-        let vertex = |corner: &[u32]| -> Option<Vertex> {
-            let at = |offset: usize| corner.get(offset).map(|&index| index as usize);
-            let attribute3 = |input: &Option<(Source, usize)>| {
-                let (source, offset) = input.as_ref()?;
-                source.get::<3>(at(*offset)?)
-            };
-            let uv = uvs.as_ref().and_then(|(source, offset)| source.get::<2>(at(*offset)?));
-            let color = attribute3(&colors).map(|rgb| {
-                let [r, g, b] = rgb.map(srgb_to_linear);
-                [r, g, b, 1.0]
-            });
-            Some(Vertex {
-                position: positions.get::<3>(at(position_offset)?)?,
-                normal: attribute3(&normals).unwrap_or([0.0; 3]),
-                // v counts up from the bottom of the picture.
-                uv: uv.map_or([0.0; 2], |[u, v]| [u, 1.0 - v]),
-                color: color.unwrap_or([1.0; 4]),
-            })
-        };
-        let mut vertices: Vec<Vertex> = Vec::new();
-        let mut merged: HashMap<&[u32], u32> = HashMap::new();
-        let mut indices = Vec::new();
-        let mut ids: Vec<u32> = Vec::new();
-        for polygon in polygons {
-            ids.clear();
-            for corner in polygon.chunks_exact(stride) {
-                let index = match merged.get(corner) {
-                    Some(&index) => index,
-                    None => {
-                        let Some(vertex) = vertex(corner) else { break };
-                        vertices.push(vertex);
-                        let index = (vertices.len() - 1) as u32;
-                        merged.insert(corner, index);
-                        index
-                    }
-                };
-                ids.push(index);
-            }
-            if ids.len() != polygon.len() / stride {
-                continue;
-            }
-            if kind == "tristrips" {
-                for (i, w) in ids.windows(3).enumerate() {
-                    indices.extend(if i % 2 == 0 { [w[0], w[1], w[2]] } else { [w[1], w[0], w[2]] });
-                }
-            } else {
-                // Fans, and polygons cut into fans: convex in practice.
-                for k in 1..ids.len().saturating_sub(1) {
-                    indices.extend([ids[0], ids[k], ids[k + 1]]);
-                }
-            }
-        }
-        self.source_vertices += (positions.values.len() / positions.stride) as u64;
-        Some((vertices, indices, normals.is_some()))
+        inputs
     }
 
     fn material(&mut self, material: Node<'a, 'input>, vertex_colors: bool) -> u32 {
@@ -413,8 +413,8 @@ impl<'a, 'input> Reader<'a, 'input> {
             self.image_path(profile, sampler)
         });
         let slot = match image {
-            Some(path) if self.max_texture > 0 => self.texture(&path),
-            _ => Slot::None,
+            Some(path) => self.textures.slot(&mut self.builder, &path),
+            None => Slot::None,
         };
         let index = match (color, slot) {
             (None, Slot::None) => self.builder.default_material(vertex_colors),
@@ -453,22 +453,14 @@ impl<'a, 'input> Reader<'a, 'input> {
         let path = path.strip_prefix("file://").unwrap_or(path);
         Some(super::percent_decode(path))
     }
-
-    fn texture(&mut self, path: &str) -> Slot {
-        if let Some(&slot) = self.textures.get(path) {
-            return slot;
-        }
-        let decoded = textures::from_file(self.dir, path, self.max_texture, Alpha::Guess);
-        let slot = self.builder.texture_slot(decoded.as_ref().map(Arc::as_ref));
-        self.textures.insert(path.to_owned(), slot);
-        slot
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::test_files::{TempDir, png_2x2};
+    use crate::model::test_files::png_2x2;
+    use crate::model::vector::{cross, sub};
+    use crate::test_support::TempDir;
 
     /// A unit quad (Z up, centimetres) as a polylist with one textured material, placed by a
     /// translated node.
@@ -524,7 +516,7 @@ mod tests {
         let dir = TempDir::new("collada");
         dir.write("wood grain.png", &png_2x2());
         let path = dir.write("quad.dae", QUAD.as_bytes());
-        let model = load(&path, &LoadOptions { max_texture: 64 }).unwrap();
+        let model = crate::model::load(&path, &LoadOptions { max_texture: 64 }).unwrap();
         assert_eq!(model.info.format, "Collada 1.4.1");
         assert_eq!(model.info.triangles, 3);
         assert_eq!((model.info.materials, model.info.textures, model.info.missing_textures), (2, 1, 0));
@@ -543,31 +535,62 @@ mod tests {
     }
 
     #[test]
+    fn every_kind_of_primitive_faces_front_even_mirrored() {
+        // A unit square facing +Z, its corners counter-clockwise: (0, 0), (1, 0), (1, 1), (0, 1).
+        let input = r##"<input semantic="VERTEX" source="#corners" offset="0"/>"##;
+        let primitives = [
+            format!(r#"<triangles count="2">{input}<p>0 1 2 0 2 3</p></triangles>"#),
+            format!(r#"<polylist count="1">{input}<vcount>4</vcount><p>0 1 2 3</p></polylist>"#),
+            format!(r#"<polygons count="1">{input}<p>0 1 2 3</p></polygons>"#),
+            format!(r#"<trifans count="1">{input}<p>0 1 2 3</p></trifans>"#),
+            format!(r#"<tristrips count="1">{input}<p>0 1 3 2</p></tristrips>"#),
+        ];
+        for primitive in &primitives {
+            for transform in ["", "<scale>-1 1 1</scale>"] {
+                let file = format!(
+                    r##"<COLLADA version="1.4.1"><library_geometries><geometry id="square"><mesh>
+  <source id="positions"><float_array id="numbers" count="12">0 0 0 1 0 0 1 1 0 0 1 0</float_array>
+    <technique_common><accessor source="#numbers" count="4" stride="3"/></technique_common></source>
+  <vertices id="corners"><input semantic="POSITION" source="#positions"/></vertices>
+  {primitive}
+</mesh></geometry></library_geometries>
+<library_visual_scenes><visual_scene id="scene">
+  <node>{transform}<instance_geometry url="#square"/></node>
+</visual_scene></library_visual_scenes>
+<scene><instance_visual_scene url="#scene"/></scene></COLLADA>"##
+                );
+                let model = parse(file.as_bytes(), Path::new("test.dae"), &LoadOptions::default()).unwrap();
+                assert_eq!(model.info.triangles, 2, "{primitive} {transform}");
+                for triangle in model.indices.as_chunks::<3>().0 {
+                    let [a, b, c] = triangle.map(|index| model.vertices[index as usize].position);
+                    let facing = cross(sub(b, a), sub(c, a));
+                    assert!(facing[2] > 0.0, "{primitive} {transform}: {facing:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn damaged_files_never_panic() {
-        for bytes in crate::model::test_files::damaged(QUAD.as_bytes(), 300) {
-            let _ = parse(&String::from_utf8_lossy(&bytes), Path::new("."), &LoadOptions { max_texture: 0 });
+        for bytes in crate::test_support::damaged(QUAD.as_bytes(), 300) {
+            let _ = parse(&bytes, Path::new("test.dae"), &LoadOptions::default());
         }
         // Numbers that overflow arithmetic.
         let huge = QUAD.replace("<vcount>4</vcount>", "<vcount>18446744073709551615</vcount>").replace(
             r##"<input semantic="TEXCOORD" source="#quad-uvs" offset="1" set="0"/>"##,
             r##"<input semantic="TEXCOORD" source="#quad-uvs" offset="18446744073709551615" set="0"/>"##,
         );
-        let _ = parse(&huge, Path::new("."), &LoadOptions { max_texture: 0 });
+        let _ = parse(huge.as_bytes(), Path::new("test.dae"), &LoadOptions::default());
     }
 
     #[test]
     fn broken_collada() {
-        assert!(parse("<COLLADA><unclosed>", Path::new("."), &LoadOptions { max_texture: 0 }).is_err());
-        assert!(parse("<svg/>", Path::new("."), &LoadOptions { max_texture: 0 }).is_err());
+        let unclosed = parse(b"<COLLADA><unclosed>", Path::new("test.dae"), &LoadOptions::default()).err().unwrap();
+        assert!(matches!(unclosed, ModelError::Collada(_)), "the XML reader's own error");
+        assert!(unclosed.to_string().starts_with("Collada: "), "{unclosed}");
+        assert!(parse(b"<svg/>", Path::new("test.dae"), &LoadOptions::default()).is_err());
         let no_geometry =
             QUAD.replace("<p>0 0 1 1 2 2 3 3</p>", "<p>0 0 1</p>").replace("<p>0 2 1</p>", "<p>9 9 9</p>");
-        assert!(parse(&no_geometry, Path::new("."), &LoadOptions { max_texture: 0 }).is_err());
-    }
-
-    #[test]
-    fn rotation_matches_right_hand_rule() {
-        let quarter = rotation([0.0, 0.0, 1.0], std::f32::consts::FRAC_PI_2);
-        let p = geometry::transform_point(&quarter, [1.0, 0.0, 0.0]);
-        assert!((p[0]).abs() < 1e-6 && (p[1] - 1.0).abs() < 1e-6);
+        assert!(parse(no_geometry.as_bytes(), Path::new("test.dae"), &LoadOptions::default()).is_err());
     }
 }

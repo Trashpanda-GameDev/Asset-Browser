@@ -1,5 +1,5 @@
 //! 3D models: reads the common interchange formats into one simple form (`Model`) that both the
-//! thumbnail renderer (`raster`) and the model viewer draw, and makes the grid's model thumbnails.
+//! thumbnail renderer (`raster`) and the model viewer draw.
 //!
 //! Every loader produces the same space: right-handed, Y up, metres, the model's front facing +Z
 //! (glTF's convention), with every node transform already applied, so nothing downstream looks at
@@ -7,23 +7,33 @@
 //! PLY, 3DS and Collada are small readers of our own. A .blend file can't be read without Blender,
 //! but it carries the picture Blender saved with it (`blend`).
 
+use std::collections::HashSet;
 use std::path::Path;
 
-use fast_image_resize as fr;
-
-use crate::thumbs::{THUMB_MAX, ThumbPixels};
-
 pub mod blend;
+mod builder;
+
 mod collada;
+
 mod fbx;
+
 mod geometry;
+
 mod gltf;
+
 mod ply;
+
 pub mod raster;
+
 pub mod shading;
+
 mod stl;
+
 mod textures;
+
 mod three_ds;
+
+pub mod vector;
 
 pub use textures::{TextureStats, set_cache_budget as set_texture_cache_budget, texture_stats};
 
@@ -43,6 +53,22 @@ pub struct Model {
     pub bones: Vec<[[f32; 3]; 2]>,
     pub bounds: Bounds,
     pub info: ModelInfo,
+}
+
+impl Model {
+    /// Every triangle edge once, as a line list into `vertices`: the wireframe.
+    pub fn edges(&self) -> Vec<u32> {
+        let mut seen = HashSet::with_capacity(self.indices.len());
+        let mut lines = Vec::with_capacity(self.indices.len() * 2);
+        for triangle in self.indices.as_chunks::<3>().0 {
+            for (a, b) in [(triangle[0], triangle[1]), (triangle[1], triangle[2]), (triangle[2], triangle[0])] {
+                if seen.insert((a.min(b), a.max(b))) {
+                    lines.extend([a, b]);
+                }
+            }
+        }
+        lines
+    }
 }
 
 #[repr(C)]
@@ -74,6 +100,16 @@ pub struct Material {
     /// Fragments whose alpha (material × vertex × texture) is below this are discarded: leaves,
     /// fences and hair cards. `None` for opaque materials, whose alpha is ignored.
     pub alpha_cutoff: Option<f32>,
+}
+
+impl Material {
+    /// Clay: what surfaces the file gives no material of their own are drawn with.
+    pub const CLAY: Material = Material {
+        name: String::new(),
+        color: [shading::DEFAULT_ALBEDO[0], shading::DEFAULT_ALBEDO[1], shading::DEFAULT_ALBEDO[2], 1.0],
+        texture: None,
+        alpha_cutoff: None,
+    };
 }
 
 #[derive(Clone)]
@@ -134,81 +170,110 @@ pub struct ModelInfo {
     pub geometry: bool,
 }
 
+/// How a model is read. The default skips textures.
+#[derive(Default)]
 pub struct LoadOptions {
     /// Textures are scaled down to fit this many pixels on their longest side; 0 skips textures.
     pub max_texture: u32,
 }
 
-/// Longest side of the textures loaded for thumbnails. A model fills at most 192 pixels, so more
-/// texture detail would only be averaged away.
-pub const THUMB_TEXTURE: u32 = 256;
+/// A format's reader: the file's bytes, the file itself (for what it refers to beside it, such as
+/// textures), and how to read it.
+type Parse = fn(&[u8], &Path, &LoadOptions) -> Result<Model, ModelError>;
+
+/// The formats read, by extension. A new format is a reader and a line here (and its extension
+/// in `asset`).
+const FORMATS: [(&[&str], Parse); 6] = [
+    (&["fbx", "obj"], fbx::parse),
+    (&["gltf", "glb"], gltf::parse),
+    (&["stl"], stl::parse),
+    (&["ply"], ply::parse),
+    (&["3ds"], three_ds::parse),
+    (&["dae"], collada::parse),
+];
 
 /// Models with more triangles than this aren't loaded. A vertex is 48 bytes and a faceted STL has
 /// three per triangle, so this keeps one model under about 600 MB with a thumbnail made on every
 /// core at once. The largest model in the test library has 151,000.
-pub const MAX_TRIANGLES: u64 = 4_000_000;
+const MAX_TRIANGLES: u64 = 4_000_000;
 
-fn check_triangle_count(triangles: u64) -> Result<(), String> {
+/// Why a model can't be shown. The message is what the user reads, and the thumbnail cache keeps
+/// it with the failure, so a message doesn't change.
+#[derive(Debug, thiserror::Error)]
+pub enum ModelError {
+    #[error("{0}")]
+    Read(#[from] std::io::Error),
+    /// What the XML reader found wrong with a Collada file.
+    #[error("Collada: {0}")]
+    Collada(#[from] roxmltree::Error),
+    /// What the glTF reader found wrong.
+    #[error("glTF: {0}")]
+    Gltf(#[from] ::gltf::Error),
+    #[error("Blender files can't be read without Blender, only their saved preview")]
+    Blender,
+    #[error("unsupported model format .{0}")]
+    Unsupported(String),
+    #[error(
+        "too many triangles to preview: {:.1} million (the limit is {} million)",
+        *.0 as f64 / 1e6,
+        MAX_TRIANGLES / 1_000_000
+    )]
+    TooManyTriangles(u64),
+    #[error("there are no meshes in this file")]
+    NoMeshes,
+    /// Nothing was read, and this is why what the file has was left out.
+    #[error("{0}")]
+    Skipped(&'static str),
+    /// Triangles were read, but none has a position that can be drawn.
+    #[error("there are no triangles to draw")]
+    NoTriangles,
+    /// What a format's reader found wrong: a damaged file, or one stored in a way it can't read.
+    #[error("{0}")]
+    Unreadable(String),
+}
+
+impl From<String> for ModelError {
+    fn from(message: String) -> Self {
+        Self::Unreadable(message)
+    }
+}
+
+impl From<&str> for ModelError {
+    fn from(message: &str) -> Self {
+        Self::Unreadable(message.to_owned())
+    }
+}
+
+/// `Builder::finish` checks the count it was given; a reader checks first too where it would
+/// otherwise read or make this much.
+fn check_triangle_count(triangles: u64) -> Result<(), ModelError> {
     if triangles > MAX_TRIANGLES {
-        let millions = triangles as f64 / 1e6;
-        return Err(format!("too many triangles to preview: {millions:.1} million (the limit is 4 million)"));
+        return Err(ModelError::TooManyTriangles(triangles));
     }
     Ok(())
 }
 
 /// Reads a model file. Returns an error for .blend files, whose geometry can't be read without
-/// Blender (see `thumbnail` and `blend::read_preview` for their saved picture).
-pub fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
-    match extension(path).as_str() {
-        "fbx" | "obj" => fbx::load(path, options),
-        "gltf" | "glb" => gltf::load(path, options),
-        "stl" => stl::load(path),
-        "ply" => ply::load(path, options),
-        "3ds" => three_ds::load(path, options),
-        "dae" => collada::load(path, options),
-        "blend" => Err("Blender files can't be read without Blender, only their saved preview".into()),
-        other => Err(format!("unsupported model format .{other}")),
+/// Blender (see `blend::read_preview` for their saved picture).
+pub fn load(path: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
+    let extension = extension(path);
+    if extension == "blend" {
+        return Err(ModelError::Blender);
     }
+    let Some(&(_, parse)) = FORMATS.iter().find(|(extensions, _)| extensions.contains(&extension.as_str())) else {
+        return Err(ModelError::Unsupported(extension));
+    };
+    let bytes = std::fs::read(path)?;
+    parse(&bytes, path, options)
 }
 
-/// The grid thumbnail of a model file, `THUMB_MAX` square with a transparent background, and
-/// what's in the file. For .blend files it's the picture Blender saved, cropped to what's drawn
-/// (`blend::crop_to_content`) and scaled to fit.
-///
-/// Renders have `src_w` and `src_h` set to 0: they weren't scaled from a picture of known size.
-pub fn thumbnail(path: &Path, resizer: &mut fr::Resizer) -> Result<(ThumbPixels, ModelInfo), String> {
-    if extension(path) == "blend" {
-        let preview = blend::read_preview(path)?;
-        let (w, h, rgba) = blend::crop_to_content(&preview);
-        let mut pixels = fit_picture(w, h, rgba, THUMB_MAX, resizer)?;
-        (pixels.src_w, pixels.src_h) = (preview.width, preview.height);
-        let info = ModelInfo { format: preview.format, ..ModelInfo::default() };
-        return Ok((pixels, info));
-    }
-    let model = load(path, &LoadOptions { max_texture: THUMB_TEXTURE })?;
-    let rgba = raster::render_thumbnail(&model, THUMB_MAX);
-    Ok((ThumbPixels { w: THUMB_MAX, h: THUMB_MAX, src_w: 0, src_h: 0, rgba }, model.info))
+/// The folder a model file is in, where what it refers to (textures, an OBJ's .mtl) is looked for.
+fn folder(file: &Path) -> &Path {
+    file.parent().unwrap_or(Path::new("."))
 }
 
 fn extension(path: &Path) -> String {
     path.extension().and_then(|ext| ext.to_str()).unwrap_or("").to_ascii_lowercase()
-}
-
-/// Scales a picture up or down so its longer side is `max`.
-fn fit_picture(w: u32, h: u32, rgba: Vec<u8>, max: u32, resizer: &mut fr::Resizer) -> Result<ThumbPixels, String> {
-    if w == 0 || h == 0 {
-        return Err("the saved preview has no pixels".into());
-    }
-    let scale = max as f64 / w.max(h) as f64;
-    let (fit_w, fit_h) = (((w as f64 * scale).round() as u32).max(1), ((h as f64 * scale).round() as u32).max(1));
-    if (fit_w, fit_h) == (w, h) {
-        return Ok(ThumbPixels { w, h, src_w: w, src_h: h, rgba });
-    }
-    let src = fr::images::Image::from_vec_u8(w, h, rgba, fr::PixelType::U8x4).map_err(|err| err.to_string())?;
-    let mut dst = fr::images::Image::new(fit_w, fit_h, fr::PixelType::U8x4);
-    let options = fr::ResizeOptions::new().resize_alg(fr::ResizeAlg::Convolution(fr::FilterType::CatmullRom));
-    resizer.resize(&src, &mut dst, &options).map_err(|err| err.to_string())?;
-    Ok(ThumbPixels { w: fit_w, h: fit_h, src_w: w, src_h: h, rgba: dst.into_vec() })
 }
 
 /// Display colour (sRGB-encoded, as FBX, MTL and 3DS files store material colours) to linear.
@@ -224,6 +289,12 @@ pub fn linear_to_srgb(c: f32) -> f32 {
 /// the model's front (-Y in Z-up tools) ends up facing +Z.
 fn z_up_to_y_up(p: [f32; 3]) -> [f32; 3] {
     [p[0], p[2], -p[1]]
+}
+
+/// Most formats count v up from the bottom of the picture; ours counts down from the top (glTF's
+/// convention).
+fn flip_v([u, v]: [f32; 2]) -> [f32; 2] {
+    [u, 1.0 - v]
 }
 
 /// File references in glTF and Collada are URIs, which escape spaces and more as %XX.
@@ -246,260 +317,15 @@ fn percent_decode(uri: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// A material's base-colour texture, as a loader found it.
-#[derive(Clone, Copy)]
-enum Slot {
-    None,
-    Missing,
-    /// `cutout`: the texture's alpha is a mask to cut holes with (see `textures::Decoded`).
-    Found {
-        index: u32,
-        cutout: bool,
-    },
-}
-
-/// What a loader has read so far: vertices already in model space, triangles grouped by material.
-#[derive(Default)]
-struct Builder {
-    vertices: Vec<Vertex>,
-    /// Triangle indices into `vertices`, one list per material.
-    triangles: Vec<Vec<u32>>,
-    materials: Vec<Material>,
-    textures: Vec<Texture>,
-    /// Lazily made materials for geometry without one: [clay, white under vertex colours].
-    defaults: [Option<u32>; 2],
-    /// Materials made here rather than read from the file, left out of `ModelInfo::materials`.
-    made_up: Vec<u32>,
-    bones: Vec<[[f32; 3]; 2]>,
-    meshes: u32,
-    missing_textures: u32,
-    /// The file's own vertex count, when it counts differently from us.
-    source_vertices: Option<u64>,
-    animations: Vec<(String, f32)>,
-    /// Triangles offered to `add_triangles`, kept or not.
-    added_triangles: u64,
-}
-
-impl Builder {
-    fn add_material(&mut self, material: Material) -> u32 {
-        self.materials.push(material);
-        self.triangles.push(Vec::new());
-        (self.materials.len() - 1) as u32
-    }
-
-    /// A material with a linear `color` and its texture as `texture_slot` gave it. If the colour
-    /// was only white under a missing texture, clay is used instead: a pure white model shows no
-    /// shape.
-    fn material(&mut self, name: String, color: [f32; 4], texture: Slot) -> u32 {
-        let (texture, alpha_cutoff, color) = match texture {
-            Slot::None => (None, None, color),
-            Slot::Found { index, cutout } => (Some(index), cutout.then_some(0.5), color),
-            Slot::Missing => {
-                let white = color[..3].iter().all(|&c| c > 0.95);
-                let [r, g, b] = shading::DEFAULT_ALBEDO;
-                (None, None, if white { [r, g, b, color[3]] } else { color })
-            }
-        };
-        self.add_material(Material { name, color, texture, alpha_cutoff })
-    }
-
-    /// Adds a texture a loader decoded, or counts it as missing. Loaders keep the slot for each
-    /// texture they've seen, so a shared texture is added and counted once.
-    fn texture_slot(&mut self, decoded: Option<&textures::Decoded>) -> Slot {
-        let Some(decoded) = decoded else {
-            self.missing_textures += 1;
-            return Slot::Missing;
-        };
-        self.textures.push(Texture {
-            name: decoded.name.clone(),
-            width: decoded.width,
-            height: decoded.height,
-            rgba: decoded.rgba.clone(),
-        });
-        Slot::Found { index: (self.textures.len() - 1) as u32, cutout: decoded.cutout }
-    }
-
-    /// The material for geometry the file gives none: clay, or white when vertex colours carry the
-    /// colour.
-    fn default_material(&mut self, vertex_colors: bool) -> u32 {
-        let slot = usize::from(vertex_colors);
-        if let Some(index) = self.defaults[slot] {
-            return index;
-        }
-        let [r, g, b] = shading::DEFAULT_ALBEDO;
-        let color = if vertex_colors { [1.0; 4] } else { [r, g, b, 1.0] };
-        let index = self.add_material(Material { name: String::new(), color, texture: None, alpha_cutoff: None });
-        self.defaults[slot] = Some(index);
-        self.made_up.push(index);
-        index
-    }
-
-    /// A white material wearing a texture the file doesn't name (`textures::companion`).
-    fn companion_material(&mut self, texture: Slot) -> u32 {
-        let index = self.material(String::new(), [1.0; 4], texture);
-        self.made_up.push(index);
-        index
-    }
-
-    /// Appends vertices; returns the index of the first, for `add_triangles`.
-    fn add_vertices(&mut self, vertices: &[Vertex]) -> u32 {
-        let base = self.vertices.len() as u32;
-        // Past the triangle limit nothing more is kept; `finish` fails.
-        if self.added_triangles <= MAX_TRIANGLES {
-            self.vertices.extend_from_slice(vertices);
-        }
-        base
-    }
-
-    /// Adds triangles drawn with `material`; `indices` count from `base`. Past `MAX_TRIANGLES`
-    /// they're dropped and `finish` fails.
-    fn add_triangles(&mut self, material: u32, base: u32, indices: &[u32]) {
-        self.added_triangles += (indices.len() / 3) as u64;
-        if self.added_triangles > MAX_TRIANGLES {
-            return;
-        }
-        let list = &mut self.triangles[material as usize];
-        list.extend(indices.iter().map(|&index| base.saturating_add(index)));
-    }
-
-    fn triangle_count(&self) -> usize {
-        self.triangles.iter().map(|list| list.len() / 3).sum()
-    }
-
-    /// Checks and packs everything into a `Model`. Triangles touching a vertex whose position
-    /// isn't a finite number are dropped; other broken attributes get neutral values.
-    fn finish(mut self, format: impl Into<String>) -> Result<Model, String> {
-        check_triangle_count(self.added_triangles)?;
-        let mut bad = vec![false; self.vertices.len()];
-        for (vertex, bad) in self.vertices.iter_mut().zip(&mut bad) {
-            *bad = !vertex.position.iter().all(|c| c.is_finite());
-            if !vertex.normal.iter().all(|c| c.is_finite()) {
-                vertex.normal = [0.0; 3];
-            }
-            if !vertex.uv.iter().all(|c| c.is_finite()) {
-                vertex.uv = [0.0; 2];
-            }
-            if !vertex.color.iter().all(|c| c.is_finite()) {
-                vertex.color = [1.0; 4];
-            }
-        }
-        let mut indices = Vec::with_capacity(self.triangle_count() * 3);
-        let mut parts = Vec::new();
-        for (material, list) in self.triangles.iter().enumerate() {
-            let first = indices.len();
-            for triangle in list.as_chunks::<3>().0 {
-                if triangle.iter().all(|&index| bad.get(index as usize) == Some(&false)) {
-                    indices.extend_from_slice(triangle);
-                }
-            }
-            if indices.len() > first {
-                let count = (indices.len() - first) as u32;
-                parts.push(Part { first: first as u32, count, material: material as u32 });
-            }
-        }
-        let mut bounds = Bounds::EMPTY;
-        for &index in &indices {
-            bounds.add(self.vertices[index as usize].position);
-        }
-        self.bones.retain(|segment| segment.iter().flatten().all(|c| c.is_finite()));
-        if indices.is_empty() {
-            for &[a, b] in &self.bones {
-                bounds.add(a);
-                bounds.add(b);
-            }
-        } else {
-            self.bones.clear();
-        }
-        if indices.is_empty() && self.bones.is_empty() {
-            return Err("there are no triangles to draw".into());
-        }
-
-        let used_materials = parts.iter().filter(|part| !self.made_up.contains(&part.material)).count() as u32;
-        let info = ModelInfo {
-            format: format.into(),
-            vertices: self.source_vertices.unwrap_or(self.vertices.len() as u64),
-            triangles: (indices.len() / 3) as u64,
-            meshes: self.meshes,
-            materials: used_materials,
-            textures: self.textures.len() as u32,
-            missing_textures: self.missing_textures,
-            size: bounds.size(),
-            animations: self.animations,
-            geometry: !indices.is_empty(),
-        };
-        Ok(Model {
-            vertices: self.vertices,
-            indices,
-            parts,
-            materials: self.materials,
-            textures: self.textures,
-            bones: self.bones,
-            bounds,
-            info,
-        })
-    }
-}
-
 #[cfg(test)]
 mod test_files {
-    //! Scratch folders for loader tests that need real files (external buffers, textures).
+    //! Small things for the loader tests: a texture, a vertex.
 
-    use std::path::PathBuf;
+    use super::Vertex;
 
-    pub struct TempDir(pub PathBuf);
-
-    impl TempDir {
-        pub fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("asset_browser_{name}_{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).expect("create test folder");
-            Self(dir)
-        }
-
-        pub fn write(&self, name: &str, bytes: &[u8]) -> PathBuf {
-            let path = self.0.join(name);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).expect("create test subfolder");
-            }
-            std::fs::write(&path, bytes).expect("write test file");
-            path
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    /// Damaged copies of a good file, for parsers to survive: cut short at many points, and with
-    /// bytes overwritten at random (a fixed seed, so a failure repeats).
-    pub fn damaged(original: &[u8], copies: usize) -> Vec<Vec<u8>> {
-        let mut state = 0x9e37_79b9_7f4a_7c15u64;
-        let mut random = move || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
-        let mut out: Vec<Vec<u8>> =
-            (0..=original.len()).step_by(original.len() / 64 + 1).map(|len| original[..len].to_vec()).collect();
-        for _ in 0..copies {
-            let mut copy = original.to_vec();
-            for _ in 0..1 + random() % 4 {
-                let at = (random() % copy.len().max(1) as u64) as usize;
-                if let Some(byte) = copy.get_mut(at) {
-                    // Mostly extreme values, which find overflows; sometimes anything.
-                    *byte = match random() % 3 {
-                        0 => 0xff,
-                        1 => 0x00,
-                        _ => random() as u8,
-                    };
-                }
-            }
-            out.push(copy);
-        }
-        out
+    /// A vertex at `position`, facing +Z, white.
+    pub fn vertex(position: [f32; 3]) -> Vertex {
+        Vertex { position, normal: [0.0, 0.0, 1.0], uv: [0.0; 2], color: [1.0; 4] }
     }
 
     /// A 2 × 2 PNG: red, green / blue, white.
@@ -520,78 +346,50 @@ mod test_files {
 
 #[cfg(test)]
 mod tests {
+    use super::builder::Builder;
+    use super::test_files::vertex;
     use super::*;
+    use crate::asset::AssetKind;
 
-    fn vertex(position: [f32; 3]) -> Vertex {
-        Vertex { position, normal: [0.0, 0.0, 1.0], uv: [0.0; 2], color: [1.0; 4] }
+    #[test]
+    fn every_format_read_is_a_model_in_the_library() {
+        for extension in FORMATS.iter().flat_map(|(extensions, _)| *extensions) {
+            assert_eq!(AssetKind::from_extension(extension), Some(AssetKind::Model), ".{extension}");
+        }
     }
 
     #[test]
-    fn builder_groups_by_material_and_drops_broken_triangles() {
+    fn edges_count_a_shared_side_once() {
+        // A square of two triangles: four sides and the diagonal.
+        let corners = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]];
         let mut builder = Builder::default();
-        let red = builder.add_material(Material {
-            name: "red".into(),
-            color: [1.0, 0.0, 0.0, 1.0],
-            texture: None,
-            alpha_cutoff: None,
-        });
         let clay = builder.default_material(false);
-        let base = builder.add_vertices(&[
-            vertex([0.0, 0.0, 0.0]),
-            vertex([1.0, 0.0, 0.0]),
-            vertex([0.0, 1.0, 0.0]),
-            vertex([f32::NAN, 0.0, 0.0]),
-            vertex([0.0, 0.0, 2.0]),
-        ]);
-        builder.add_triangles(clay, base, &[0, 1, 2]);
-        builder.add_triangles(red, base, &[0, 2, 4, 0, 1, 3, 0, 1, 9]);
-        builder.add_triangles(clay, base, &[1, 2, 4]);
-        let model = builder.finish("test").unwrap();
-        assert_eq!(model.indices, vec![0, 2, 4, 0, 1, 2, 1, 2, 4]);
-        assert_eq!(
-            model.parts,
-            vec![Part { first: 0, count: 3, material: red }, Part { first: 3, count: 6, material: clay }]
-        );
-        assert_eq!(model.bounds, Bounds { min: [0.0; 3], max: [1.0, 1.0, 2.0] });
-        assert_eq!(model.info.triangles, 3);
-        assert_eq!(model.info.materials, 1, "the clay default isn't one of the file's materials");
-        assert!(model.info.geometry);
+        let base = builder.add_vertices(&corners.map(vertex));
+        builder.add_triangles(clay, base, &[0, 1, 2, 0, 2, 3]);
+        let model = builder.finish("square").unwrap();
+        let mut edges: Vec<[u32; 2]> =
+            model.edges().as_chunks::<2>().0.iter().map(|&[a, b]| [a.min(b), a.max(b)]).collect();
+        edges.sort_unstable();
+        assert_eq!(edges, [[0, 1], [0, 2], [0, 3], [1, 2], [2, 3]]);
     }
 
     #[test]
-    fn builder_refuses_too_many_triangles() {
-        let mut builder = Builder::default();
-        let material = builder.default_material(false);
-        let base = builder.add_vertices(&[vertex([0.0; 3]), vertex([1.0, 0.0, 0.0]), vertex([0.0, 1.0, 0.0])]);
-        let many = [0u32, 1, 2].repeat((MAX_TRIANGLES / 2 + 1) as usize);
-        builder.add_triangles(material, base, &many);
-        builder.add_triangles(material, base, &many);
-        assert_eq!(builder.vertices.len(), 3);
-        assert!(builder.finish("test").err().unwrap().contains("too many triangles"));
-    }
-
-    #[test]
-    fn builder_needs_something_to_draw() {
-        assert!(Builder::default().finish("test").is_err());
-        let mut bones = Builder::default();
-        bones.bones.push([[0.0; 3], [0.0, 1.0, 0.0]]);
-        let model = bones.finish("test").unwrap();
-        assert!(!model.info.geometry);
-        assert_eq!(model.info.size, [0.0, 1.0, 0.0]);
-    }
-
-    #[test]
-    fn missing_texture_on_white_falls_back_to_clay() {
-        let mut builder = Builder::default();
-        let slot = builder.texture_slot(None);
-        let index = builder.material("m".into(), [1.0; 4], slot);
-        let material = &builder.materials[index as usize];
-        let [r, g, b] = shading::DEFAULT_ALBEDO;
-        assert_eq!(material.color, [r, g, b, 1.0]);
-        assert_eq!(material.alpha_cutoff, None);
-        assert_eq!(builder.missing_textures, 1);
-        let red = builder.material("red".into(), [1.0, 0.0, 0.0, 1.0], slot);
-        assert_eq!(builder.materials[red as usize].color, [1.0, 0.0, 0.0, 1.0], "colour kept");
+    fn messages_stay_as_the_thumbnail_cache_keeps_them() {
+        let messages = [
+            (ModelError::Blender, "Blender files can't be read without Blender, only their saved preview"),
+            (ModelError::Unsupported("xyz".into()), "unsupported model format .xyz"),
+            (
+                ModelError::TooManyTriangles(5_300_000),
+                "too many triangles to preview: 5.3 million (the limit is 4 million)",
+            ),
+            (ModelError::NoMeshes, "there are no meshes in this file"),
+            (ModelError::NoTriangles, "there are no triangles to draw"),
+            (ModelError::Skipped("only lines"), "only lines"),
+            (ModelError::from("not a 3DS file"), "not a 3DS file"),
+        ];
+        for (error, message) in messages {
+            assert_eq!(error.to_string(), message);
+        }
     }
 
     #[test]

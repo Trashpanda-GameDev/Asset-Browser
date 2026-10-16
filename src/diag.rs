@@ -3,15 +3,12 @@
 
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-static LAST: Mutex<Option<String>> = Mutex::new(None);
+use crate::paths;
 
-pub fn log_path() -> PathBuf {
-    crate::db::default_path().with_file_name("asset_browser.log")
-}
+static LAST: Mutex<Option<String>> = Mutex::new(None);
 
 /// Records an error that the app carries on after.
 pub fn report(context: &str, error: impl std::fmt::Display) {
@@ -42,12 +39,14 @@ pub fn install_panic_hook() {
 }
 
 fn append(line: &str) {
-    let path = log_path();
+    let path = paths::log_file();
     if let Some(dir) = path.parent() {
+        // The log can't report failing to write itself: opening the file below fails too.
         let _ = std::fs::create_dir_all(dir);
     }
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        // Nowhere left to tell.
         let _ = writeln!(file, "[unix {secs}] {line}");
     }
 }

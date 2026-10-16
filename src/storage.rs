@@ -1,17 +1,21 @@
 //! What the app keeps on disk, how big each part is, and clearing parts of it (Settings → Storage).
 //!
-//! The cache (`db::default_path`) is all made again as it's needed: thumbnails and model pictures,
+//! The cache (`paths::cache_file`) is all made again as it's needed: thumbnails and model pictures,
 //! waveforms, model facts, the folder index, and the window's settings. The user data file
-//! (`db::user_data_path`) holds what can't be: favorites, collections and categories, sprite sheet
+//! (`paths::user_data_file`) holds what can't be: favorites, collections and categories, sprite sheet
 //! choices and the library's folders.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use crossbeam_channel::Receiver;
 
 use rusqlite::Connection;
 
-use crate::diag;
+use crate::db::{self, Durability};
+use crate::work::{self, Wake};
+use crate::{diag, paths};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Part {
@@ -102,30 +106,112 @@ pub struct Usage {
     pub parts: HashMap<Part, PartUsage>,
     /// Collections and categories (Favorites isn't counted).
     pub groups: u64,
+    /// The app's log, and the updater's when there is one.
+    pub logs: Vec<LogFile>,
+}
+
+/// A log file and its size, for showing in its folder.
+#[derive(Clone, Debug)]
+pub struct LogFile {
+    pub name: &'static str,
+    pub path: PathBuf,
+    /// `None` when it isn't there (nothing has been logged yet).
+    pub bytes: Option<u64>,
+}
+
+/// Why the files couldn't be measured. The Storage page shows the message.
+#[derive(Debug, thiserror::Error)]
+pub enum StorageError {
+    #[error("measuring couldn't start")]
+    NotStarted,
+    #[error("{}: {error}", .path.display())]
+    File { path: PathBuf, error: FileError },
+}
+
+/// What went wrong measuring one of the files.
+#[derive(Debug, thiserror::Error)]
+pub enum FileError {
+    #[error("opening it: {0}")]
+    Open(rusqlite::Error),
+    #[error("looking for {table}: {error}")]
+    Find { table: &'static str, error: rusqlite::Error },
+    #[error("counting {table}: {error}")]
+    Count { table: &'static str, error: rusqlite::Error },
+}
+
+/// Measuring both files on a thread of its own, and the last measure.
+#[derive(Default)]
+pub struct Measurement {
+    usage: Option<Result<Usage, StorageError>>,
+    job: Option<Receiver<Result<Usage, StorageError>>>,
+}
+
+impl Measurement {
+    /// Starts measuring, unless it's under way or done; `wake` once it's done.
+    pub fn start(&mut self, cache: PathBuf, user: PathBuf, wake: Wake) {
+        if self.usage.is_some() || self.job.is_some() {
+            return;
+        }
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let spawned = work::spawn("measure", move || {
+            // Fails only when the window has closed.
+            let _ = tx.send(measure(&cache, &user));
+            wake();
+        });
+        match spawned {
+            Some(_) => self.job = Some(rx),
+            None => self.usage = Some(Err(StorageError::NotStarted)),
+        }
+    }
+
+    /// Takes in the measure once it's done.
+    pub fn poll(&mut self) {
+        if let Some(job) = &self.job
+            && let Ok(measured) = job.try_recv()
+        {
+            self.usage = Some(measured);
+            self.job = None;
+        }
+    }
+
+    pub fn usage(&self) -> Option<&Result<Usage, StorageError>> {
+        self.usage.as_ref()
+    }
+
+    pub fn is_measuring(&self) -> bool {
+        self.job.is_some()
+    }
+
+    /// The files changed (parts were cleared): they're measured again when next shown.
+    pub fn forget(&mut self) {
+        self.usage = None;
+        self.job = None;
+    }
 }
 
 /// Measures both files. Reads every page of the cache, so it's for a background thread. Every
 /// failure is logged with the file and the step. Sizes that can't be read are left unknown, with
 /// the counts still given; only a file that can't be opened or counted fails.
-pub fn measure(cache: &Path, user: &Path) -> Result<Usage, String> {
-    let mut usage = Usage { cache_file: file_size(cache), user_file: file_size(user), ..Usage::default() };
-    for (path, parts) in [(cache, &Part::CACHE[..]), (user, &Part::USER[..])] {
+pub fn measure(cache: &Path, user: &Path) -> Result<Usage, StorageError> {
+    let mut usage =
+        Usage { cache_file: file_size(cache), user_file: file_size(user), logs: log_files(), ..Usage::default() };
+    let files = [(cache, &Part::CACHE[..], Durability::Cache), (user, &Part::USER[..], Durability::UserData)];
+    for (path, parts, durability) in files {
         if !path.exists() {
             continue;
         }
-        if let Err(err) = measure_file(path, parts, &mut usage) {
-            let message = format!("{}: {err}", path.display());
-            diag::report("Measuring the files", &message);
-            return Err(message);
+        if let Err(error) = measure_file(path, durability, parts, &mut usage) {
+            let error = StorageError::File { path: path.to_path_buf(), error };
+            // The Storage page shows it; the log keeps it.
+            diag::note("Measuring the files", &error);
+            return Err(error);
         }
     }
     Ok(usage)
 }
 
-fn measure_file(path: &Path, parts: &[Part], usage: &mut Usage) -> Result<(), String> {
-    // Opened as the app's other connections are.
-    let conn = Connection::open(path).map_err(|err| format!("opening it: {err}"))?;
-    conn.busy_timeout(Duration::from_secs(10)).map_err(|err| format!("opening it: {err}"))?;
+fn measure_file(path: &Path, durability: Durability, parts: &[Part], usage: &mut Usage) -> Result<(), FileError> {
+    let conn = db::connect(path, durability).map_err(FileError::Open)?;
     // The space each table takes, from SQLite's page statistics, tried three times.
     let mut bytes = None;
     for attempt in 1..=3 {
@@ -154,14 +240,27 @@ fn measure_file(path: &Path, parts: &[Part], usage: &mut Usage) -> Result<(), St
 }
 
 /// A table's rows (those matching `filter`); none if the table hasn't been made yet.
-fn rows(conn: &Connection, table: &str, filter: &str) -> Result<u64, String> {
+fn rows(conn: &Connection, table: &'static str, filter: &str) -> Result<u64, FileError> {
     let count = |sql: &str| conn.query_row(sql, [], |row| row.get::<_, i64>(0)).map(|n| n as u64);
     let exists = count(&format!("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '{table}'"))
-        .map_err(|err| format!("looking for {table}: {err}"))?;
+        .map_err(|error| FileError::Find { table, error })?;
     if exists == 0 {
         return Ok(0);
     }
-    count(&format!("SELECT COUNT(*) FROM {table}{filter}")).map_err(|err| format!("counting {table}: {err}"))
+    count(&format!("SELECT COUNT(*) FROM {table}{filter}")).map_err(|error| FileError::Count { table, error })
+}
+
+/// The app's log, and the updater's when there is one.
+fn log_files() -> Vec<LogFile> {
+    let size = |path: &Path| std::fs::metadata(path).ok().map(|meta| meta.len());
+    let app = paths::log_file();
+    let mut logs = vec![LogFile { name: "App log", bytes: size(&app), path: app }];
+    if let Some(path) = paths::updater_log_file()
+        && let Some(bytes) = size(&path)
+    {
+        logs.push(LogFile { name: "Updater log", path, bytes: Some(bytes) });
+    }
+    logs
 }
 
 fn file_size(path: &Path) -> u64 {
@@ -189,14 +288,15 @@ fn table_bytes(conn: &Connection) -> rusqlite::Result<HashMap<String, u64>> {
 
 /// Empties the cache's `parts`, then rewrites the file without the space they took. On the cache
 /// writer's thread, so no preview is being saved meanwhile; readers carry on.
-pub fn clear_cache(conn: &mut Connection, parts: &[Part]) -> rusqlite::Result<()> {
-    let tx = conn.transaction()?;
-    for part in parts.iter().filter(|part| !part.in_user_data()) {
-        for table in part.tables() {
-            tx.execute(&format!("DELETE FROM {table}"), [])?;
+pub fn clear_cache(conn: &Connection, parts: &[Part]) -> rusqlite::Result<()> {
+    db::in_transaction(conn, |tx| {
+        for part in parts.iter().filter(|part| !part.in_user_data()) {
+            for table in part.tables() {
+                tx.execute(&format!("DELETE FROM {table}"), [])?;
+            }
         }
-    }
-    tx.commit()?;
+        Ok(())
+    })?;
     conn.execute_batch("VACUUM")?;
     // The log took the whole rewritten file; this hands that space back too.
     conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
@@ -205,25 +305,26 @@ pub fn clear_cache(conn: &mut Connection, parts: &[Part]) -> rusqlite::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{self, CacheWrite, StoredThumb};
+    use crate::test_support::TempDir;
+    use rusqlite::OptionalExtension;
 
     #[test]
     fn measures_and_clears_parts_of_the_cache() {
-        let dir = std::env::temp_dir().join(format!("asset_browser_storage_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let temp = TempDir::new("storage");
+        let dir = temp.path();
         let path = dir.join("library.sqlite");
-        let mut conn = db::open(&path).unwrap();
-        let thumb = || StoredThumb {
-            w: 64,
-            h: 64,
-            src_w: 64,
-            src_h: 64,
-            format: db::FORMAT_RAW_RGBA,
-            data: vec![7; 64 * 64 * 4],
-        };
-        let writes: Vec<CacheWrite> = (0..200).map(|key| CacheWrite::Thumb(key, thumb())).collect();
-        db::put_cache(&mut conn, &writes).unwrap();
+        let conn = db::open_cache(&path).unwrap();
+        // 200 thumbnails of 64 × 64 pixels, as raw RGBA (the cache's format 3).
+        db::in_transaction(&conn, |tx| {
+            let mut insert = tx.prepare(
+                "INSERT INTO thumbs(key, w, h, src_w, src_h, format, data) VALUES(?1, 64, 64, 64, 64, 3, ?2)",
+            )?;
+            for key in 0..200 {
+                insert.execute(rusqlite::params![key, vec![7u8; 64 * 64 * 4]])?;
+            }
+            Ok(())
+        })
+        .unwrap();
         db::set_setting(&conn, "ui.mode", "all").unwrap();
 
         let usage = measure(&path, &dir.join("user.sqlite")).unwrap();
@@ -234,7 +335,7 @@ mod tests {
         assert_eq!(usage.parts[&Part::Settings].count, 1);
         assert!(usage.cache_file >= bytes);
 
-        clear_cache(&mut conn, &[Part::Thumbnails]).unwrap();
+        clear_cache(&conn, &[Part::Thumbnails]).unwrap();
         let after = measure(&path, &dir.join("user.sqlite")).unwrap();
         assert_eq!(after.parts[&Part::Thumbnails].count, 0);
         assert_eq!(after.parts[&Part::Settings].count, 1, "the rest is kept");
@@ -244,7 +345,39 @@ mod tests {
             usage.cache_file,
             after.cache_file
         );
-        drop(conn);
-        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The parts name tables that other modules make: renaming one there has to rename it here.
+    #[test]
+    fn a_failed_measure_says_which_file_and_step() {
+        let no_rows = || rusqlite::Error::QueryReturnedNoRows;
+        let error = StorageError::File {
+            path: PathBuf::from("cache.sqlite"),
+            error: FileError::Count { table: "thumbs", error: no_rows() },
+        };
+        assert_eq!(error.to_string(), format!("cache.sqlite: counting thumbs: {}", no_rows()));
+        assert_eq!(StorageError::NotStarted.to_string(), "measuring couldn't start");
+    }
+
+    #[test]
+    fn every_part_names_tables_its_file_has() {
+        let temp = TempDir::new("storage_tables");
+        let cache = db::open_cache(&temp.path().join("library.sqlite")).unwrap();
+        let user_path = temp.path().join("user.sqlite");
+        let user = db::open_user_data(&user_path).unwrap();
+        drop(crate::groups::Groups::open(&user_path));
+        drop(crate::sheets::SheetStore::open(&user_path));
+        for part in Part::CACHE.into_iter().chain(Part::USER) {
+            let conn = if part.in_user_data() { &user } else { &cache };
+            for table in part.tables() {
+                let found: Option<String> = conn
+                    .query_row("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |row| {
+                        row.get(0)
+                    })
+                    .optional()
+                    .unwrap();
+                assert!(found.is_some(), "{part:?}'s table {table} isn't made by its store");
+            }
+        }
     }
 }

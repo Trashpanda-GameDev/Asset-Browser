@@ -1,27 +1,36 @@
 //! Asset Browser: a fast, native browser for folders of game assets.
 //!
-//! The app (`src/main.rs`) and the benchmark (`src/bin/bench.rs`) share these modules.
+//! The app (`src/main.rs`) and the tools (`src/bin/`) share these modules. Only what the tools use is `pub`, so the
+//! compiler finds anything nothing uses.
 
 pub mod animated;
 pub mod app;
 pub mod asset;
 pub mod audio;
-pub mod changelog;
+pub(crate) mod changelog;
 pub mod db;
-pub mod deletion;
-pub mod detail;
+pub(crate) mod deletion;
+pub(crate) mod detail;
 pub mod diag;
+pub mod folder_index;
 pub mod groups;
-pub mod keymap;
+pub mod imaging;
 pub mod library;
-pub mod memory;
+pub(crate) mod memory;
 pub mod model;
-pub mod platform;
-pub mod psd_composite;
+pub mod paths;
+pub(crate) mod platform;
+pub(crate) mod playback;
+pub(crate) mod preview_key;
+pub(crate) mod rescan;
 pub mod scan;
-pub mod sheets;
-pub mod storage;
+pub(crate) mod sheets;
+pub(crate) mod storage;
 pub mod thumbs;
 pub mod ui;
-pub mod updates;
-pub mod watch;
+pub(crate) mod updates;
+pub(crate) mod watch;
+pub mod work;
+
+#[cfg(test)]
+mod test_support;

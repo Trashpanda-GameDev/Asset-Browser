@@ -14,18 +14,15 @@ use ::gltf::accessor::{DataType, Dimensions};
 use ::gltf::mesh::Mode;
 use ::gltf::{Accessor, Document, Semantic};
 
-use super::geometry::{self, IDENTITY, Mat4, NormalMatrix, normalize};
+use super::builder::{Builder, CUTOUT_ALPHA, Slot};
+use super::geometry::{self, IDENTITY, Mat4, NormalMatrix};
 use super::textures::{self, Alpha};
-use super::{Builder, LoadOptions, Model, Slot, Vertex, percent_decode};
+use super::vector::normalize;
+use super::{LoadOptions, Model, ModelError, Vertex, percent_decode};
 
-pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
-    load_bytes(&bytes, path.parent().unwrap_or(Path::new(".")), options)
-}
-
-fn load_bytes(bytes: &[u8], dir: &Path, options: &LoadOptions) -> Result<Model, String> {
-    let ::gltf::Gltf { document, mut blob } =
-        ::gltf::Gltf::from_slice_without_validation(bytes).map_err(|err| format!("glTF: {err}"))?;
+pub(super) fn parse(bytes: &[u8], file: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
+    let dir = super::folder(file);
+    let ::gltf::Gltf { document, mut blob } = ::gltf::Gltf::from_slice_without_validation(bytes)?;
     check(&document)?;
     let buffers: Vec<Option<Vec<u8>>> = document
         .buffers()
@@ -47,33 +44,32 @@ fn load_bytes(bytes: &[u8], dir: &Path, options: &LoadOptions) -> Result<Model, 
         builder: Builder::default(),
         materials: HashMap::new(),
         images: HashMap::new(),
-        skipped: None,
     };
     for node in document.nodes() {
         if let (Some(mesh), Some(matrix)) = (node.mesh(), world[node.index()]) {
             reader.add_mesh(&node, &mesh, &matrix, &world);
         }
     }
-    let skipped = reader.skipped;
     let mut builder = reader.builder;
-
-    if builder.triangle_count() == 0 {
-        // Only a skeleton: draw the bones between joints.
-        for skin in document.skins() {
-            let joints: Vec<usize> = skin.joints().map(|joint| joint.index()).collect();
-            for joint in skin.joints() {
-                for child in joint.children().filter(|child| joints.contains(&child.index())) {
-                    if let (Some(a), Some(b)) = (world[joint.index()], world[child.index()]) {
-                        builder.bones.push([translation(&a), translation(&b)]);
-                    }
+    // The bones between joints, drawn when the file is only a skeleton.
+    for skin in document.skins() {
+        let joints: Vec<usize> = skin.joints().map(|joint| joint.index()).collect();
+        for joint in skin.joints() {
+            for child in joint.children().filter(|child| joints.contains(&child.index())) {
+                if let (Some(a), Some(b)) = (world[joint.index()], world[child.index()]) {
+                    builder.add_bone(translation(&a), translation(&b));
                 }
             }
         }
-        if builder.bones.is_empty() {
-            return Err(skipped.unwrap_or("there are no meshes in this file").into());
-        }
     }
-    builder.animations = document
+    builder.set_animations(animations(&document));
+    let format = if bytes.starts_with(b"glTF") { "glTF 2.0 (GLB)" } else { "glTF 2.0" };
+    builder.finish(format)
+}
+
+/// Each animation's name (or its number) and length in seconds.
+fn animations(document: &Document) -> Vec<(String, f32)> {
+    document
         .animations()
         .map(|animation| {
             let name = animation.name().map_or_else(|| format!("Animation {}", animation.index() + 1), str::to_owned);
@@ -84,15 +80,13 @@ fn load_bytes(bytes: &[u8], dir: &Path, options: &LoadOptions) -> Result<Model, 
                 .fold(0.0, f64::max);
             (name, seconds as f32)
         })
-        .collect();
-    let format = if bytes.starts_with(b"glTF") { "glTF 2.0 (GLB)" } else { "glTF 2.0" };
-    builder.finish(format)
+        .collect()
 }
 
 /// The crate's validation, minus what doesn't stop us drawing: positions missing their min/max
 /// (bounds are computed from the data anyway), required extensions the crate doesn't know, and
 /// textures whose picture only an extension gives (KTX2), which are then counted as missing.
-fn check(document: &Document) -> Result<(), String> {
+fn check(document: &Document) -> Result<(), ModelError> {
     use ::gltf::json::validation::Validate;
     let root = document.as_json();
     // The crate's own check of POSITION indexes the accessors before checking the index.
@@ -110,11 +104,11 @@ fn check(document: &Document) -> Result<(), String> {
         !(path.ends_with(".min") || path.ends_with(".max") || path.starts_with("extensionsRequired") || textureless)
     });
     if let Some((path, error)) = errors.first() {
-        return Err(format!("glTF: {error} at {path}"));
+        return Err(format!("glTF: {error} at {path}").into());
     }
     for extension in document.extensions_required() {
         if matches!(extension, "KHR_draco_mesh_compression" | "EXT_meshopt_compression") {
-            return Err(format!("glTF: the geometry is compressed with {extension}, which isn't supported"));
+            return Err(format!("glTF: the geometry is compressed with {extension}, which isn't supported").into());
         }
     }
     Ok(())
@@ -124,15 +118,14 @@ fn check(document: &Document) -> Result<(), String> {
 /// default scene, else the first, else every node that isn't another's child.
 fn world_matrices(document: &Document) -> Vec<Option<Mat4>> {
     let count = document.nodes().count();
-    let roots: Vec<::gltf::Node> = match document.default_scene().or_else(|| document.scenes().next()) {
-        Some(scene) => scene.nodes().collect(),
-        None => {
-            let mut is_child = vec![false; count];
-            for child in document.nodes().flat_map(|node| node.children()) {
-                is_child[child.index()] = true;
-            }
-            document.nodes().filter(|node| !is_child[node.index()]).collect()
+    let roots: Vec<::gltf::Node> = if let Some(scene) = document.default_scene().or_else(|| document.scenes().next()) {
+        scene.nodes().collect()
+    } else {
+        let mut is_child = vec![false; count];
+        for child in document.nodes().flat_map(|node| node.children()) {
+            is_child[child.index()] = true;
         }
+        document.nodes().filter(|node| !is_child[node.index()]).collect()
     };
     let mut world = vec![None; count];
     let mut stack: Vec<(::gltf::Node, Mat4)> = roots.into_iter().map(|node| (node, IDENTITY)).collect();
@@ -163,8 +156,6 @@ struct Reader<'a> {
     materials: HashMap<usize, u32>,
     /// glTF image index (or `usize::MAX` for a texture with no picture) → what became of it.
     images: HashMap<usize, Slot>,
-    /// Why geometry was left out, for the error when nothing is left.
-    skipped: Option<&'static str>,
 }
 
 /// The data of each buffer, for the crate's readers.
@@ -182,11 +173,11 @@ impl<'a> Reader<'a> {
         let mut drawn = false;
         for primitive in mesh.primitives() {
             if !matches!(primitive.mode(), Mode::Triangles | Mode::TriangleStrip | Mode::TriangleFan) {
-                self.skipped = Some("there are only points or lines, no surfaces to draw");
+                self.builder.skip("there are only points or lines, no surfaces to draw");
                 continue;
             }
             let Some(vertices) = self.read_vertices(&primitive, world, skin.as_deref()) else {
-                self.skipped = Some("the geometry is stored in a way this app can't read");
+                self.builder.skip("the geometry is stored in a way this app can't read");
                 continue;
             };
             let count = vertices.len() as u32;
@@ -199,20 +190,18 @@ impl<'a> Reader<'a> {
                     }
                 }
                 Some(_) => {
-                    self.skipped = Some("the geometry is stored in a way this app can't read");
+                    self.builder.skip("the geometry is stored in a way this app can't read");
                     continue;
                 }
                 None => (0..count).collect(),
             };
             let mut triangles = triangle_list(primitive.mode(), &indices);
             triangles.retain(|triangle| triangle.iter().all(|&index| index < count));
-            if skin.is_none() && geometry::determinant(world) < 0.0 {
-                // Mirrored: wind the other way so front faces stay counter-clockwise.
-                for triangle in &mut triangles {
-                    triangle.swap(1, 2);
-                }
-            }
             let mut indices: Vec<u32> = triangles.into_iter().flatten().collect();
+            // Skinned vertices are placed by their joints, not by this node.
+            if skin.is_none() && geometry::determinant(world) < 0.0 {
+                geometry::flip_winding(&mut indices);
+            }
             let mut vertices = vertices;
             if !self.has_normals(&primitive) {
                 // The spec asks for flat shading when normals are missing.
@@ -225,7 +214,7 @@ impl<'a> Reader<'a> {
             drawn = true;
         }
         if drawn {
-            self.builder.meshes += 1;
+            self.builder.count_mesh();
         }
     }
 
@@ -360,12 +349,13 @@ impl<'a> Reader<'a> {
         let name = material.name().unwrap_or_default().to_owned();
         let ours = self.builder.material(name, pbr.base_color_factor(), slot);
         // glTF says how alpha is used, rather than leaving it to be guessed from the texture.
-        self.builder.materials[ours as usize].alpha_cutoff = match material.alpha_mode() {
+        let cutoff = match material.alpha_mode() {
             ::gltf::material::AlphaMode::Opaque => None,
-            ::gltf::material::AlphaMode::Mask => Some(material.alpha_cutoff().unwrap_or(0.5)),
+            ::gltf::material::AlphaMode::Mask => Some(material.alpha_cutoff().unwrap_or(CUTOUT_ALPHA)),
             // Blending isn't drawn; a cutout keeps foliage and hair cards readable.
-            ::gltf::material::AlphaMode::Blend => Some(0.5),
+            ::gltf::material::AlphaMode::Blend => Some(CUTOUT_ALPHA),
         };
+        self.builder.set_alpha_cutoff(ours, cutoff);
         self.materials.insert(index, ours);
         ours
     }
@@ -429,19 +419,12 @@ fn blend_joints(joints: &[Mat4], indices: [u16; 4], weights: [f32; 4]) -> Option
     Some(out)
 }
 
-/// Strips and fans as a plain triangle list. Strips alternate their winding, so every other
-/// triangle is turned back.
+/// Strips and fans as a plain triangle list.
 fn triangle_list(mode: Mode, indices: &[u32]) -> Vec<[u32; 3]> {
+    let corners = |triangle: [usize; 3]| triangle.map(|k| indices[k]);
     match mode {
-        Mode::TriangleStrip => indices
-            .windows(3)
-            .enumerate()
-            .map(|(i, w)| if i % 2 == 0 { [w[0], w[1], w[2]] } else { [w[1], w[0], w[2]] })
-            .collect(),
-        Mode::TriangleFan => match indices.split_first() {
-            Some((&center, rest)) => rest.windows(2).map(|w| [center, w[0], w[1]]).collect(),
-            None => Vec::new(),
-        },
+        Mode::TriangleStrip => geometry::strip(indices.len()).map(corners).collect(),
+        Mode::TriangleFan => geometry::fan(indices.len()).map(corners).collect(),
         _ => indices.as_chunks::<3>().0.to_vec(),
     }
 }
@@ -490,7 +473,9 @@ fn base64(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::test_files::{TempDir, png_2x2};
+    use crate::model::test_files::png_2x2;
+    use crate::model::vector;
+    use crate::test_support::TempDir;
 
     /// A unit quad in the XY plane facing +Z, as two triangles: positions, then normals, then UVs,
     /// then u16 indices.
@@ -583,7 +568,7 @@ mod tests {
             r#","material":0"#,
             r#","materials":[{"name":"Paint","pbrMetallicRoughness":{"baseColorFactor":[0.5,0.25,1,1]}}]"#,
         );
-        let model = load_bytes(&glb(&json, &quad_buffer()), Path::new("."), &options()).unwrap();
+        let model = parse(&glb(&json, &quad_buffer()), Path::new("test.glb"), &options()).unwrap();
         assert_eq!(model.info.format, "glTF 2.0 (GLB)");
         assert_eq!((model.info.triangles, model.info.vertices, model.info.meshes), (2, 4, 1));
         assert_eq!(model.bounds.min, [10.0, 0.0, 0.0], "node translation applied");
@@ -607,7 +592,7 @@ mod tests {
             "textures":[{{"source":0}}],"images":[{image}]"#
         );
         let json = quad_json(&buffer, "", r#","material":0"#, &extra);
-        let model = load_bytes(json.as_bytes(), Path::new("."), &options()).unwrap();
+        let model = parse(json.as_bytes(), Path::new("test.glb"), &options()).unwrap();
         assert_eq!(model.info.format, "glTF 2.0");
         assert_eq!((model.info.textures, model.info.missing_textures), (1, 0));
         assert_eq!(model.materials[0].texture, Some(0));
@@ -624,7 +609,7 @@ mod tests {
             "textures":[{"source":0}],"images":[{"uri":"wood.png"},{"uri":"gone.png"}]"#;
         let json = quad_json(r#"{"byteLength":140,"uri":"quad%20data.bin"}"#, "", r#","material":0"#, extra);
         let path = dir.write("quad.gltf", json.as_bytes());
-        let model = load(&path, &options()).unwrap();
+        let model = crate::model::load(&path, &options()).unwrap();
         assert_eq!(model.info.triangles, 2);
         assert_eq!(model.info.textures, 1);
     }
@@ -645,7 +630,7 @@ mod tests {
                     r#"{"buffer":0,"byteOffset":128,"byteLength":12}]"#,
                     &format!(r#"{{"buffer":0,"byteOffset":128,"byteLength":12}},{{"buffer":0,"byteOffset":140,"byteLength":{}}}]"#, png.len()),
                 );
-            let model = load_bytes(&glb(&json, &bin), Path::new("."), &options()).unwrap();
+            let model = parse(&glb(&json, &bin), Path::new("test.glb"), &options()).unwrap();
             assert_eq!((model.info.textures, model.info.missing_textures), (textures, missing), "material {material}");
         }
     }
@@ -653,19 +638,52 @@ mod tests {
     #[test]
     fn mirrored_node_keeps_front_faces_counter_clockwise() {
         let json = quad_json(r#"{"byteLength":140}"#, r#","scale":[-1,1,1]"#, "", "");
-        let model = load_bytes(&glb(&json, &quad_buffer()), Path::new("."), &options()).unwrap();
+        let model = parse(&glb(&json, &quad_buffer()), Path::new("test.glb"), &options()).unwrap();
         for triangle in model.indices.as_chunks::<3>().0 {
             let [a, b, c] = triangle.map(|i| model.vertices[i as usize]);
-            let winding = geometry::cross(geometry::sub(b.position, a.position), geometry::sub(c.position, a.position));
-            assert!(geometry::dot(winding, a.normal) > 0.0, "winding and normal agree");
+            let winding = vector::cross(vector::sub(b.position, a.position), vector::sub(c.position, a.position));
+            assert!(vector::dot(winding, a.normal) > 0.0, "winding and normal agree");
         }
         assert_eq!(model.bounds.min[0], -1.0);
     }
 
     #[test]
+    fn skinned_mesh_is_placed_by_its_joints_not_its_node() {
+        // Every vertex on joint 0 with all its weight; the joint is node 1, moved up 5. The
+        // mesh's own node is moved 10 to the side, which glTF says a skinned mesh ignores.
+        let mut bin = quad_buffer();
+        bin.extend([0u8; 16]);
+        for _ in 0..4 {
+            bin.extend([1.0f32, 0.0, 0.0, 0.0].iter().flat_map(|w| w.to_le_bytes()));
+        }
+        let json = r#"{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1]}],
+            "nodes":[{"mesh":0,"skin":0,"translation":[10,0,0]},{"translation":[0,5,0]}],
+            "skins":[{"joints":[1]}],
+            "meshes":[{"primitives":[{"attributes":
+                {"POSITION":0,"NORMAL":1,"TEXCOORD_0":2,"JOINTS_0":4,"WEIGHTS_0":5},"indices":3}]}],
+            "buffers":[{"byteLength":220}],
+            "bufferViews":[
+                {"buffer":0,"byteOffset":0,"byteLength":48},
+                {"buffer":0,"byteOffset":48,"byteLength":48},
+                {"buffer":0,"byteOffset":96,"byteLength":32},
+                {"buffer":0,"byteOffset":128,"byteLength":12},
+                {"buffer":0,"byteOffset":140,"byteLength":16},
+                {"buffer":0,"byteOffset":156,"byteLength":64}],
+            "accessors":[
+                {"bufferView":0,"componentType":5126,"count":4,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},
+                {"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"},
+                {"bufferView":2,"componentType":5126,"count":4,"type":"VEC2"},
+                {"bufferView":3,"componentType":5123,"count":6,"type":"SCALAR"},
+                {"bufferView":4,"componentType":5121,"count":4,"type":"VEC4"},
+                {"bufferView":5,"componentType":5126,"count":4,"type":"VEC4"}]}"#;
+        let model = parse(&glb(json, &bin), Path::new("test.glb"), &options()).unwrap();
+        assert_eq!((model.bounds.min, model.bounds.max), ([0.0, 5.0, 0.0], [1.0, 6.0, 0.0]));
+    }
+
+    #[test]
     fn missing_normals_give_flat_shading() {
         let json = quad_json(r#"{"byteLength":140}"#, "", "", "").replace(r#""NORMAL":1,"#, "");
-        let model = load_bytes(&glb(&json, &quad_buffer()), Path::new("."), &options()).unwrap();
+        let model = parse(&glb(&json, &quad_buffer()), Path::new("test.glb"), &options()).unwrap();
         assert_eq!(model.vertices.len(), 6);
         assert!(model.vertices.iter().all(|v| v.normal == [0.0, 0.0, 1.0]));
     }
@@ -674,19 +692,22 @@ mod tests {
     fn broken_files_are_errors_not_panics() {
         // Buffer shorter than the accessors claim.
         let json = quad_json(r#"{"byteLength":140}"#, "", "", "");
-        let err = load_bytes(&glb(&json, &quad_buffer()[..100]), Path::new("."), &options()).err().unwrap();
+        let err =
+            parse(&glb(&json, &quad_buffer()[..100]), Path::new("test.glb"), &options()).err().unwrap().to_string();
         assert!(err.contains("can't read") || err.contains("no meshes"), "{err}");
         // Out-of-range index.
         let json = quad_json(r#"{"byteLength":140}"#, "", r#","material":7"#, "");
-        assert!(load_bytes(&glb(&json, &quad_buffer()), Path::new("."), &options()).is_err());
-        assert!(load_bytes(b"{ not json", Path::new("."), &options()).is_err());
+        assert!(parse(&glb(&json, &quad_buffer()), Path::new("test.glb"), &options()).is_err());
+        let not_json = parse(b"{ not json", Path::new("test.glb"), &options()).err().unwrap();
+        assert!(matches!(not_json, ModelError::Gltf(_)), "the glTF reader's own error");
+        assert!(not_json.to_string().starts_with("glTF: "), "{not_json}");
         let draco =
             quad_json(r#"{"byteLength":140}"#, "", "", r#","extensionsRequired":["KHR_draco_mesh_compression"]"#);
-        let err = load_bytes(&glb(&draco, &quad_buffer()), Path::new("."), &options()).err().unwrap();
+        let err = parse(&glb(&draco, &quad_buffer()), Path::new("test.glb"), &options()).err().unwrap().to_string();
         assert!(err.contains("KHR_draco_mesh_compression"), "{err}");
         // Extensions the crate doesn't know don't stop a file that draws without them.
         let unknown = quad_json(r#"{"byteLength":140}"#, "", "", r#","extensionsRequired":["KHR_texture_transform"]"#);
-        assert!(load_bytes(&glb(&unknown, &quad_buffer()), Path::new("."), &options()).is_ok());
+        assert!(parse(&glb(&unknown, &quad_buffer()), Path::new("test.glb"), &options()).is_ok());
     }
 
     #[test]
@@ -697,15 +718,15 @@ mod tests {
             r#","material":0"#,
             r#","materials":[{"pbrMetallicRoughness":{"baseColorFactor":[1,0,0,1]}}]"#,
         );
-        for bytes in crate::model::test_files::damaged(&glb(&json, &quad_buffer()), 400) {
-            let _ = load_bytes(&bytes, Path::new("."), &options());
+        for bytes in crate::test_support::damaged(&glb(&json, &quad_buffer()), 400) {
+            let _ = parse(&bytes, Path::new("test.glb"), &options());
         }
         // Valid JSON with different numbers: every digit in turn made 9, and 0.
         for (at, _) in json.char_indices().filter(|(_, c)| c.is_ascii_digit()) {
             for digit in ["9", "0"] {
                 let mut changed = json.clone();
                 changed.replace_range(at..at + 1, digit);
-                let _ = load_bytes(&glb(&changed, &quad_buffer()), Path::new("."), &options());
+                let _ = parse(&glb(&changed, &quad_buffer()), Path::new("test.glb"), &options());
             }
         }
         // Counts and offsets at their limits.
@@ -715,7 +736,7 @@ mod tests {
             (r#""byteOffset":48"#, r#""byteOffset":18446744073709551615"#),
             (r#""byteLength":12"#, r#""byteLength":18446744073709551615"#),
         ] {
-            let _ = load_bytes(&glb(&json.replace(from, to), &quad_buffer()), Path::new("."), &options());
+            let _ = parse(&glb(&json.replace(from, to), &quad_buffer()), Path::new("test.glb"), &options());
         }
     }
 
@@ -746,7 +767,7 @@ mod tests {
                 {"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[2.5]},
                 {"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[1]}]"#,
         );
-        let model = load_bytes(&glb(&json, &quad_buffer()), Path::new("."), &options()).unwrap();
+        let model = parse(&glb(&json, &quad_buffer()), Path::new("test.glb"), &options()).unwrap();
         assert_eq!(model.info.animations, vec![("Wave".to_owned(), 2.5), ("Animation 2".to_owned(), 1.0)]);
     }
 }

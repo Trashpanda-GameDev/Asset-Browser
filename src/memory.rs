@@ -16,7 +16,7 @@ const THUMBNAIL_BYTES: u64 = 192 * 192 * 4;
 /// What each part may hold under a limit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shares {
-    /// Bytes of pictures being decoded for thumbnails at once (`thumbs::set_decode_limit`).
+    /// Bytes of pictures being decoded for thumbnails at once (`imaging::set_decode_limit`).
     pub decoding: u64,
     /// Thumbnails kept on the graphics card (`Previews::set_max_textures`).
     pub thumbnails: usize,
@@ -47,7 +47,7 @@ pub fn shares(limit_mb: u64) -> Shares {
 /// thumbnails on the graphics card are the window's to trim: it gets the shares back.
 pub fn apply(limit_mb: u64) -> Shares {
     let shares = shares(limit_mb);
-    crate::thumbs::set_decode_limit(shares.decoding);
+    crate::imaging::set_decode_limit(shares.decoding);
     crate::audio::set_read_ahead_budget(shares.read_ahead);
     crate::model::set_texture_cache_budget(shares.model_textures);
     crate::animated::set_max_pixels(shares.animation_pixels);

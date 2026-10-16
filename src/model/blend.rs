@@ -19,6 +19,8 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 
+use super::ModelError;
+
 /// Stops a damaged length from asking for gigabytes; Blender's previews are 128 or 256 square.
 const MAX_SIDE: i64 = 2048;
 
@@ -31,10 +33,10 @@ pub struct Preview {
     pub format: String,
 }
 
-pub fn read_preview(path: &Path) -> Result<Preview, String> {
-    let file = File::open(path).map_err(|err| err.to_string())?;
+pub fn read_preview(path: &Path) -> Result<Preview, ModelError> {
+    let file = File::open(path)?;
     let mut reader = BufReader::with_capacity(64 * 1024, file);
-    let magic: [u8; 4] = match reader.fill_buf().map_err(|err| err.to_string())? {
+    let magic: [u8; 4] = match reader.fill_buf()? {
         [a, b, c, d, ..] => [*a, *b, *c, *d],
         _ => return Err("not a Blender file".into()),
     };
@@ -45,7 +47,7 @@ pub fn read_preview(path: &Path) -> Result<Preview, String> {
     }
 }
 
-fn read_from(mut r: impl Read) -> Result<Preview, String> {
+fn read_from(mut r: impl Read) -> Result<Preview, ModelError> {
     let mut header = [0u8; 12];
     r.read_exact(&mut header).map_err(|_| "not a Blender file")?;
     if &header[..7] != b"BLENDER" {
@@ -90,7 +92,7 @@ fn read_from(mut r: impl Read) -> Result<Preview, String> {
             b"GLOB" | b"DATA" | b"DNA1" | b"ENDB" => return Err("this Blender file has no saved preview".into()),
             _ => {
                 let len = u64::try_from(len).map_err(|_| "damaged Blender file")?;
-                let skipped = io::copy(&mut (&mut r).take(len), &mut io::sink()).map_err(|err| err.to_string())?;
+                let skipped = io::copy(&mut (&mut r).take(len), &mut io::sink())?;
                 if skipped < len {
                     return Err("this Blender file has no saved preview".into());
                 }
@@ -104,23 +106,33 @@ fn read_from(mut r: impl Read) -> Result<Preview, String> {
 /// and the picture cropped to a square around what's drawn (zooming in at most 3×), so the object
 /// fills the thumbnail as the renders do. A picture with a background is left whole.
 pub fn crop_to_content(preview: &Preview) -> (u32, u32, Vec<u8>) {
+    /// Alpha below this is a clear pixel.
+    const CLEAR: u8 = 16;
+    /// The camera's frame: within this many pixels of the edges, a faint dark band (alpha below
+    /// `FRAME_ALPHA`) and a dashed line of pure black pixels.
+    const FRAME: usize = 3;
+    const FRAME_ALPHA: u8 = 160;
+    /// Room left around what's drawn, as a share of its size.
+    const MARGIN: f32 = 1.12;
+    /// The crop is at least this share of the picture's side: zooming in at most this much.
+    const MAX_ZOOM: usize = 3;
+
     let (w, h) = (preview.width as usize, preview.height as usize);
     let whole = (preview.width, preview.height, preview.rgba.clone());
     let alpha = |x: usize, y: usize| preview.rgba[(y * w + x) * 4 + 3];
-    let clear = preview.rgba.as_chunks::<4>().0.iter().filter(|p| p[3] < 16).count();
+    let clear = preview.rgba.as_chunks::<4>().0.iter().filter(|p| p[3] < CLEAR).count();
     if w < 8 || h < 8 || clear * 4 < w * h {
         return whole;
     }
-    // The frame, within 3 pixels of the edges, is a faint dark band and a dashed line of pure
-    // black pixels.
     let frame = |x: usize, y: usize| {
         let at = (y * w + x) * 4;
-        (x < 3 || y < 3 || x >= w - 3 || y >= h - 3) && (alpha(x, y) < 160 || preview.rgba[at..at + 3] == [0, 0, 0])
+        let edge = x < FRAME || y < FRAME || x >= w - FRAME || y >= h - FRAME;
+        edge && (alpha(x, y) < FRAME_ALPHA || preview.rgba[at..at + 3] == [0, 0, 0])
     };
     let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
     for y in 0..h {
         for x in 0..w {
-            if alpha(x, y) >= 16 && !frame(x, y) {
+            if alpha(x, y) >= CLEAR && !frame(x, y) {
                 (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
             }
         }
@@ -128,7 +140,7 @@ pub fn crop_to_content(preview: &Preview) -> (u32, u32, Vec<u8>) {
     if x0 > x1 {
         return whole;
     }
-    let side = (((x1 - x0 + 1).max(y1 - y0 + 1) as f32 * 1.12).ceil() as usize).max(w.min(h) / 3);
+    let side = (((x1 - x0 + 1).max(y1 - y0 + 1) as f32 * MARGIN).ceil() as usize).max(w.min(h) / MAX_ZOOM);
     let (cx, cy) = ((x0 + x1 + 1) as isize, (y0 + y1 + 1) as isize);
     let (left, top) = ((cx - side as isize) / 2, (cy - side as isize) / 2);
     let mut rgba = vec![0u8; side * side * 4];
@@ -142,7 +154,7 @@ pub fn crop_to_content(preview: &Preview) -> (u32, u32, Vec<u8>) {
     (side as u32, side as u32, rgba)
 }
 
-fn read_test(r: &mut impl Read, layout: &Layout, len: i64) -> Result<(u32, u32, Vec<u8>), String> {
+fn read_test(r: &mut impl Read, layout: &Layout, len: i64) -> Result<(u32, u32, Vec<u8>), ModelError> {
     let mut size = [0u8; 8];
     r.read_exact(&mut size).map_err(|_| "the saved preview is cut short")?;
     let width = layout.i32(&size[..4]) as i64;
@@ -158,7 +170,7 @@ fn read_test(r: &mut impl Read, layout: &Layout, len: i64) -> Result<(u32, u32, 
     Ok((width as u32, height as u32, rgba))
 }
 
-fn digits(bytes: &[u8]) -> Result<u32, String> {
+fn digits(bytes: &[u8]) -> Result<u32, ModelError> {
     if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
         return Err("unknown Blender file header".into());
     }
@@ -238,7 +250,7 @@ impl<R: Read> Read for ZstdFrames<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::test_files::TempDir;
+    use crate::test_support::TempDir;
     use std::io::Write;
 
     /// A legacy .blend: header, a REND block, the TEST preview (2 × 2, bottom row first), GLOB.
@@ -320,7 +332,7 @@ mod tests {
         assert_eq!(preview.format, "Blender 5.0");
         // A format version we don't know is a clear error, not garbage.
         out[10..12].copy_from_slice(b"02");
-        assert!(read_from(&out[..]).err().unwrap().contains("newer"));
+        assert!(read_from(&out[..]).err().unwrap().to_string().contains("newer"));
     }
 
     #[test]
@@ -355,7 +367,7 @@ mod tests {
     #[test]
     fn damaged_files_never_panic() {
         for original in [legacy(4, false), legacy(8, true)] {
-            for bytes in crate::model::test_files::damaged(&original, 300) {
+            for bytes in crate::test_support::damaged(&original, 300) {
                 if let Ok(preview) = read_from(&bytes[..]) {
                     let _ = crop_to_content(&preview);
                 }
@@ -369,7 +381,7 @@ mod tests {
         // Rename the TEST block: no preview before GLOB.
         let at = data.windows(4).position(|w| w == b"TEST").unwrap();
         data[at..at + 4].copy_from_slice(b"XXXX");
-        assert_eq!(read_from(&data[..]).err().unwrap(), "this Blender file has no saved preview");
+        assert_eq!(read_from(&data[..]).err().unwrap().to_string(), "this Blender file has no saved preview");
         assert!(read_from(&b"PK\x03\x04 not blender"[..]).is_err());
         assert!(read_from(&data[..20]).is_err());
         assert_eq!(version_name(402), "4.2");

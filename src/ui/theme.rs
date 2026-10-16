@@ -1,10 +1,14 @@
 //! The look: a quiet dark palette with one accent colour, the OS's own UI font, Phosphor icons,
 //! rounder and roomier widgets than egui's defaults.
 
+use crate::platform::SystemFonts;
 use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Shadow, Stroke, TextStyle,
     Visuals, style::ScrollStyle, vec2,
 };
+
+use crate::asset::AssetKind;
+use crate::groups;
 
 /// Behind the browsed assets.
 pub const BG: Color32 = Color32::from_rgb(15, 16, 19);
@@ -26,8 +30,8 @@ pub const ACCENT_SOFT: Color32 = Color32::from_rgba_unmultiplied_const(108, 140,
 pub const ERROR: Color32 = Color32::from_rgb(244, 102, 102);
 /// The favourite star.
 pub const FAVORITE: Color32 = Color32::from_rgb(250, 199, 72);
-/// What categories are coloured with, in the order new ones take them (`groups::CATEGORY_COLORS`).
-pub const CATEGORY_COLORS: [Color32; 8] = [
+/// What categories are coloured with, in the order new ones take them.
+pub const CATEGORY_COLORS: [Color32; groups::CATEGORY_COLOR_COUNT as usize] = [
     Color32::from_rgb(239, 99, 99),
     Color32::from_rgb(242, 153, 74),
     Color32::from_rgb(236, 201, 75),
@@ -37,6 +41,24 @@ pub const CATEGORY_COLORS: [Color32; 8] = [
     Color32::from_rgb(167, 123, 240),
     Color32::from_rgb(236, 112, 178),
 ];
+
+/// Each kind of asset's colour: tile accents, waveforms, badges.
+pub fn kind_color(kind: AssetKind) -> Color32 {
+    match kind {
+        AssetKind::Image => Color32::from_rgb(92, 168, 255),
+        AssetKind::Audio => Color32::from_rgb(255, 176, 72),
+        AssetKind::Model => Color32::from_rgb(84, 210, 146),
+    }
+}
+
+/// Each kind of asset's icon.
+pub fn kind_icon(kind: AssetKind) -> &'static str {
+    match kind {
+        AssetKind::Image => egui_phosphor::regular::IMAGE,
+        AssetKind::Audio => egui_phosphor::regular::WAVEFORM,
+        AssetKind::Model => egui_phosphor::regular::CUBE,
+    }
+}
 
 pub const RADIUS: u8 = 6;
 pub const CARD_RADIUS: u8 = 8;
@@ -54,6 +76,70 @@ pub fn color_title_bar(ctx: &egui::Context, window: &impl raw_window_handle::Has
     crate::platform::color_title_bar(window, rgb(PANEL), rgb(TEXT_WEAK), rgb(BORDER));
 }
 
+/// Text and icons on the accent colour.
+pub const ON_ACCENT: Color32 = Color32::WHITE;
+/// Where a sound is, over its waveform.
+pub const PLAYHEAD: Color32 = Color32::WHITE;
+/// The toast's background, a step above the panels.
+pub const TOAST: Color32 = Color32::from_rgb(40, 43, 51);
+/// A 3D model's tile, top to bottom: a soft studio backdrop, lighter at the top.
+pub const MODEL_TILE: [Color32; 2] = [Color32::from_rgb(44, 47, 56), Color32::from_rgb(29, 31, 37)];
+/// The top of the 3D view's backdrop, which darkens to `WELL` at the bottom.
+pub const VIEWPORT_TOP: Color32 = Color32::from_rgb(34, 37, 44);
+/// The checkerboard behind transparency: its light and dark squares.
+pub const CHECKER: [Color32; 2] = [Color32::from_gray(46), Color32::from_gray(36)];
+/// Over the app, behind a window such as the settings.
+pub const SCRIM: Color32 = Color32::from_black_alpha(150);
+
+/// Dark shades behind what's drawn over pictures, so it reads on light ones too.
+pub mod shade {
+    use eframe::egui::Color32;
+
+    pub const BADGE: Color32 = Color32::from_black_alpha(150);
+    /// The pane's buttons over a picture or model.
+    pub const OVERLAY: Color32 = Color32::from_black_alpha(140);
+    /// Around a category's dot on a tile.
+    pub const DOT: Color32 = Color32::from_black_alpha(120);
+    /// Around a tile's star: a favourite's, and the outline to click.
+    pub const FAVORITE: Color32 = Color32::from_black_alpha(110);
+    pub const STAR: Color32 = Color32::from_black_alpha(80);
+}
+
+/// Text sizes, smallest first: every size the window draws text and icons at, named for what
+/// they're used for. New text takes the one that fits rather than a number of its own.
+pub mod size {
+    /// File types on tiles, section labels in capitals.
+    pub const TINY: f32 = 10.5;
+    /// Print over pictures and waveforms (hints, times), and small marks such as × and ›.
+    pub const FINE: f32 = 11.0;
+    /// Notes, counts beside names, the status bar (egui's Small).
+    pub const SMALL: f32 = 11.5;
+    /// The toolbar's counts, chips, the sound's clock; spinners beside small text.
+    pub const CAPTION: f32 = 12.0;
+    /// Names under tiles, the list's columns, properties, a question's note (egui's Monospace).
+    pub const LABEL: f32 = 12.5;
+    /// Most text: rows, menus, buttons (egui's Body and Button).
+    pub const BODY: f32 = 13.0;
+    /// Where the user is, in the toolbar; What's new's notes.
+    pub const EMPHASIS: f32 = 13.5;
+    /// Small headings, a view's empty message; icons beside text, spinners beside headings.
+    pub const MEDIUM: f32 = 14.0;
+    /// A question's title, a release's name, the empty pane's; icons on their own.
+    pub const TITLE: f32 = 15.0;
+    /// The pane's asset name, the settings' version, the welcome, icons in buttons.
+    pub const LARGE: f32 = 16.0;
+    /// egui's Heading.
+    pub const HEADING: f32 = 17.0;
+    /// The hint over the window while a folder is dragged onto it.
+    pub const BANNER: f32 = 18.0;
+    /// A window's title: the settings' page, What's new.
+    pub const WINDOW_TITLE: f32 = 20.0;
+    /// The icon in the empty preview pane.
+    pub const PANE_ICON: f32 = 40.0;
+    /// The icon in the welcome, before any folder is added.
+    pub const WELCOME_ICON: f32 = 44.0;
+}
+
 /// The family used for titles.
 pub fn semibold() -> FontFamily {
     FontFamily::Name("semibold".into())
@@ -64,16 +150,17 @@ pub fn filled_icons() -> FontFamily {
     FontFamily::Name("phosphor-fill".into())
 }
 
-pub fn apply(ctx: &egui::Context) {
-    ctx.set_fonts(fonts());
+/// Sets the look up, with the OS's own UI fonts where they were found.
+pub fn apply(ctx: &egui::Context, system: SystemFonts) {
+    ctx.set_fonts(fonts(system));
     ctx.all_styles_mut(|style| {
         style.visuals = visuals();
         style.text_styles = [
-            (TextStyle::Small, FontId::proportional(11.5)),
-            (TextStyle::Body, FontId::proportional(13.0)),
-            (TextStyle::Button, FontId::proportional(13.0)),
-            (TextStyle::Heading, FontId::new(17.0, semibold())),
-            (TextStyle::Monospace, FontId::monospace(12.5)),
+            (TextStyle::Small, FontId::proportional(size::SMALL)),
+            (TextStyle::Body, FontId::proportional(size::BODY)),
+            (TextStyle::Button, FontId::proportional(size::BODY)),
+            (TextStyle::Heading, FontId::new(size::HEADING, semibold())),
+            (TextStyle::Monospace, FontId::monospace(size::LABEL)),
         ]
         .into();
         let spacing = &mut style.spacing;
@@ -148,23 +235,23 @@ fn visuals() -> Visuals {
 
 /// The OS's UI font when it can be found (Segoe UI on Windows), with Phosphor icons mixed in, and
 /// egui's own fonts behind them for anything else (emoji, rare scripts).
-fn fonts() -> FontDefinitions {
+fn fonts(system: SystemFonts) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let proportional = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let mut semibold_family = proportional.clone();
 
-    if let Some(bytes) = read_first(REGULAR_FONTS) {
+    if let Some(bytes) = system.regular {
         fonts.font_data.insert("ui".into(), FontData::from_owned(bytes).into());
         if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
             family.insert(0, "ui".into());
         }
         semibold_family.insert(0, "ui".into());
     }
-    if let Some(bytes) = read_first(SEMIBOLD_FONTS) {
+    if let Some(bytes) = system.semibold {
         fonts.font_data.insert("ui-semibold".into(), FontData::from_owned(bytes).into());
         semibold_family.insert(0, "ui-semibold".into());
     }
-    if let Some(bytes) = read_first(MONOSPACE_FONTS) {
+    if let Some(bytes) = system.monospace {
         fonts.font_data.insert("ui-mono".into(), FontData::from_owned(bytes).into());
         if let Some(family) = fonts.families.get_mut(&FontFamily::Monospace) {
             family.insert(0, "ui-mono".into());
@@ -176,39 +263,4 @@ fn fonts() -> FontDefinitions {
     semibold_family.insert(semibold_family.len().min(1), "phosphor".into());
     fonts.families.insert(semibold(), semibold_family);
     fonts
-}
-
-#[cfg(windows)]
-const REGULAR_FONTS: &[&str] = &["%WINDIR%/Fonts/segoeui.ttf"];
-#[cfg(windows)]
-const SEMIBOLD_FONTS: &[&str] = &["%WINDIR%/Fonts/seguisb.ttf", "%WINDIR%/Fonts/segoeuib.ttf"];
-#[cfg(windows)]
-const MONOSPACE_FONTS: &[&str] = &["%WINDIR%/Fonts/CascadiaMono.ttf", "%WINDIR%/Fonts/consola.ttf"];
-
-#[cfg(target_os = "macos")]
-const REGULAR_FONTS: &[&str] = &["/System/Library/Fonts/SFNS.ttf"];
-#[cfg(target_os = "macos")]
-const SEMIBOLD_FONTS: &[&str] = &[];
-#[cfg(target_os = "macos")]
-const MONOSPACE_FONTS: &[&str] = &["/System/Library/Fonts/SFNSMono.ttf"];
-
-#[cfg(not(any(windows, target_os = "macos")))]
-const REGULAR_FONTS: &[&str] = &[
-    "/usr/share/fonts/truetype/inter/Inter-Regular.ttf",
-    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-];
-#[cfg(not(any(windows, target_os = "macos")))]
-const SEMIBOLD_FONTS: &[&str] = &[
-    "/usr/share/fonts/truetype/inter/Inter-SemiBold.ttf",
-    "/usr/share/fonts/truetype/noto/NotoSans-SemiBold.ttf",
-    "/usr/share/fonts/noto/NotoSans-SemiBold.ttf",
-];
-#[cfg(not(any(windows, target_os = "macos")))]
-const MONOSPACE_FONTS: &[&str] = &["/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"];
-
-fn read_first(candidates: &[&str]) -> Option<Vec<u8>> {
-    let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_owned());
-    candidates.iter().find_map(|path| std::fs::read(path.replace("%WINDIR%", &windir)).ok())
 }

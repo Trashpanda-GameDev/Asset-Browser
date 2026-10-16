@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use fast_image_resize as fr;
 use image::AnimationDecoder;
 
+use crate::imaging::{PictureError, Pixels, fit_size, shrink};
 use crate::sheets::{Animation, Frame, Sheet, Source};
-use crate::thumbs::{ThumbPixels, fit_size, shrink};
 
 /// The frames picture's longest side, and its pixels at most (16 MP: 64 MB, on the GPU too). The
 /// memory setting can lower the pixels (`set_max_pixels`).
@@ -25,13 +25,29 @@ const MAX_FRAMES: usize = 1000;
 /// Transparent pixels between frames, so drawing one never picks up its neighbour's edge.
 const GUTTER: u32 = 2;
 
+/// Why a GIF's frames couldn't be read.
+#[derive(Debug, thiserror::Error)]
+pub enum GifError {
+    /// `stop` asked to give up.
+    #[error("no longer wanted")]
+    Stopped,
+    #[error("{0}")]
+    Read(#[from] gif::DecodingError),
+    #[error("{0}")]
+    Decode(#[from] image::ImageError),
+    #[error("{0}")]
+    Picture(#[from] PictureError),
+    #[error("a frame came out a different size")]
+    FrameSize,
+}
+
 /// The GIF's frames as a sheet, or `None` when it has only one: a still picture. `stop` is asked
 /// between frames, to give up on a picture that's no longer wanted.
 pub fn load_gif(
     bytes: &[u8],
     resizer: &mut fr::Resizer,
     stop: &dyn Fn() -> bool,
-) -> Result<Option<(ThumbPixels, Sheet)>, String> {
+) -> Result<Option<(Pixels, Sheet)>, GifError> {
     let (width, height, total) = count_frames(bytes)?;
     if total < 2 || width == 0 || height == 0 {
         return Ok(None);
@@ -40,28 +56,29 @@ pub fn load_gif(
     let layout = Layout::plan(width, height, kept as u32, SHEET_PIXELS.load(Ordering::Relaxed));
     let mut rgba = vec![0u8; layout.width as usize * layout.height as usize * 4];
     let mut frames = Vec::with_capacity(kept);
-    let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(|err| err.to_string())?;
+    let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes))?;
     // Each frame comes composited onto the whole canvas, as it's meant to be seen.
     for (index, frame) in decoder.into_frames().take(kept).enumerate() {
         if stop() {
-            return Err("no longer wanted".to_owned());
+            return Err(GifError::Stopped);
         }
         let frame = match frame {
             Ok(frame) => frame,
             // A damaged end still leaves the frames before it.
             Err(_) if frames.len() >= 2 => break,
-            Err(err) => return Err(err.to_string()),
+            Err(err) => return Err(err.into()),
         };
         let (numer, denom) = frame.delay().numer_denom_ms();
         let delay = browser_delay(numer / denom.max(1));
         let picture = frame.into_buffer();
         let (w, h) = picture.dimensions();
-        let small = shrink(w, h, picture.into_raw(), width, height, layout.longest, resizer)?;
+        let picture = Pixels { w, h, src_w: width, src_h: height, rgba: picture.into_raw() };
+        let small = shrink(picture, layout.longest, resizer)?;
         if (small.w, small.h) != (layout.frame_w, layout.frame_h) {
-            return Err("a frame came out a different size".to_owned());
+            return Err(GifError::FrameSize);
         }
         let [x, y] = layout.cell(index as u32);
-        blit(&mut rgba, layout.width, &small.rgba, small.w, small.h, x, y);
+        blit(&mut rgba, layout.width, &small, [x, y]);
         let (frame_w, frame_h) = (layout.frame_w, layout.frame_h);
         frames.push(Frame {
             rect: [x, y, frame_w, frame_h],
@@ -76,16 +93,16 @@ pub fn load_gif(
     }
     let animations = vec![Animation { name: "All frames".to_owned(), frames: (0..frames.len()).collect() }];
     let sheet = Sheet { frames, animations, source: Source::Animated { width, height, total } };
-    let pixels = ThumbPixels { w: layout.width, h: layout.height, src_w: layout.width, src_h: layout.height, rgba };
+    let pixels = Pixels { w: layout.width, h: layout.height, src_w: layout.width, src_h: layout.height, rgba };
     Ok(Some((pixels, sheet)))
 }
 
 /// The canvas size and how many frames, without decoding any (the `gif` crate only reads the
 /// blocks). A damaged end counts the frames before it.
-fn count_frames(bytes: &[u8]) -> Result<(u32, u32, usize), String> {
+fn count_frames(bytes: &[u8]) -> Result<(u32, u32, usize), GifError> {
     let mut options = gif::DecodeOptions::new();
     options.skip_frame_decoding(true);
-    let mut decoder = options.read_info(Cursor::new(bytes)).map_err(|err| err.to_string())?;
+    let mut decoder = options.read_info(Cursor::new(bytes))?;
     let (width, height) = (u32::from(decoder.width()), u32::from(decoder.height()));
     let mut total = 0;
     loop {
@@ -93,7 +110,7 @@ fn count_frames(bytes: &[u8]) -> Result<(u32, u32, usize), String> {
             Ok(Some(_)) => total += 1,
             Ok(None) => break,
             Err(_) if total > 0 => break,
-            Err(err) => return Err(err.to_string()),
+            Err(err) => return Err(err.into()),
         }
     }
     Ok((width, height, total))
@@ -143,12 +160,12 @@ impl Layout {
     }
 }
 
-/// Copies a `w` × `h` frame into the sheet at `x`, `y`.
-fn blit(sheet: &mut [u8], sheet_w: u32, frame: &[u8], w: u32, h: u32, x: u32, y: u32) {
-    let row = w as usize * 4;
-    for line in 0..h as usize {
+/// Copies a frame into the sheet, `sheet_w` pixels wide, with its top left at `x`, `y`.
+fn blit(sheet: &mut [u8], sheet_w: u32, frame: &Pixels, [x, y]: [u32; 2]) {
+    let row = frame.w as usize * 4;
+    for line in 0..frame.h as usize {
         let at = ((y as usize + line) * sheet_w as usize + x as usize) * 4;
-        sheet[at..at + row].copy_from_slice(&frame[line * row..(line + 1) * row]);
+        sheet[at..at + row].copy_from_slice(&frame.rgba[line * row..(line + 1) * row]);
     }
 }
 

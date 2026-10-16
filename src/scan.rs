@@ -4,12 +4,13 @@
 //! lines: one rayon task per directory. On Windows, `DirEntry::metadata` comes from the directory
 //! listing itself, so each file costs no extra system call.
 
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use crate::asset::AssetKind;
+use crate::work;
 
 #[derive(Clone, Debug)]
 pub struct ScannedFile {
@@ -38,17 +39,17 @@ struct Shared {
 pub fn scan(root: &Path) -> ScanResult {
     let start = Instant::now();
     let shared = Shared { files: Mutex::new(Vec::new()), dirs: AtomicUsize::new(0), skipped: AtomicUsize::new(0) };
-    rayon::scope(|scope| walk(scope, root.to_path_buf(), String::new(), &shared));
+    rayon::scope(|scope| walk(scope, root, "", &shared));
     ScanResult {
-        files: shared.files.into_inner().unwrap_or_default(),
+        files: shared.files.into_inner().unwrap_or_else(PoisonError::into_inner),
         dirs_visited: shared.dirs.into_inner(),
         skipped_files: shared.skipped.into_inner(),
         elapsed: start.elapsed(),
     }
 }
 
-fn walk<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, rel: String, shared: &'s Shared) {
-    let Ok(read) = std::fs::read_dir(&dir) else {
+fn walk<'s>(scope: &rayon::Scope<'s>, dir: &Path, rel: &str, shared: &'s Shared) {
+    let Ok(read) = std::fs::read_dir(dir) else {
         return;
     };
     shared.dirs.fetch_add(1, Ordering::Relaxed);
@@ -67,7 +68,7 @@ fn walk<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, rel: String, shared: &'s Sha
         let child_rel = if rel.is_empty() { name.to_owned() } else { format!("{rel}/{name}") };
         if file_type.is_dir() {
             let path = entry.path();
-            scope.spawn(move |scope| walk(scope, path, child_rel, shared));
+            scope.spawn(move |scope| walk(scope, &path, &child_rel, shared));
         } else if file_type.is_file() {
             let kind = Path::new(name).extension().and_then(|ext| ext.to_str()).and_then(AssetKind::from_extension);
             let Some(kind) = kind else {
@@ -85,6 +86,6 @@ fn walk<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, rel: String, shared: &'s Sha
     }
     shared.skipped.fetch_add(skipped, Ordering::Relaxed);
     if !found.is_empty() {
-        shared.files.lock().unwrap().extend(found);
+        work::lock(&shared.files).extend(found);
     }
 }

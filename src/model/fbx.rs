@@ -4,9 +4,10 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::geometry::normalize;
+use super::builder::{Builder, Slot};
 use super::textures::{self, Alpha};
-use super::{Builder, LoadOptions, Model, Slot, Vertex, srgb_to_linear};
+use super::vector::normalize;
+use super::{LoadOptions, Model, ModelError, Vertex, flip_v, srgb_to_linear};
 
 /// ufbx's working memory per file. Only there to stop a corrupt file from exhausting memory: the
 /// largest model in the test library (6 MB) needs a small fraction of it.
@@ -16,11 +17,45 @@ const MEMORY_LIMIT: usize = 1 << 30;
 /// vertex per corner all at once: 3 MB of them.
 const CHUNK_CORNERS: usize = 1 << 16;
 
-pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> {
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+/// An FBX or OBJ file: ufbx reads it from memory, with its name to find an OBJ's .mtl beside it.
+pub(super) fn parse(bytes: &[u8], path: &Path, options: &LoadOptions) -> Result<Model, ModelError> {
     let filename = path.to_string_lossy();
+    let scene = ufbx::load_memory(bytes, load_options(&filename, options)).map_err(|err| describe(&err))?;
+
+    let mesh_nodes: Vec<&ufbx::Node> =
+        scene.nodes.iter().map(|node| &**node).filter(|node| node.mesh.is_some()).collect();
+    let mut reader = Reader {
+        builder: Builder::default(),
+        materials: HashMap::new(),
+        textures: HashMap::new(),
+        model_path: path,
+        model_dir: super::folder(path),
+        max_texture: options.max_texture,
+        texture_files: scene.texture_files.len(),
+        has_uvs: mesh_nodes.iter().any(|node| node.mesh.as_ref().is_some_and(|mesh| mesh.vertex_uv.exists)),
+        companion: None,
+        companion_material: None,
+    };
+    let drawn = drawn_meshes(&mesh_nodes);
+    super::check_triangle_count(drawn.iter().map(|(_, mesh)| mesh.num_triangles as u64).sum())?;
+    let mut source_vertices = 0;
+    for (node, mesh) in drawn {
+        reader.add_mesh(node, mesh)?;
+        source_vertices += mesh.num_vertices as u64;
+    }
+    let mut builder = reader.builder;
+    builder.set_source_vertices(source_vertices);
+    for (parent, child) in bones(&scene) {
+        builder.add_bone(parent, child);
+    }
+    builder.set_animations(animations(&scene));
+    builder.finish(format_name(&scene.metadata))
+}
+
+/// How ufbx is asked to read a file: into our space, within a memory limit, with an OBJ's .mtl.
+fn load_options<'a>(filename: &'a str, options: &LoadOptions) -> ufbx::LoadOpts<'a> {
     let limit = || ufbx::AllocatorOpts { memory_limit: MEMORY_LIMIT, ..Default::default() };
-    let opts = ufbx::LoadOpts {
+    ufbx::LoadOpts {
         temp_allocator: limit(),
         result_allocator: limit(),
         target_axes: ufbx::CoordinateAxes::right_handed_y_up(),
@@ -39,69 +74,50 @@ pub(super) fn load(path: &Path, options: &LoadOptions) -> Result<Model, String> 
         // library's Mixamo files it's turned 90° from its skeleton and showed its side.
         evaluate_skinning: true,
         // Lets ufbx find the .mtl relative to the file, since it reads from memory.
-        filename: filename.as_ref().into(),
+        filename: filename.into(),
         ..Default::default()
-    };
-    let scene = ufbx::load_memory(&bytes, opts).map_err(|err| describe(&err))?;
+    }
+}
 
-    let mesh_nodes: Vec<&ufbx::Node> =
-        scene.nodes.iter().map(|node| &**node).filter(|node| node.mesh.is_some()).collect();
-    let mut reader = Reader {
-        builder: Builder::default(),
-        materials: HashMap::new(),
-        textures: HashMap::new(),
-        model_path: path,
-        model_dir: path.parent().unwrap_or(Path::new(".")),
-        max_texture: options.max_texture,
-        texture_files: scene.texture_files.len(),
-        has_uvs: mesh_nodes.iter().any(|node| node.mesh.as_ref().is_some_and(|mesh| mesh.vertex_uv.exists)),
-        companion: None,
-        companion_material: None,
-    };
-    // Hidden meshes are usually collision or helper shapes, unless everything is hidden.
+/// The meshes to draw: those with triangles that aren't hidden. Hidden meshes are usually
+/// collision or helper shapes, unless everything is hidden.
+fn drawn_meshes<'a>(mesh_nodes: &[&'a ufbx::Node]) -> Vec<(&'a ufbx::Node, &'a ufbx::Mesh)> {
     let any_visible = mesh_nodes.iter().any(|node| node.visible);
-    let drawn: Vec<(&ufbx::Node, &ufbx::Mesh)> = mesh_nodes
+    mesh_nodes
         .iter()
         .filter_map(|node| Some((*node, &**node.mesh.as_ref()?)))
         .filter(|(node, mesh)| (node.visible || !any_visible) && mesh.num_triangles > 0)
-        .collect();
-    super::check_triangle_count(drawn.iter().map(|(_, mesh)| mesh.num_triangles as u64).sum())?;
-    let mut source_vertices = 0;
-    for (node, mesh) in drawn {
-        reader.add_mesh(node, mesh)?;
-        source_vertices += mesh.num_vertices as u64;
-    }
-    let mut builder = reader.builder;
-    builder.source_vertices = Some(source_vertices);
+        .collect()
+}
 
-    if builder.triangle_count() == 0 {
-        // A skeleton and its animation, such as a Mixamo download without skin.
-        for node in &scene.nodes {
-            let Some(parent) = node.parent.as_ref() else { continue };
-            if node.bone.is_some() && parent.bone.is_some() {
-                builder.bones.push([translation(&parent.node_to_world), translation(&node.node_to_world)]);
-            }
-        }
-        if builder.bones.is_empty() {
-            return Err("there are no meshes in this file".into());
-        }
+/// Every bone joined to its parent bone, as their positions: drawn when the file is only a
+/// skeleton and its animation, such as a Mixamo download without skin.
+fn bones(scene: &ufbx::Scene) -> impl Iterator<Item = ([f32; 3], [f32; 3])> + '_ {
+    scene.nodes.iter().filter_map(|node| {
+        let parent = node.parent.as_ref()?;
+        (node.bone.is_some() && parent.bone.is_some())
+            .then(|| (translation(&parent.node_to_world), translation(&node.node_to_world)))
+    })
+}
+
+/// "OBJ", or the FBX version and encoding: "FBX 7.4 binary".
+fn format_name(meta: &ufbx::Metadata) -> String {
+    if meta.file_format == ufbx::FileFormat::Obj {
+        "OBJ".to_owned()
+    } else {
+        let encoding = if meta.ascii { "ASCII" } else { "binary" };
+        format!("FBX {}.{} {encoding}", meta.version / 1000, meta.version % 1000 / 100)
     }
-    builder.animations = scene
+}
+
+/// Each animation that moves something: its name and length in seconds.
+fn animations(scene: &ufbx::Scene) -> Vec<(String, f32)> {
+    scene
         .anim_stacks
         .iter()
         .filter(|stack| stack.layers.iter().any(|layer| !layer.anim_values.is_empty()))
         .map(|stack| (stack.element.name.to_string(), (stack.time_end - stack.time_begin).max(0.0) as f32))
-        .collect();
-
-    let meta = &scene.metadata;
-    let format = match meta.file_format {
-        ufbx::FileFormat::Obj => "OBJ".to_owned(),
-        _ => {
-            let encoding = if meta.ascii { "ASCII" } else { "binary" };
-            format!("FBX {}.{} {encoding}", meta.version / 1000, meta.version % 1000 / 100)
-        }
-    };
-    builder.finish(format)
+        .collect()
 }
 
 /// ufbx's short description, plus its detail when there is one.
@@ -159,7 +175,7 @@ impl Reader<'_> {
         slot
     }
 
-    fn add_mesh(&mut self, node: &ufbx::Node, mesh: &ufbx::Mesh) -> Result<(), String> {
+    fn add_mesh(&mut self, node: &ufbx::Node, mesh: &ufbx::Mesh) -> Result<(), ModelError> {
         let to_world = &node.geometry_to_world;
         let to_world_normals = ufbx::matrix_for_normals(to_world);
         // Skinned positions are in model space already.
@@ -206,13 +222,13 @@ impl Reader<'_> {
             }
             self.add_corners(material, &mut vertices)?;
         }
-        self.builder.meshes += 1;
+        self.builder.count_mesh();
         Ok(())
     }
 
     /// Adds triangles given one vertex per corner, merging the identical ones first, and empties
     /// `vertices`.
-    fn add_corners(&mut self, material: u32, vertices: &mut Vec<Vertex>) -> Result<(), String> {
+    fn add_corners(&mut self, material: u32, vertices: &mut Vec<Vertex>) -> Result<(), ModelError> {
         if vertices.is_empty() {
             return Ok(());
         }
@@ -335,8 +351,7 @@ impl Source<'_> {
         };
         let uv = if mesh.vertex_uv.exists {
             let uv = mesh.vertex_uv[corner];
-            // FBX and OBJ count v up from the bottom of the picture.
-            [uv.x as f32, 1.0 - uv.y as f32]
+            flip_v([uv.x as f32, uv.y as f32])
         } else {
             [0.0; 2]
         };
@@ -353,7 +368,8 @@ impl Source<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::test_files::{TempDir, png_2x2};
+    use crate::model::test_files::png_2x2;
+    use crate::test_support::TempDir;
 
     #[test]
     fn obj_with_mtl_colour_and_texture() {
@@ -368,7 +384,7 @@ mod tests {
         );
         dir.write("quad.mtl", b"newmtl Red\nKd 1 0.5 0\nnewmtl Wood\nKd 1 1 1\nmap_Kd C:\\art\\wood.png\n");
         dir.write("Textures/wood.png", &png_2x2());
-        let model = load(&dir.0.join("quad.obj"), &LoadOptions { max_texture: 64 }).unwrap();
+        let model = crate::model::load(&dir.path().join("quad.obj"), &LoadOptions { max_texture: 64 }).unwrap();
         assert_eq!(model.info.format, "OBJ");
         assert_eq!(model.info.triangles, 4, "quads are split in two");
         assert_eq!(model.info.vertices, 6);
@@ -401,12 +417,11 @@ mod tests {
         let dir = TempDir::new("obj_missing");
         dir.write("tri.obj", b"mtllib tri.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl A\nf 1 2 3\nusemtl B\nf 1 3 2\n");
         dir.write("tri.mtl", b"newmtl A\nKd 1 1 1\nmap_Kd gone.png\nnewmtl B\nKd 0 0 1\nmap_Kd gone.png\n");
-        let model = load(&dir.0.join("tri.obj"), &LoadOptions { max_texture: 64 }).unwrap();
+        let model = crate::model::load(&dir.path().join("tri.obj"), &LoadOptions { max_texture: 64 }).unwrap();
         assert_eq!(model.info.missing_textures, 1);
         assert_eq!(model.info.textures, 0);
         let a = model.materials.iter().find(|m| m.name == "A").unwrap();
-        let [r, g, b] = crate::model::shading::DEFAULT_ALBEDO;
-        assert_eq!(a.color, [r, g, b, 1.0], "white under a missing texture shows as clay");
+        assert_eq!(a.color, crate::model::Material::CLAY.color, "white under a missing texture shows as clay");
     }
 
     /// Three bones in a chain, in metres, with a 2-second animation and no mesh: what a Mixamo
@@ -509,7 +524,7 @@ Connections:  {
     fn skeleton_only_file_gives_bones() {
         let dir = TempDir::new("fbx_skeleton");
         let path = dir.write("Wave.fbx", SKELETON.as_bytes());
-        let model = load(&path, &LoadOptions { max_texture: 0 }).unwrap();
+        let model = crate::model::load(&path, &LoadOptions::default()).unwrap();
         assert_eq!(model.info.format, "FBX 7.4 ASCII");
         assert!(!model.info.geometry);
         assert_eq!(model.info.triangles, 0);
@@ -535,11 +550,11 @@ Connections:  {
             }
         }
         cases.extend(
-            crate::model::test_files::damaged(SKELETON.as_bytes(), 200).into_iter().map(|bytes| ("damaged.fbx", bytes)),
+            crate::test_support::damaged(SKELETON.as_bytes(), 200).into_iter().map(|bytes| ("damaged.fbx", bytes)),
         );
         for (name, bytes) in cases {
             let path = dir.write(name, &bytes);
-            let _ = load(&path, &LoadOptions { max_texture: 16 });
+            let _ = crate::model::load(&path, &LoadOptions { max_texture: 16 });
         }
     }
 
@@ -547,7 +562,7 @@ Connections:  {
     fn broken_file_is_a_clear_error() {
         let dir = TempDir::new("fbx_broken");
         let path = dir.write("broken.fbx", b"Kaydara FBX Binary  \x00\x1a\x00\xe8\x1c\x00\x00");
-        let err = load(&path, &LoadOptions { max_texture: 0 }).err().unwrap();
-        assert!(!err.is_empty());
+        let err = crate::model::load(&path, &LoadOptions::default()).err().unwrap();
+        assert!(!err.to_string().is_empty());
     }
 }

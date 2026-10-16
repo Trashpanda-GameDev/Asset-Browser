@@ -1,168 +1,98 @@
-//! Sound in the window: what's playing, the transport, and waveforms to look at and click on.
-
-use std::collections::HashMap;
-use std::sync::Arc;
+//! Sound in the window: the transport, waveforms to look at and click on, and what's playing.
 
 use eframe::egui::{self, Align2, Color32, FontId, Rect, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use egui_phosphor::regular as icon;
 
-use crate::asset::AssetKind;
-use crate::audio::{NowPlaying, Player, ReadAhead, Source, Waveform};
-use crate::diag;
+use crate::audio::{NowPlaying, Waveform};
 use crate::library::Library;
+use crate::playback::Playback;
 
 use super::format::format_time;
+use super::keymap::{self, Action};
 use super::{theme, widgets};
 
-/// Sounds read into memory ahead of the selection, in the direction of travel.
-const READ_AHEAD_SOUNDS: usize = 3;
-
-pub struct Sound {
-    pub player: Option<Player>,
-    read_ahead: ReadAhead,
-    /// The entry last sent to the player: (index, key).
-    pub playing: Option<(u32, i64)>,
-    pub autoplay: bool,
-    pub looping: bool,
-    pub volume: f32,
+/// What's asked of the player.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SoundCommand {
+    /// Pause or resume the sound, or start it if it isn't the one playing.
+    Toggle(u32),
+    Stop,
+    /// Play the sound from this many seconds in, or jump there if it's the one playing.
+    PlayFrom(u32, f64),
+    Loop(bool),
+    Volume(f32),
 }
 
-impl Sound {
-    pub fn start(ctx: &egui::Context) -> Self {
-        let ctx = ctx.clone();
-        let player = Player::start(Arc::new(move || ctx.request_repaint()))
-            .map_err(|err| diag::report("No sound output", err))
-            .ok();
-        let sound =
-            Self { player, read_ahead: ReadAhead::start(), playing: None, autoplay: true, looping: false, volume: 0.8 };
-        sound.set_volume(sound.volume);
-        sound
+/// A sound for the player, and what's known of it.
+#[derive(Clone, Copy)]
+pub struct SoundArgs<'a> {
+    pub playback: &'a Playback,
+    pub library: &'a Library,
+    pub index: u32,
+    /// Its waveform, once it's read.
+    pub waveform: Option<&'a Waveform>,
+    /// It couldn't be read.
+    pub failed: bool,
+}
+
+impl SoundArgs<'_> {
+    /// What's playing, if it's this sound.
+    fn now(&self) -> Option<NowPlaying> {
+        self.playback.now_for(self.library.entry(self.index).key)
     }
 
-    pub fn now(&self) -> Option<NowPlaying> {
-        self.player.as_ref().and_then(Player::now)
-    }
-
-    /// What's playing, if it's `key` and hasn't finished.
-    pub fn now_for(&self, key: i64) -> Option<NowPlaying> {
-        self.now().filter(|now| now.key == key && !now.finished)
-    }
-
-    pub fn is_audible(&self) -> bool {
-        self.now().is_some_and(|now| !now.finished && !now.paused)
-    }
-
-    pub fn play(&mut self, library: &Library, index: u32) {
-        let Some(player) = &self.player else { return };
-        let entry = &library.entries[index as usize];
-        let source = match self.read_ahead.get(entry.key) {
-            Some(bytes) => Source::Memory(bytes),
-            None => Source::File(library.path_of(entry)),
-        };
-        player.play(entry.key, source, entry.extension());
-        self.playing = Some((index, entry.key));
-    }
-
-    /// Plays `index` from `seconds` in, or jumps there if it's already playing.
-    pub fn play_from(&mut self, library: &Library, index: u32, seconds: f64) {
-        let key = library.entries[index as usize].key;
-        if self.now_for(key).is_none() {
-            self.play(library, index);
-        }
-        if let Some(player) = &self.player {
-            player.seek(seconds);
-        }
-    }
-
-    /// Pauses or resumes `index`, or starts it if it isn't the one playing.
-    pub fn toggle(&mut self, library: &Library, index: u32) {
-        let key = library.entries[index as usize].key;
-        match (&self.player, self.now_for(key)) {
-            (Some(player), Some(now)) => player.set_paused(!now.paused),
-            _ => self.play(library, index),
-        }
-    }
-
-    pub fn stop(&self) {
-        if let Some(player) = &self.player {
-            player.stop();
-        }
-    }
-
-    pub fn set_volume(&self, volume: f32) {
-        if let Some(player) = &self.player {
-            player.set_volume(volume);
-        }
-    }
-
-    pub fn set_looping(&self, looping: bool) {
-        if let Some(player) = &self.player {
-            player.set_looping(looping);
-        }
-    }
-
-    /// Reads the sounds after `index` in `view` (and one before) into memory, so moving to them
-    /// starts without a disk wait.
-    pub fn read_ahead_around(&self, library: &Library, view: &[u32], index: u32) {
-        let Some(position) = view.iter().position(|&i| i == index) else { return };
-        let is_sound = |&&i: &&u32| library.entries[i as usize].kind == AssetKind::Audio;
-        let after = view[position + 1..].iter().filter(is_sound).take(READ_AHEAD_SOUNDS);
-        let before = view[..position].iter().rev().filter(is_sound).take(1);
-        let files = after
-            .chain(before)
-            .map(|&i| {
-                let entry = &library.entries[i as usize];
-                (entry.key, library.path_of(entry), entry.size)
-            })
-            .collect();
-        self.read_ahead.want(files);
-    }
-
-    /// A rescan changed entry indices; keys stay.
-    pub fn remap(&mut self, new_index: &HashMap<i64, u32>) {
-        self.playing = self.playing.and_then(|(_, key)| new_index.get(&key).map(|&index| (index, key)));
-    }
-
-    /// A different folder was opened.
-    pub fn reset(&mut self) {
-        self.playing = None;
-        self.stop();
+    /// How long the sound is: as the player has it, or else as its waveform says.
+    fn length(&self, now: Option<&NowPlaying>) -> Option<f64> {
+        now.and_then(|now| now.duration).or(self.waveform.map(|waveform| waveform.duration as f64))
     }
 }
 
-/// Play/pause, stop, loop, the time and the volume for the sound `index`.
-pub fn transport(ui: &mut Ui, sound: &mut Sound, library: &Library, index: u32, duration: Option<f64>) {
-    let entry = &library.entries[index as usize];
-    if sound.player.is_none() {
+/// The waveform to click on, `height` tall, with the transport under it: the preview pane's
+/// player, and the bar along the bottom while the pane is hidden. What was asked for.
+pub fn player(ui: &mut Ui, height: f32, sound: &SoundArgs<'_>) -> Option<SoundCommand> {
+    let scrubbed = scrubber(ui, height, sound);
+    scrubbed.or(transport(ui, sound))
+}
+
+/// Play/pause, stop, loop, the time and the volume; what was asked for.
+fn transport(ui: &mut Ui, sound: &SoundArgs<'_>) -> Option<SoundCommand> {
+    let (playback, index) = (sound.playback, sound.index);
+    if playback.player.is_none() {
         ui.colored_label(theme::ERROR, "No sound output. See the error in the status bar.");
-        return;
+        return None;
     }
-    let now = sound.now_for(entry.key);
+    let now = sound.now();
+    let duration = sound.length(now.as_ref());
     let audible = now.as_ref().is_some_and(|now| !now.paused);
+    let mut command = None;
     let volume_inline = ui
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let (glyph, tip) = if audible { (icon::PAUSE, "Pause") } else { (icon::PLAY, "Play") };
-            let hint = |action| crate::keymap::hint(ui.ctx(), action);
-            let (play_hint, stop_hint) =
-                (hint(crate::keymap::Action::PlayPause), hint(crate::keymap::Action::StopOrClear));
-            if play_button(ui, glyph).on_hover_text(format!("{tip}{play_hint}")).clicked() {
-                sound.toggle(library, index);
+            let play_tip = keymap::tooltip(ui.ctx(), tip, Action::PlayPause);
+            if play_button(ui, glyph).on_hover_text(play_tip).clicked() {
+                command = Some(SoundCommand::Toggle(index));
             }
-            if widgets::icon_button(ui, icon::STOP, &format!("Stop{stop_hint}"), false).clicked() {
-                sound.stop();
+            let stop_tip = keymap::tooltip(ui.ctx(), "Stop", Action::StopOrClear);
+            if widgets::icon_button(ui, icon::STOP, &stop_tip, false).clicked() {
+                command = Some(SoundCommand::Stop);
             }
-            if widgets::icon_button(ui, icon::REPEAT, "Loop", sound.looping).clicked() {
-                sound.looping = !sound.looping;
-                sound.set_looping(sound.looping);
+            if widgets::icon_button(ui, icon::REPEAT, "Loop", playback.looping()).clicked() {
+                command = Some(SoundCommand::Loop(!playback.looping()));
             }
             ui.add_space(6.0);
             let position = now.as_ref().map_or(0.0, |now| now.position);
-            ui.label(egui::RichText::new(clock(position, duration)).monospace().size(12.0).color(theme::TEXT_WEAK));
+            ui.label(
+                egui::RichText::new(clock(position, duration))
+                    .monospace()
+                    .size(theme::size::CAPTION)
+                    .color(theme::TEXT_WEAK),
+            );
             // The volume goes on its own line when the pane is too narrow for it here.
             let inline = ui.available_width() >= 150.0;
             if inline {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| volume(ui, sound, 90.0));
+                let right_to_left = egui::Layout::right_to_left(egui::Align::Center);
+                command = command.or(ui.with_layout(right_to_left, |ui| volume(ui, playback, 90.0)).inner);
             }
             inline
         })
@@ -171,30 +101,31 @@ pub fn transport(ui: &mut Ui, sound: &mut Sound, library: &Library, index: u32, 
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let width = (ui.available_width() - 30.0).clamp(60.0, 160.0);
-                volume(ui, sound, width);
+                command = command.or(volume(ui, playback, width));
             });
         });
     }
     if let Some(error) = now.as_ref().and_then(|now| now.error.as_deref()) {
         ui.colored_label(theme::ERROR, error);
     }
+    command
 }
 
-/// The volume slider with a speaker icon to its left, in a right-to-left layout.
-fn volume(ui: &mut Ui, sound: &mut Sound, width: f32) {
-    let slider = egui::Slider::new(&mut sound.volume, 0.0..=1.0).show_value(false);
-    if ui.add_sized(vec2(width, 20.0), slider).changed() {
-        sound.set_volume(sound.volume);
-    }
-    let glyph = if sound.volume <= 0.001 {
+/// The volume slider with a speaker icon to its left, in a right-to-left layout; the volume set.
+fn volume(ui: &mut Ui, playback: &Playback, width: f32) -> Option<SoundCommand> {
+    let mut volume = playback.volume();
+    let slider = egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false);
+    let changed = ui.add_sized(vec2(width, 20.0), slider).changed();
+    let glyph = if volume <= 0.001 {
         icon::SPEAKER_NONE
-    } else if sound.volume < 0.5 {
+    } else if volume < 0.5 {
         icon::SPEAKER_LOW
     } else {
         icon::SPEAKER_HIGH
     };
-    let name = sound.player.as_ref().map_or("", |player| player.device_name.as_str());
-    ui.label(egui::RichText::new(glyph).size(16.0).color(theme::TEXT_WEAK)).on_hover_text(name);
+    let name = playback.player.as_ref().map_or("", |player| player.device_name.as_str());
+    ui.label(egui::RichText::new(glyph).size(theme::size::LARGE).color(theme::TEXT_WEAK)).on_hover_text(name);
+    changed.then_some(SoundCommand::Volume(volume))
 }
 
 /// "0:42 / 2:00" for long sounds, "0.4 / 1.2 s" for short ones.
@@ -217,86 +148,82 @@ fn play_button(ui: &mut Ui, glyph: &str) -> egui::Response {
     let fill = if response.hovered() { theme::ACCENT } else { theme::ACCENT.gamma_multiply(0.85) };
     ui.painter().circle_filled(rect.center(), 15.0, fill);
     let nudge = if glyph == icon::PLAY { vec2(1.0, 0.0) } else { Vec2::ZERO };
-    ui.painter().text(rect.center() + nudge, Align2::CENTER_CENTER, glyph, FontId::proportional(16.0), Color32::WHITE);
+    ui.painter().text(
+        rect.center() + nudge,
+        Align2::CENTER_CENTER,
+        glyph,
+        FontId::proportional(theme::size::LARGE),
+        theme::ON_ACCENT,
+    );
     response
 }
 
-/// A waveform to click or drag on to jump. Starts the sound if it isn't playing.
-pub fn scrubber(
-    ui: &mut Ui,
-    height: f32,
-    sound: &mut Sound,
-    library: &Library,
-    index: u32,
-    waveform: Option<&Waveform>,
-    failed: bool,
-) {
-    let entry = &library.entries[index as usize];
-    let now = sound.now_for(entry.key);
-    let duration = now.as_ref().and_then(|now| now.duration).or(waveform.map(|w| w.duration as f64));
+/// A waveform to click or drag on to jump there, starting the sound if it isn't playing.
+fn scrubber(ui: &mut Ui, height: f32, sound: &SoundArgs<'_>) -> Option<SoundCommand> {
+    let now = sound.now();
+    let length = sound.length(now.as_ref());
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, theme::CARD_RADIUS, theme::WELL);
-    let progress = match (&now, duration) {
+    let progress = match (&now, length) {
         (Some(now), Some(total)) if total > 0.0 => Some((now.position / total) as f32),
         _ => None,
     };
-    let color = entry.kind.color();
-    match waveform {
-        Some(waveform) => draw_waveform(
-            &painter,
-            rect.shrink2(vec2(8.0, 10.0)),
-            waveform,
-            color.gamma_multiply(0.45),
-            color,
-            progress,
-        ),
-        None => {
-            let text = if failed { "Couldn't read this sound" } else { "Reading…" };
-            painter.text(rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(13.0), theme::TEXT_FAINT);
-        }
-    }
+    wave_or_note(&painter, rect, sound, progress);
     let inner = rect.shrink2(vec2(8.0, 0.0));
     let fraction_at = |x: f32| ((x - inner.left()) / inner.width()).clamp(0.0, 1.0);
     if let Some(progress) = progress {
         let x = inner.left() + progress * inner.width();
         painter
-            .line_segment([pos2(x, rect.top() + 4.0), pos2(x, rect.bottom() - 4.0)], Stroke::new(2.0, Color32::WHITE));
+            .line_segment([pos2(x, rect.top() + 4.0), pos2(x, rect.bottom() - 4.0)], Stroke::new(2.0, theme::PLAYHEAD));
     }
     if let Some(pointer) = response.interact_pointer_pos().or(response.hover_pos()) {
-        // Where a click would jump to.
-        let x = inner.left() + fraction_at(pointer.x) * inner.width();
-        painter.line_segment(
-            [pos2(x, rect.top()), pos2(x, rect.bottom())],
-            Stroke::new(1.0, theme::TEXT.gamma_multiply(0.4)),
-        );
-        if let Some(total) = duration {
-            painter.text(
-                pos2(x + 4.0, rect.top() + 4.0),
-                Align2::LEFT_TOP,
-                format_time(fraction_at(pointer.x) as f64 * total),
-                FontId::proportional(11.0),
-                theme::TEXT_WEAK,
-            );
-        }
+        let fraction = fraction_at(pointer.x);
+        jump_mark(&painter, rect, inner.left() + fraction * inner.width(), length.map(|total| fraction as f64 * total));
     }
-    if (response.clicked() || response.drag_stopped())
-        && let (Some(pointer), Some(total)) = (response.interact_pointer_pos(), duration)
-    {
-        sound.play_from(library, index, fraction_at(pointer.x) as f64 * total);
+    let (Some(pointer), Some(total)) = (response.interact_pointer_pos(), length) else { return None };
+    (response.clicked() || response.drag_stopped())
+        .then(|| SoundCommand::PlayFrom(sound.index, fraction_at(pointer.x) as f64 * total))
+}
+
+/// The sound's waveform, or why there isn't one yet.
+fn wave_or_note(painter: &egui::Painter, rect: Rect, sound: &SoundArgs<'_>, progress: Option<f32>) {
+    let color = theme::kind_color(sound.library.entry(sound.index).kind);
+    if let Some(waveform) = sound.waveform {
+        let colors = [color.gamma_multiply(0.45), color];
+        draw_waveform(painter, rect.shrink2(vec2(8.0, 10.0)), waveform, colors, progress);
+    } else {
+        let text = if sound.failed { "Couldn't read this sound" } else { "Reading…" };
+        let font = FontId::proportional(theme::size::BODY);
+        painter.text(rect.center(), Align2::CENTER_CENTER, text, font, theme::TEXT_FAINT);
     }
 }
 
-/// Draws a waveform as one mesh: a bar per column from the lowest to the highest sample in it.
-/// Columns before `progress` (0..1) use `played`.
+/// Where a click would jump to, at `x`, with the time there when the sound's length is known.
+fn jump_mark(painter: &egui::Painter, rect: Rect, x: f32, time: Option<f64>) {
+    let line = Stroke::new(1.0, theme::TEXT.gamma_multiply(0.4));
+    painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], line);
+    if let Some(time) = time {
+        painter.text(
+            pos2(x + 4.0, rect.top() + 4.0),
+            Align2::LEFT_TOP,
+            format_time(time),
+            FontId::proportional(theme::size::FINE),
+            theme::TEXT_WEAK,
+        );
+    }
+}
+
+/// Draws a waveform as one mesh: a bar per column from the lowest to the highest sample in it,
+/// in `colors[0]`, and in `colors[1]` before `progress` (0..1), what's been played.
 pub fn draw_waveform(
     painter: &egui::Painter,
     rect: Rect,
     waveform: &Waveform,
-    color: Color32,
-    played: Color32,
+    colors: [Color32; 2],
     progress: Option<f32>,
 ) {
+    let [color, played] = colors;
     let peaks = &waveform.peaks;
     if peaks.is_empty() || rect.width() < 1.0 {
         return;
@@ -319,23 +246,6 @@ pub fn draw_waveform(
         mesh.add_colored_rect(Rect::from_min_max(pos2(x, top), pos2(x + column_width, bottom)), fill);
     }
     painter.add(egui::Shape::mesh(mesh));
-}
-
-/// A small "now playing" control for the status bar, for when the playing sound isn't the one
-/// shown. Returns the entry clicked, to show it.
-pub fn now_playing_chip(ui: &mut Ui, sound: &mut Sound, library: &Library) -> Option<u32> {
-    let (index, key) = sound.playing?;
-    let now = sound.now_for(key)?;
-    let entry = library.entries.get(index as usize).filter(|entry| entry.key == key)?;
-    let glyph = if now.paused { icon::PLAY } else { icon::PAUSE };
-    if widgets::icon_button_sized(ui, glyph, "Play or pause", false, 22.0).clicked() {
-        sound.toggle(library, index);
-    }
-    let progress =
-        now.duration.map_or(String::new(), |total| format!("  {} / {}", format_time(now.position), format_time(total)));
-    let text = egui::RichText::new(format!("{}{progress}", entry.name())).size(12.0).color(theme::TEXT_WEAK);
-    let clicked = ui.add(egui::Label::new(text).sense(Sense::click())).on_hover_text("Show this sound").clicked();
-    clicked.then_some(index)
 }
 
 #[cfg(test)]

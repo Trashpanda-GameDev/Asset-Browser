@@ -1,9 +1,7 @@
 //! "What's new": the changelog's notes, shown once after an update for the versions since the
 //! last one seen, or for every version from the settings.
 
-use eframe::egui::{
-    self, Align, Color32, FontId, Frame, Id, Layout, Margin, RichText, Sense, Ui, UiBuilder, text::LayoutJob, vec2,
-};
+use eframe::egui::{self, Align, FontId, Layout, RichText, Sense, Ui, UiBuilder, text::LayoutJob, vec2};
 use semver::Version;
 
 use crate::changelog::{self, Block, Release};
@@ -31,19 +29,18 @@ impl WhatsNew {
     /// Draws it; false once it's closed.
     pub fn show(&mut self, ctx: &egui::Context) -> bool {
         let mut open = true;
-        let frame = Frame::new()
-            .fill(theme::PANEL)
-            .stroke(egui::Stroke::new(1.0, theme::BORDER))
-            .corner_radius(theme::CARD_RADIUS)
-            .inner_margin(Margin::same(20));
-        let modal = egui::Modal::new(Id::new("whats-new")).frame(frame).backdrop_color(Color32::from_black_alpha(150));
+        let modal = widgets::modal_window("whats-new", 20);
         let response = modal.show(ctx, |ui| {
             // A fixed width, so the notes wrap to it, laid out top to bottom.
             let (rect, _) = ui.allocate_exact_size(vec2(540.0, 500.0), Sense::hover());
             let mut ui = ui.new_child(UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Min)));
             let title = if self.since.is_some() { "What's new" } else { "Every version" };
             ui.horizontal(|ui| {
-                ui.label(RichText::new(title).font(FontId::new(20.0, theme::semibold())).color(theme::TEXT));
+                ui.label(
+                    RichText::new(title)
+                        .font(FontId::new(theme::size::WINDOW_TITLE, theme::semibold()))
+                        .color(theme::TEXT),
+                );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if widgets::icon_button(ui, egui_phosphor::regular::X, "Close (Esc)", false).clicked() {
                         open = false;
@@ -70,7 +67,7 @@ impl WhatsNew {
                     self.since = None;
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let close = egui::Button::new(RichText::new("Close").color(Color32::WHITE))
+                    let close = egui::Button::new(RichText::new("Close").color(theme::ON_ACCENT))
                         .fill(theme::ACCENT)
                         .min_size(vec2(88.0, 28.0));
                     if ui.add(close).clicked() {
@@ -88,7 +85,7 @@ impl WhatsNew {
             None => "Coming next".to_owned(),
         };
         ui.horizontal(|ui| {
-            ui.label(RichText::new(name).font(FontId::new(15.0, theme::semibold())).color(theme::TEXT));
+            ui.label(RichText::new(name).font(FontId::new(theme::size::TITLE, theme::semibold())).color(theme::TEXT));
             if let Some(date) = &release.date {
                 ui.label(RichText::new(date).color(theme::TEXT_FAINT));
             }
@@ -101,7 +98,11 @@ impl WhatsNew {
             match block {
                 Block::Heading(text) => {
                     ui.add_space(4.0);
-                    ui.label(RichText::new(text).font(FontId::new(13.0, theme::semibold())).color(theme::TEXT_WEAK));
+                    ui.label(
+                        RichText::new(text)
+                            .font(FontId::new(theme::size::BODY, theme::semibold()))
+                            .color(theme::TEXT_WEAK),
+                    );
                 }
                 Block::Item(text) => {
                     ui.horizontal_top(|ui| {
@@ -120,7 +121,11 @@ impl WhatsNew {
 fn rich_text(ui: &mut Ui, text: &str) {
     let mut job = LayoutJob::default();
     for (part, bold) in changelog::runs(text) {
-        let font = if bold { FontId::new(13.5, theme::semibold()) } else { FontId::proportional(13.5) };
+        let font = if bold {
+            FontId::new(theme::size::EMPHASIS, theme::semibold())
+        } else {
+            FontId::proportional(theme::size::EMPHASIS)
+        };
         let color = if bold { theme::TEXT } else { theme::TEXT_WEAK };
         job.append(&part, 0.0, egui::TextFormat { font_id: font, color, ..Default::default() });
     }

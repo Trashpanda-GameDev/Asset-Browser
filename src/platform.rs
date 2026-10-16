@@ -1,6 +1,6 @@
 //! The few things that work differently on each OS: opening and revealing files, copying them to
-//! the clipboard, deleting them to the Recycle Bin or Trash, the window's title bar and the
-//! process's memory. Nothing else in the app should call into a specific platform.
+//! the clipboard, deleting them to the Recycle Bin or Trash, the window's title bar, the UI fonts
+//! and the process's memory. Nothing else in the app should call into a specific platform.
 
 use std::cell::RefCell;
 use std::io;
@@ -63,23 +63,33 @@ thread_local! {
     static CLIPBOARD: RefCell<Option<arboard::Clipboard>> = const { RefCell::new(None) };
 }
 
+/// Why files couldn't be put on the clipboard.
+#[derive(Debug, thiserror::Error)]
+pub enum CopyError {
+    #[error("the files aren't there any more")]
+    Missing,
+    #[error(transparent)]
+    Clipboard(#[from] arboard::Error),
+}
+
 /// Puts the files themselves on the clipboard, as a file manager's Copy does: pasted into a folder
 /// (Explorer, Finder or the like) they're copied there, and apps that take pasted files get them.
 /// Files that aren't there any more are left out.
-pub fn copy_files(paths: &[PathBuf]) -> Result<(), String> {
+pub fn copy_files(paths: &[PathBuf]) -> Result<(), CopyError> {
     // Checked first, so what was on the clipboard stays when there's nothing to copy.
     if !paths.iter().any(|path| path.exists()) {
-        return Err("the files aren't there any more".to_owned());
+        return Err(CopyError::Missing);
     }
     CLIPBOARD.with_borrow_mut(|kept| {
-        if kept.is_none() {
-            *kept = Some(arboard::Clipboard::new().map_err(|err| err.to_string())?);
-        }
-        let clipboard = kept.as_mut().ok_or("the clipboard can't be opened")?;
+        let clipboard = match kept.take() {
+            Some(clipboard) => clipboard,
+            None => arboard::Clipboard::new()?,
+        };
+        let clipboard = kept.insert(clipboard);
         // On Windows, arboard adds the files to whatever is on the clipboard: an app pasting text
         // would get what was copied before.
-        clipboard.clear().map_err(|err| err.to_string())?;
-        clipboard.set().file_list(paths).map_err(|err| err.to_string())
+        clipboard.clear()?;
+        Ok(clipboard.set().file_list(paths)?)
     })
 }
 
@@ -96,8 +106,8 @@ pub fn trash_name() -> &'static str {
 
 /// Moves files and folders to the Recycle Bin (the Trash on macOS and Linux) in one go. It can
 /// take a while for many files or a big folder: not for the UI thread.
-pub fn move_to_trash(paths: &[PathBuf]) -> Result<(), String> {
-    trash::delete_all(paths).map_err(|err| err.to_string())
+pub fn move_to_trash(paths: &[PathBuf]) -> Result<(), trash::Error> {
+    trash::delete_all(paths)
 }
 
 /// Whether what's deleted at `path` can be put back. Windows keeps a Recycle Bin only on fixed
@@ -122,6 +132,7 @@ pub fn has_trash(path: &Path) -> bool {
     }
     #[cfg(not(target_os = "windows"))]
     {
+        // Elsewhere `trash` fails rather than deleting for good, so there's nothing to ask.
         let _ = path;
         true
     }
@@ -160,8 +171,61 @@ pub fn color_title_bar(
     }
     #[cfg(not(target_os = "windows"))]
     {
+        // Only Windows lets the title bar take colours.
         let _ = (window, caption, text, border);
     }
+}
+
+/// The OS's own UI fonts, as their files hold them; `None` where one isn't found (egui's own
+/// font stands in).
+pub struct SystemFonts {
+    pub regular: Option<Vec<u8>>,
+    pub semibold: Option<Vec<u8>>,
+    pub monospace: Option<Vec<u8>>,
+}
+
+/// Reads the OS's UI fonts from where it keeps them.
+pub fn system_fonts() -> SystemFonts {
+    SystemFonts {
+        regular: read_first(REGULAR_FONTS),
+        semibold: read_first(SEMIBOLD_FONTS),
+        monospace: read_first(MONOSPACE_FONTS),
+    }
+}
+
+#[cfg(windows)]
+const REGULAR_FONTS: &[&str] = &["%WINDIR%/Fonts/segoeui.ttf"];
+#[cfg(windows)]
+const SEMIBOLD_FONTS: &[&str] = &["%WINDIR%/Fonts/seguisb.ttf", "%WINDIR%/Fonts/segoeuib.ttf"];
+#[cfg(windows)]
+const MONOSPACE_FONTS: &[&str] = &["%WINDIR%/Fonts/CascadiaMono.ttf", "%WINDIR%/Fonts/consola.ttf"];
+
+#[cfg(target_os = "macos")]
+const REGULAR_FONTS: &[&str] = &["/System/Library/Fonts/SFNS.ttf"];
+#[cfg(target_os = "macos")]
+const SEMIBOLD_FONTS: &[&str] = &[];
+#[cfg(target_os = "macos")]
+const MONOSPACE_FONTS: &[&str] = &["/System/Library/Fonts/SFNSMono.ttf"];
+
+#[cfg(not(any(windows, target_os = "macos")))]
+const REGULAR_FONTS: &[&str] = &[
+    "/usr/share/fonts/truetype/inter/Inter-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+];
+#[cfg(not(any(windows, target_os = "macos")))]
+const SEMIBOLD_FONTS: &[&str] = &[
+    "/usr/share/fonts/truetype/inter/Inter-SemiBold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-SemiBold.ttf",
+    "/usr/share/fonts/noto/NotoSans-SemiBold.ttf",
+];
+#[cfg(not(any(windows, target_os = "macos")))]
+const MONOSPACE_FONTS: &[&str] = &["/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"];
+
+fn read_first(candidates: &[&str]) -> Option<Vec<u8>> {
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_owned());
+    candidates.iter().find_map(|path| std::fs::read(path.replace("%WINDIR%", &windir)).ok())
 }
 
 /// How much memory the app holds right now (its private bytes), where the OS says.

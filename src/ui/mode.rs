@@ -7,9 +7,10 @@ use std::collections::{HashMap, HashSet};
 use eframe::egui::Color32;
 use egui_phosphor::regular as icon;
 
-use crate::asset::AssetKind;
-use crate::library::SortBy;
+use crate::asset::{AssetKind, KindSet};
+use crate::library::{Order, SortBy};
 
+use super::keymap::Action;
 use super::theme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,15 +43,8 @@ impl Mode {
         }
     }
 
-    pub fn kinds(self) -> [bool; 3] {
-        match self.kind() {
-            None => [true; 3],
-            Some(kind) => {
-                let mut kinds = [false; 3];
-                kinds[kind.index()] = true;
-                kinds
-            }
-        }
+    pub fn kinds(self) -> KindSet {
+        self.kind().map_or(KindSet::ALL, KindSet::only)
     }
 
     pub fn label(self) -> &'static str {
@@ -60,15 +54,35 @@ impl Mode {
         }
     }
 
+    /// What it shows, for its button's tooltip.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::All => "Everything",
+            Self::Images => "Pictures and textures",
+            Self::Sounds => "Sounds, with a player",
+            Self::Models => "3D models, with a 3D view",
+        }
+    }
+
+    /// The shortcut that switches to it.
+    pub fn shortcut(self) -> Action {
+        match self {
+            Self::All => Action::ModeAll,
+            Self::Images => Action::ModeImages,
+            Self::Sounds => Action::ModeSounds,
+            Self::Models => Action::ModeModels,
+        }
+    }
+
     pub fn glyph(self) -> &'static str {
         match self.kind() {
             None => icon::SQUARES_FOUR,
-            Some(kind) => kind.icon(),
+            Some(kind) => theme::kind_icon(kind),
         }
     }
 
     pub fn color(self) -> Color32 {
-        self.kind().map_or(theme::ACCENT, AssetKind::color)
+        self.kind().map_or(theme::ACCENT, theme::kind_color)
     }
 
     /// Name in the settings table.
@@ -97,11 +111,9 @@ pub struct ModeView {
     pub layout: Layout,
     pub tile: f32,
     /// The order in folders.
-    pub sort: SortBy,
-    pub descending: bool,
+    pub folder_order: Order,
     /// The order in Favorites, collections and categories: newest first unless changed.
-    pub group_sort: SortBy,
-    pub group_descending: bool,
+    pub group_order: Order,
     pub selection: Selection,
 }
 
@@ -111,25 +123,19 @@ impl ModeView {
             // Sounds are easiest to scan as a list with waveforms; pictures and models as tiles.
             layout: if mode == Mode::Sounds { Layout::List } else { Layout::Grid },
             tile: 128.0,
-            sort: SortBy::Folder,
-            descending: false,
-            group_sort: SortBy::Added,
-            group_descending: true,
+            folder_order: Order { by: SortBy::Folder, descending: false },
+            group_order: Order { by: SortBy::Added, descending: true },
             selection: Selection::default(),
         }
     }
 
-    /// The order in use: the folder's or the groups'.
-    pub fn order(&self, in_group: bool) -> (SortBy, bool) {
-        if in_group { (self.group_sort, self.group_descending) } else { (self.sort, self.descending) }
+    /// The order in use: the groups' or the folders'.
+    pub fn order(&self, in_group: bool) -> Order {
+        if in_group { self.group_order } else { self.folder_order }
     }
 
-    pub fn set_order(&mut self, in_group: bool, sort: SortBy, descending: bool) {
-        if in_group {
-            (self.group_sort, self.group_descending) = (sort, descending);
-        } else {
-            (self.sort, self.descending) = (sort, descending);
-        }
+    pub fn set_order(&mut self, in_group: bool, order: Order) {
+        *if in_group { &mut self.group_order } else { &mut self.folder_order } = order;
     }
 }
 

@@ -12,6 +12,12 @@ As things change, add them under a `## Unreleased` heading at the top. To releas
 - **Copy files to paste them anywhere:** right-click and **Copy file**, or press Ctrl+Shift+C, then
   paste into a folder to put a copy there, or into another app that takes files. It's in the preview
   pane too, and copies every selected file at once.
+- A damaged Photoshop file can no longer close the app by asking for more memory than there is: it
+  shows as a file that can't be read.
+- When a file can't be opened or shown in its folder, the status bar says why, where nothing
+  happened before.
+- A glTF or Collada model too big to preview says it has too many triangles, where it said it had
+  no meshes.
 
 ## 0.2.1 – 14 Oct 2026
 

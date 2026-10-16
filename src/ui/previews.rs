@@ -7,13 +7,17 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use eframe::egui::{self, Color32, ColorImage, TextureFilter, TextureHandle, TextureOptions};
+use eframe::egui::{self, ColorImage, TextureFilter, TextureHandle, TextureOptions};
 
 use crate::asset::AssetKind;
 use crate::audio::Waveform;
+use crate::imaging::Pixels;
 use crate::library::{Entry, Library};
 use crate::model::ModelInfo;
-use crate::thumbs::{Preview, Thumb, ThumbJob, ThumbPixels, ThumbService};
+use crate::storage::Part;
+use crate::thumbs::{Preview, Thumb, ThumbJob, ThumbService};
+
+use super::theme;
 
 /// Thumbnails kept on the GPU, until the memory setting says otherwise (`set_max_textures`). The
 /// least recently drawn go first; scrolling back reloads them from the cache in about a
@@ -50,7 +54,7 @@ pub struct Previews {
 
 impl Previews {
     pub fn new(ctx: &egui::Context) -> Self {
-        let (light, dark) = (Color32::from_gray(46), Color32::from_gray(36));
+        let [light, dark] = theme::CHECKER;
         let checker = ctx.load_texture(
             "checker",
             ColorImage::new([2, 2], vec![light, dark, dark, light]),
@@ -77,20 +81,16 @@ impl Previews {
         self.max_textures = count.max(100);
     }
 
-    pub fn texture_count(&self) -> usize {
-        self.textures.len()
-    }
-
     /// Forgets what's held of the cache's parts that were cleared, so they're made again as
     /// they're shown: thumbnails (and model pictures), waveforms, model facts.
-    pub fn forget(&mut self, thumbnails: bool, waveforms: bool, models: bool) {
-        if thumbnails {
+    pub fn forget(&mut self, cleared: &[Part]) {
+        if cleared.contains(&Part::Thumbnails) {
             self.textures.clear();
         }
-        if waveforms {
+        if cleared.contains(&Part::Waveforms) {
             self.waveforms.clear();
         }
-        if models {
+        if cleared.contains(&Part::ModelFacts) {
             // A model without its facts counts as not previewed, so its picture is made again too.
             self.models.clear();
         }
@@ -137,8 +137,8 @@ impl Previews {
                 Ok(Preview::Sound(waveform)) => {
                     self.waveforms.insert(thumb.key, waveform);
                 }
-                Err(message) => {
-                    self.failed.insert(thumb.key, message);
+                Err(error) => {
+                    self.failed.insert(thumb.key, error.to_string());
                 }
             }
         }
@@ -147,7 +147,7 @@ impl Previews {
         }
     }
 
-    fn upload(&mut self, ctx: &egui::Context, key: i64, pixels: &ThumbPixels, unscaled: bool) {
+    fn upload(&mut self, ctx: &egui::Context, key: i64, pixels: &Pixels, unscaled: bool) {
         let options = if unscaled {
             let mut options = TextureOptions::NEAREST;
             options.minification = TextureFilter::Linear;
@@ -178,7 +178,7 @@ impl Previews {
         self.textures.get(&key).map(|texture| texture.src_size)
     }
 
-    pub fn has_preview(&self, entry: &Entry) -> bool {
+    fn has_preview(&self, entry: &Entry) -> bool {
         match entry.kind {
             AssetKind::Image => self.textures.contains_key(&entry.key),
             AssetKind::Audio => self.waveforms.contains_key(&entry.key),
@@ -197,7 +197,7 @@ impl Previews {
     pub fn submit(&mut self, thumbs: &ThumbService, library: &Library) {
         let mut jobs_for = Vec::with_capacity(self.wanted.len());
         for &index in &self.wanted {
-            let Some(entry) = library.entries.get(index as usize) else { continue };
+            let Some(entry) = library.entries().get(index as usize) else { continue };
             if !self.has_preview(entry)
                 && !self.failed.contains_key(&entry.key)
                 && !self.arrived_keys.contains(&entry.key)

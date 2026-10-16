@@ -17,6 +17,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use crate::asset::AssetKind;
 use crate::diag;
 use crate::library::is_within;
+use crate::work;
 
 /// A folder is rescanned once its changes have stopped for this long...
 const QUIET: Duration = Duration::from_millis(750);
@@ -67,8 +68,11 @@ impl Watch {
         let handler = {
             let shared = shared.clone();
             move |result: notify::Result<notify::Event>| {
-                let Ok(event) = result else { return };
-                let mut shared = shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let event = match result {
+                    Ok(event) => event,
+                    Err(err) => return diag::note("Watching the library's folders", err),
+                };
+                let mut shared = work::lock(&shared);
                 let now = Instant::now();
                 let roots: Vec<PathBuf> = if event.need_rescan() {
                     // Events were lost: any of them may have changed.
@@ -116,6 +120,7 @@ impl Watch {
         let Some(watcher) = &mut self.watcher else { return };
         for root in &self.watched {
             if !roots.contains(root) {
+                // A folder that's gone isn't watched any more anyway.
                 let _ = watcher.unwatch(root);
             }
         }
@@ -128,7 +133,7 @@ impl Watch {
         }
         self.watched = roots.to_vec();
         let real = |root: &PathBuf| std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
-        let mut shared = self.shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut shared = work::lock(&self.shared);
         shared.roots = roots.iter().map(|root| (root.clone(), real(root))).collect();
         shared.changes.retain(|root, _| roots.contains(root));
     }
@@ -138,13 +143,14 @@ impl Watch {
     /// on Windows): what changes meanwhile, the rescan finds.
     pub fn poll(&mut self) -> Vec<PathBuf> {
         let ready = {
-            let mut shared = self.shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut shared = work::lock(&self.shared);
             let ready = settled(&shared.changes, Instant::now());
             shared.changes.retain(|root, _| !ready.contains(root));
             ready
         };
         if let Some(watcher) = &mut self.watcher {
             for root in &ready {
+                // Watched again from scratch just below.
                 let _ = watcher.unwatch(root);
                 arm(watcher, root, &mut self.failed);
             }
@@ -154,7 +160,7 @@ impl Watch {
 
     /// How soon the next folder will have settled, if any is waiting: to ask for a frame then.
     pub fn next_due(&self) -> Option<Duration> {
-        let shared = self.shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let shared = work::lock(&self.shared);
         let now = Instant::now();
         shared.changes.values().map(|changes| due(*changes).saturating_duration_since(now)).min()
     }
@@ -207,6 +213,7 @@ fn counts(kind: &EventKind, path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
     use notify::event::{AccessKind, CreateKind, DataChange, RemoveKind};
 
     #[test]
@@ -240,10 +247,9 @@ mod tests {
     /// The OS's own events, for real: a picture dropped in is noticed, a text file isn't.
     #[test]
     fn notices_a_new_asset() {
-        let dir = std::env::temp_dir().join(format!("asset_browser_watch_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("sub")).unwrap();
-        let dir = std::path::absolute(&dir).unwrap();
+        let temp = TempDir::new("watch");
+        std::fs::create_dir_all(temp.path().join("sub")).unwrap();
+        let dir = std::path::absolute(temp.path()).unwrap();
         let mut watch = Watch::start(|_| {});
         watch.sync(std::slice::from_ref(&dir));
         let changed = |watch: &mut Watch| {
@@ -268,6 +274,5 @@ mod tests {
         assert!(watch.poll().is_empty(), "a file the library leaves out changes nothing");
 
         watch.sync(&[]);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

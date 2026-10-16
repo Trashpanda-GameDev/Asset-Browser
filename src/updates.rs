@@ -6,7 +6,6 @@
 //! `.github/workflows/release.yml` packs and publishes the releases, and `main` hands the
 //! installer's and updater's visits to Velopack before anything else runs.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use crossbeam_channel::{Receiver, Sender};
@@ -14,12 +13,13 @@ use velopack::sources::AutoSource;
 use velopack::{UpdateCheck, UpdateInfo, UpdateManager};
 
 use crate::diag;
+use crate::work::{self, Wake};
 
 /// Where releases are published.
 pub const RELEASES: &str = "https://github.com/Trashpanda-GameDev/Asset-Browser";
 /// A folder or web address holding `vpk pack` output, checked instead of `RELEASES`: for trying an
 /// update out before it's released.
-pub const FEED_VARIABLE: &str = "ASSET_BROWSER_UPDATE_FEED";
+const FEED_VARIABLE: &str = "ASSET_BROWSER_UPDATE_FEED";
 /// How often a copy that's left open checks again. A check uses one or two of the 60 requests an
 /// hour GitHub allows an address that doesn't sign in.
 const CHECK_AGAIN: Duration = Duration::from_secs(6 * 60 * 60);
@@ -63,22 +63,34 @@ pub struct Updates {
     status: Status,
     tx: Sender<Event>,
     rx: Receiver<Event>,
-    repaint: Arc<dyn Fn() + Send + Sync>,
+    repaint: Wake,
     /// When the last check started, to check again.
     started: Option<Instant>,
     /// When a check last found nothing newer.
     checked: Option<SystemTime>,
-    /// The check under way was asked for, so its answer is shown; and when that answer came.
-    asked: bool,
-    answered: Option<Instant>,
-    downloaded: Option<Box<UpdateInfo>>,
-    /// Velopack's updater is waiting for the app to close, to install the download.
-    installing: bool,
+    asked: Asked,
+    download: Download,
+}
+
+/// A check someone asked for, whose answer is shown for a moment.
+enum Asked {
+    No,
+    /// Under way.
+    Waiting,
+    Answered(Instant),
+}
+
+/// The update that was downloaded.
+enum Download {
+    None,
+    Ready(Box<UpdateInfo>),
+    /// Handed to Velopack's updater, which installs it once the app has closed.
+    Installing,
 }
 
 impl Updates {
     /// Starts the first check, when installed. `repaint` wakes the window when there's news.
-    pub fn start(repaint: Arc<dyn Fn() + Send + Sync>) -> Self {
+    pub fn start(repaint: Wake) -> Self {
         let feed = std::env::var(FEED_VARIABLE).ok().filter(|feed| !feed.trim().is_empty());
         let source = AutoSource::new(feed.as_deref().unwrap_or(RELEASES));
         // Fails when the app isn't installed: there's no `Update.exe` beside its folder.
@@ -93,10 +105,8 @@ impl Updates {
             repaint,
             started: None,
             checked: None,
-            asked: false,
-            answered: None,
-            downloaded: None,
-            installing: false,
+            asked: Asked::No,
+            download: Download::None,
         };
         updates.check(false);
         updates
@@ -121,12 +131,15 @@ impl Updates {
 
     /// The check under way was asked for.
     pub fn asked(&self) -> bool {
-        self.asked
+        matches!(self.asked, Asked::Waiting)
     }
 
     /// When a check that was asked for ended, to show its answer for a moment.
     pub fn answered(&self) -> Option<Instant> {
-        self.answered
+        match self.asked {
+            Asked::Answered(at) => Some(at),
+            Asked::No | Asked::Waiting => None,
+        }
     }
 
     /// When a check last found nothing newer.
@@ -145,17 +158,12 @@ impl Updates {
             return;
         }
         let (manager, tx, repaint) = (manager.clone(), self.tx.clone(), self.repaint.clone());
-        let spawned = std::thread::Builder::new()
-            .name("updates".into())
-            .spawn(move || check_and_download(&manager, &tx, &*repaint));
-        match spawned {
-            Ok(_) => {
-                self.status = Status::Checking;
-                self.started = Some(Instant::now());
-                self.asked = asked;
-                self.answered = None;
-            }
-            Err(err) => self.status = Status::Failed { action: "check for updates", error: err.to_string() },
+        if work::spawn("updates", move || check_and_download(&manager, &tx, &*repaint)).is_some() {
+            self.status = Status::Checking;
+            self.started = Some(Instant::now());
+            self.asked = if asked { Asked::Waiting } else { Asked::No };
+        } else {
+            self.status = Status::Failed { action: "check for updates", error: "the check couldn't start".to_owned() };
         }
     }
 
@@ -176,7 +184,7 @@ impl Updates {
                 }
                 Event::Downloaded(update) => {
                     self.status = Status::Ready { version: update.TargetFullRelease.Version.clone() };
-                    self.downloaded = Some(update);
+                    self.download = Download::Ready(update);
                     self.answer();
                 }
                 Event::Failed { action, error } => {
@@ -191,8 +199,8 @@ impl Updates {
     }
 
     fn answer(&mut self) {
-        if std::mem::take(&mut self.asked) {
-            self.answered = Some(Instant::now());
+        if let Asked::Waiting = self.asked {
+            self.asked = Asked::Answered(Instant::now());
         }
     }
 
@@ -208,14 +216,11 @@ impl Updates {
     }
 
     fn install(&mut self, restart: bool) -> bool {
-        let (Some(manager), Some(update)) = (&self.manager, &self.downloaded) else { return false };
-        if self.installing {
-            return false;
-        }
+        let (Some(manager), Download::Ready(update)) = (&self.manager, &self.download) else { return false };
         // Restarting shows the updater's progress; closing doesn't pop anything up afterwards.
         match manager.wait_exit_then_apply_updates(&**update, !restart, restart, Vec::<&str>::new()) {
             Ok(()) => {
-                self.installing = true;
+                self.download = Download::Installing;
                 true
             }
             Err(err) => {
@@ -230,13 +235,14 @@ impl Updates {
 /// Checks for a newer release and downloads it, sending news as it goes.
 fn check_and_download(manager: &UpdateManager, tx: &Sender<Event>, repaint: &(dyn Fn() + Send + Sync)) {
     let send = |event| {
+        // Fails only when the window has closed.
         let _ = tx.send(event);
         repaint();
     };
     let update = match manager.check_for_updates() {
         Ok(UpdateCheck::UpdateAvailable(update)) => update,
         Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => return send(Event::UpToDate),
-        Err(err) => return send(failed("check for updates", err)),
+        Err(err) => return send(failed("check for updates", &err)),
     };
     send(Event::Downloading(update.TargetFullRelease.Version.clone()));
     // Velopack reports every 5%, until the download ends and drops its end of the channel.
@@ -252,18 +258,20 @@ fn check_and_download(manager: &UpdateManager, tx: &Sender<Event>, repaint: &(dy
     });
     send(match downloaded {
         Ok(()) => Event::Downloaded(update),
-        Err(err) => failed("download the update", err),
+        Err(err) => failed("download the update", &err),
     });
 }
 
 /// Logged, but shown only when the check was asked for: being offline isn't worth a warning.
-fn failed(action: &'static str, err: velopack::Error) -> Event {
-    diag::note(&format!("Couldn't {action}"), &err);
+fn failed(action: &'static str, err: &velopack::Error) -> Event {
+    diag::note(&format!("Couldn't {action}"), err);
     Event::Failed { action, error: err.to_string() }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
@@ -305,7 +313,7 @@ mod tests {
         assert_eq!(updates.status(), &offline);
         assert!(updates.answered().is_none());
 
-        updates.asked = true;
+        updates.asked = Asked::Waiting;
         updates.tx.send(Event::UpToDate).unwrap();
         updates.poll();
         assert_eq!(updates.status(), &Status::UpToDate);

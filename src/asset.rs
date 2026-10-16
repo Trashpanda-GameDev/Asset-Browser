@@ -1,7 +1,5 @@
 //! What kind of asset a file is, decided by its extension.
 
-use eframe::egui::Color32;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AssetKind {
     Image,
@@ -62,20 +60,71 @@ impl AssetKind {
             Self::Model => "Model",
         }
     }
+}
 
-    pub fn color(self) -> Color32 {
-        match self {
-            Self::Image => Color32::from_rgb(92, 168, 255),
-            Self::Audio => Color32::from_rgb(255, 176, 72),
-            Self::Model => Color32::from_rgb(84, 210, 146),
+/// Which kinds of asset are shown: every kind, or a mode's one (`Mode::kinds`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KindSet([bool; 3]);
+
+impl KindSet {
+    pub const ALL: Self = Self([true; 3]);
+
+    pub fn of(kinds: &[AssetKind]) -> Self {
+        let mut set = [false; 3];
+        for kind in kinds {
+            set[kind.index()] = true;
         }
+        Self(set)
     }
 
-    pub fn icon(self) -> &'static str {
-        match self {
-            Self::Image => egui_phosphor::regular::IMAGE,
-            Self::Audio => egui_phosphor::regular::WAVEFORM,
-            Self::Model => egui_phosphor::regular::CUBE,
+    pub fn only(kind: AssetKind) -> Self {
+        Self::of(&[kind])
+    }
+
+    pub fn contains(self, kind: AssetKind) -> bool {
+        self.0[kind.index()]
+    }
+
+    /// How many of `counts` (one per kind, in `AssetKind::index` order) are of these kinds.
+    pub fn count(self, counts: [u32; 3]) -> u32 {
+        counts.iter().zip(self.0).filter(|(_, on)| *on).map(|(count, _)| count).sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every cached folder index holds these numbers: changing one would file people's assets under
+    /// the wrong kind until their folders are scanned again.
+    #[test]
+    fn stored_numbers_never_change() {
+        assert_eq!(AssetKind::ALL.map(AssetKind::to_db), [0, 1, 2]);
+        for kind in AssetKind::ALL {
+            assert_eq!(AssetKind::from_db(kind.to_db()), Some(kind));
         }
+        assert_eq!(AssetKind::from_db(3), None);
+        assert_eq!(AssetKind::from_db(-1), None);
+    }
+
+    #[test]
+    fn a_kind_set_counts_only_its_kinds() {
+        let counts = [5, 7, 11];
+        assert_eq!(KindSet::ALL.count(counts), 23);
+        assert_eq!(KindSet::only(AssetKind::Audio).count(counts), 7);
+        assert_eq!(KindSet::of(&[AssetKind::Image, AssetKind::Model]).count(counts), 16);
+        assert!(KindSet::only(AssetKind::Model).contains(AssetKind::Model));
+        assert!(!KindSet::only(AssetKind::Model).contains(AssetKind::Image));
+    }
+
+    #[test]
+    fn the_extension_decides_the_kind() {
+        assert_eq!(AssetKind::from_extension("png"), Some(AssetKind::Image));
+        assert_eq!(AssetKind::from_extension("PSD"), Some(AssetKind::Image), "any case");
+        assert_eq!(AssetKind::from_extension("Ogg"), Some(AssetKind::Audio));
+        assert_eq!(AssetKind::from_extension("glb"), Some(AssetKind::Model));
+        assert_eq!(AssetKind::from_extension("txt"), None);
+        assert_eq!(AssetKind::from_extension(""), None);
+        assert_eq!(AssetKind::from_extension("pngpngpng"), None, "longer than any asset's extension");
     }
 }
