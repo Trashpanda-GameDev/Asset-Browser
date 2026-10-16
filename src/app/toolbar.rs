@@ -43,7 +43,7 @@ impl BrowserApp {
             _ => "the library's folders".to_owned(),
         };
         let mode = self.browsing.mode;
-        let in_group = self.in_group_order();
+        let in_group = self.browsing.in_group_order();
         let shown = self.browsing.view.len();
         let mut go_to = None;
         let mut command = None;

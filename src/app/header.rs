@@ -109,15 +109,15 @@ impl BrowserApp {
                         self.chrome.show_inspector = !self.chrome.show_inspector;
                     }
                     widgets::divider(ui);
-                    let layout = self.mode_view().layout;
+                    let layout = self.browsing.mode_view().layout;
                     let list_tip = format!("List{}", keymap::hint(ui.ctx(), Action::List));
                     if widgets::icon_button(ui, icon::LIST, &list_tip, layout == ViewLayout::List).clicked() {
-                        self.mode_view_mut().layout = ViewLayout::List;
+                        self.browsing.mode_view_mut().layout = ViewLayout::List;
                         self.browsing.scroll_to_focus = true;
                     }
                     let grid_tip = format!("Grid{}", keymap::hint(ui.ctx(), Action::Grid));
                     if widgets::icon_button(ui, icon::SQUARES_FOUR, &grid_tip, layout == ViewLayout::Grid).clicked() {
-                        self.mode_view_mut().layout = ViewLayout::Grid;
+                        self.browsing.mode_view_mut().layout = ViewLayout::Grid;
                         self.browsing.scroll_to_focus = true;
                     }
                     widgets::divider(ui);

@@ -142,7 +142,7 @@ impl BrowserApp {
             self.run_group_command(command);
         }
         if let Some(index) = output.focus {
-            let selection = &mut self.mode_view_mut().selection;
+            let selection = &mut self.browsing.mode_view_mut().selection;
             selection.focus = Some(index);
             selection.anchor = Some(index);
             self.focused(index);
@@ -156,7 +156,8 @@ impl BrowserApp {
     /// The sound controls at the bottom, for when the preview pane is hidden.
     pub(super) fn player_bar(&mut self, ui: &mut egui::Ui) {
         let Some(library) = &self.library else { return };
-        let focus = self.mode_view().selection.focus.filter(|&index| library.entry(index).kind == AssetKind::Audio);
+        let focus =
+            self.browsing.mode_view().selection.focus.filter(|&index| library.entry(index).kind == AssetKind::Audio);
         let Some(index) = focus.or(self.sound.playing.map(|(index, _)| index)) else { return };
         if index as usize >= library.entries().len() {
             return;
@@ -247,7 +248,7 @@ impl BrowserApp {
                 .flatten()
                 .and_then(|focus| self.browsing.view.iter().position(|&index| index == focus));
             let now = self.sound.now();
-            let (sort, descending) = mode_view.order(self.in_group_order());
+            let (sort, descending) = mode_view.order(self.browsing.in_group_order());
             let browse = Browse {
                 library,
                 view: &self.browsing.view,

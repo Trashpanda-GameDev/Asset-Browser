@@ -60,9 +60,9 @@ impl BrowserApp {
     /// Shows what `view` says, with its asset selected but not played. For `src/bin/shots`.
     pub fn show_view(&mut self, view: ScreenshotView) {
         self.set_mode(view.mode);
-        self.mode_view_mut().layout = view.layout;
+        self.browsing.mode_view_mut().layout = view.layout;
         if let Some(tile) = view.tile {
-            self.mode_view_mut().tile = tile.clamp(64.0, 256.0);
+            self.browsing.mode_view_mut().tile = tile.clamp(64.0, 256.0);
         }
         let group = view.group.and_then(|name| match name {
             groups::UNCATEGORIZED_NAME => Some(UNCATEGORIZED),
@@ -73,7 +73,7 @@ impl BrowserApp {
             library.dirs().iter().position(|dir| dir.root == Some(0) && dir.lower == lower)
         });
         match (group, folder) {
-            (Some(id), _) => self.show_group(Some(id)),
+            (Some(id), _) => self.browsing.show_group(Some(id)),
             (None, Some(dir)) => self.select_dir(dir as u32),
             (None, None) => self.select_dir(self.library.as_ref().map_or(0, Library::home)),
         }
@@ -81,12 +81,12 @@ impl BrowserApp {
             view.query.clone_into(&mut self.browsing.query);
         }
         if let Some(sort) = view.sort {
-            let in_group = self.in_group_order();
-            self.mode_view_mut().set_order(in_group, sort, false);
+            let in_group = self.browsing.in_group_order();
+            self.browsing.mode_view_mut().set_order(in_group, sort, false);
         }
         let found = (self.library.as_ref().zip(view.file))
             .and_then(|(library, file)| library.entries().iter().position(|entry| entry.rel.ends_with(file)));
-        let selection = &mut self.mode_view_mut().selection;
+        let selection = &mut self.browsing.mode_view_mut().selection;
         match found {
             Some(index) => selection.only(index as u32),
             None => selection.clear(),

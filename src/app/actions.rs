@@ -23,7 +23,7 @@ impl BrowserApp {
             return;
         }
         let Some(library) = &self.library else { return };
-        let items = self.selected_in_order();
+        let items = self.browsing.selected_in_order();
         match action {
             MenuAction::Delete => {}
             MenuAction::Open => self.open_entries(&items),
@@ -104,7 +104,7 @@ impl BrowserApp {
         }
         for (action, layout) in [(Action::Grid, ViewLayout::Grid), (Action::List, ViewLayout::List)] {
             if window(action) {
-                self.mode_view_mut().layout = layout;
+                self.browsing.mode_view_mut().layout = layout;
                 self.browsing.scroll_to_focus = true;
             }
         }
@@ -117,7 +117,7 @@ impl BrowserApp {
         }
         if pressed(Action::SelectAll).is_some() {
             let view = std::mem::take(&mut self.browsing.view);
-            self.mode_view_mut().selection.all(&view);
+            self.browsing.mode_view_mut().selection.all(&view);
             self.browsing.view = view;
         }
         if pressed(Action::CopyFiles).is_some() {
@@ -161,7 +161,7 @@ impl BrowserApp {
         if let Some(step) = step
             && !self.browsing.view.is_empty()
         {
-            let focus = self.mode_view().selection.focus;
+            let focus = self.browsing.mode_view().selection.focus;
             let current = focus.and_then(|focus| self.browsing.view.iter().position(|&index| index == focus));
             let next = match current {
                 Some(position) => (position as isize + step).clamp(0, len - 1) as usize,
@@ -170,7 +170,7 @@ impl BrowserApp {
             let index = self.browsing.view[next];
             if current != Some(next) {
                 let view = std::mem::take(&mut self.browsing.view);
-                let selection = &mut self.mode_view_mut().selection;
+                let selection = &mut self.browsing.mode_view_mut().selection;
                 if shift {
                     selection.extend_to(&view, index);
                 } else {
@@ -181,7 +181,7 @@ impl BrowserApp {
             }
             self.browsing.scroll_to_focus = true;
         }
-        let focus = self.mode_view().selection.focus;
+        let focus = self.browsing.mode_view().selection.focus;
         if enter && let Some(focus) = focus {
             self.open_entries(&[focus]);
         }
@@ -197,7 +197,7 @@ impl BrowserApp {
             if self.sound.now().is_some_and(|now| !now.finished) {
                 self.sound.stop();
             } else {
-                self.mode_view_mut().selection.clear();
+                self.browsing.mode_view_mut().selection.clear();
             }
         }
     }

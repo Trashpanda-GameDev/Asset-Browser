@@ -44,7 +44,7 @@ impl BrowserApp {
             self.browsing.follow_focus = true;
         }
         match command {
-            GroupCommand::Show(id) => self.show_group(Some(id)),
+            GroupCommand::Show(id) => self.browsing.show_group(Some(id)),
             GroupCommand::Add(id, targets) => {
                 let paths = self.resolve(targets);
                 let added = self.organizing.groups.add(id, &paths);
@@ -157,7 +157,7 @@ impl BrowserApp {
                 if self.organizing.groups.delete(id) {
                     self.organizing.membership_dirty = true;
                     if self.browsing.group == Some(id) {
-                        self.show_group(None);
+                        self.browsing.show_group(None);
                     }
                     self.notify(format!("Deleted the {noun} \u{201c}{name}\u{201d}"));
                 }

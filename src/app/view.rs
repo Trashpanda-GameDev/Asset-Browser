@@ -54,13 +54,58 @@ impl Default for Browsing {
     }
 }
 
-impl BrowserApp {
+impl Browsing {
     pub(super) fn mode_view(&self) -> &ModeView {
-        &self.browsing.modes[self.browsing.mode.index()]
+        &self.modes[self.mode.index()]
     }
 
     pub(super) fn mode_view_mut(&mut self) -> &mut ModeView {
-        &mut self.browsing.modes[self.browsing.mode.index()]
+        &mut self.modes[self.mode.index()]
+    }
+
+    /// Whether the browsed assets are in a group's own order (the order they were added) or
+    /// ordered like a folder's. Uncategorized was never added to, so it's ordered like a folder.
+    pub(super) fn in_group_order(&self) -> bool {
+        self.group.is_some_and(|id| id != UNCATEGORIZED)
+    }
+
+    /// Browse a group instead of a folder, or go back to the folder.
+    pub(super) fn show_group(&mut self, group: Option<i64>) {
+        if self.group != group {
+            self.group = group;
+            self.view_dirty = true;
+            self.scroll_to_focus = true;
+        }
+    }
+
+    /// The selection in display order, focus first.
+    pub(super) fn selected_in_order(&self) -> Vec<u32> {
+        let selection = &self.mode_view().selection;
+        let mut items: Vec<u32> = self.view.iter().copied().filter(|&index| selection.contains(index)).collect();
+        if let Some(focus) = selection.focus {
+            items.retain(|&index| index != focus);
+            items.insert(0, focus);
+        }
+        items
+    }
+
+    /// Switches to `mode`; whether that changed anything.
+    pub(super) fn set_mode(&mut self, mode: Mode) -> bool {
+        if mode == self.mode {
+            return false;
+        }
+        self.mode = mode;
+        self.view_dirty = true;
+        self.scroll_to_focus = true;
+        true
+    }
+}
+
+impl BrowserApp {
+    pub(super) fn set_mode(&mut self, mode: Mode) {
+        if self.browsing.set_mode(mode) {
+            self.save_settings();
+        }
     }
 
     /// Re-finds the groups' members in the library after either changed.
@@ -80,12 +125,6 @@ impl BrowserApp {
         self.browsing.view_dirty = true;
     }
 
-    /// Whether the browsed assets are in a group's own order (the order they were added) or
-    /// ordered like a folder's. Uncategorized was never added to, so it's ordered like a folder.
-    pub(super) fn in_group_order(&self) -> bool {
-        self.browsing.group.is_some_and(|id| id != UNCATEGORIZED)
-    }
-
     pub(super) fn rebuild_view(&mut self) {
         self.browsing.view_dirty = false;
         let follow_focus = std::mem::take(&mut self.browsing.follow_focus);
@@ -96,7 +135,7 @@ impl BrowserApp {
         if self.browsing.selected_dir as usize >= library.dirs().len() {
             self.browsing.selected_dir = library.home();
         }
-        let in_group_order = self.in_group_order();
+        let in_group_order = self.browsing.in_group_order();
         let query = self.browsing.query.to_lowercase();
         let words: Vec<&str> = query.split_whitespace().collect();
         let (groups, membership) = (&self.organizing.groups, &self.organizing.membership);
@@ -152,25 +191,6 @@ impl BrowserApp {
         }
     }
 
-    /// Browse a group instead of a folder, or go back to the folder.
-    pub(super) fn show_group(&mut self, group: Option<i64>) {
-        if self.browsing.group != group {
-            self.browsing.group = group;
-            self.browsing.view_dirty = true;
-            self.browsing.scroll_to_focus = true;
-        }
-    }
-
-    pub(super) fn set_mode(&mut self, mode: Mode) {
-        if mode == self.browsing.mode {
-            return;
-        }
-        self.browsing.mode = mode;
-        self.browsing.view_dirty = true;
-        self.browsing.scroll_to_focus = true;
-        self.save_settings();
-    }
-
     pub(super) fn select_dir(&mut self, dir: u32) {
         self.browsing.selected_dir = dir;
         self.browsing.group = None;
@@ -198,7 +218,7 @@ impl BrowserApp {
 
     pub(super) fn resolve(&self, targets: Targets) -> Vec<PathBuf> {
         match targets {
-            Targets::Selection => self.paths_of(&self.selected_in_order()),
+            Targets::Selection => self.paths_of(&self.browsing.selected_in_order()),
             Targets::Paths(paths) => paths,
         }
     }
@@ -248,8 +268,8 @@ impl BrowserApp {
             self.run_group_command(command);
         }
         if let Some(sort) = output.sort_clicked {
-            let in_group = self.in_group_order();
-            let view = self.mode_view_mut();
+            let in_group = self.browsing.in_group_order();
+            let view = self.browsing.mode_view_mut();
             let (current, descending) = view.order(in_group);
             if current == sort {
                 view.set_order(in_group, sort, !descending);
@@ -258,18 +278,6 @@ impl BrowserApp {
             }
             self.browsing.view_dirty = true;
         }
-    }
-
-    /// The selection in display order, focus first.
-    pub(super) fn selected_in_order(&self) -> Vec<u32> {
-        let selection = &self.mode_view().selection;
-        let mut items: Vec<u32> =
-            self.browsing.view.iter().copied().filter(|&index| selection.contains(index)).collect();
-        if let Some(focus) = selection.focus {
-            items.retain(|&index| index != focus);
-            items.insert(0, focus);
-        }
-        items
     }
 
     /// Shows and selects `index`, switching mode, folder and search as needed.
@@ -290,7 +298,7 @@ impl BrowserApp {
             self.select_dir(dir);
         }
         self.browsing.view_dirty = true;
-        self.mode_view_mut().selection.only(index);
+        self.browsing.mode_view_mut().selection.only(index);
         self.browsing.scroll_to_focus = true;
     }
 }

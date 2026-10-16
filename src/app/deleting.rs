@@ -67,7 +67,7 @@ impl BrowserApp {
             self.notify("Still deleting the last ones…".to_owned());
             return;
         }
-        let items = self.selected_in_order();
+        let items = self.browsing.selected_in_order();
         let Some(library) = &self.library else { return };
         if items.is_empty() {
             return;
@@ -93,7 +93,7 @@ impl BrowserApp {
         };
         // The asset after them takes the selection afterwards, or else the one before.
         let chosen: HashSet<u32> = items.iter().copied().collect();
-        let focus = self.mode_view().selection.focus;
+        let focus = self.browsing.mode_view().selection.focus;
         let at = focus.and_then(|focus| self.browsing.view.iter().position(|&index| index == focus)).unwrap_or(0);
         let next = self.browsing.view[at..]
             .iter()
@@ -262,10 +262,10 @@ impl BrowserApp {
                 let library = self.library.as_ref()?;
                 library.entries().iter().position(|entry| entry.key == key).map(|index| index as u32)
             });
-            if self.mode_view().selection.is_empty()
+            if self.browsing.mode_view().selection.is_empty()
                 && let Some(index) = next.filter(|index| self.browsing.view.contains(index))
             {
-                self.mode_view_mut().selection.only(index);
+                self.browsing.mode_view_mut().selection.only(index);
                 self.browsing.scroll_to_focus = true;
                 self.focused(index);
             }
