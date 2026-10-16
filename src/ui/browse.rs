@@ -43,6 +43,8 @@ pub struct Browse<'a> {
     pub backdrop: Backdrop,
     /// Bring this position in `view` into sight (after moving with the keyboard).
     pub scroll_to: Option<usize>,
+    /// The view's scroll offset and height last frame.
+    pub scroll: (f32, f32),
     pub groups: &'a Groups,
     pub membership: &'a Membership,
     /// The group being browsed, if it's not a folder.
@@ -104,16 +106,12 @@ pub struct BrowseOutput {
     /// Assets per row and rows per screen, for the arrow and page keys.
     pub columns: usize,
     pub page_rows: usize,
+    /// The view's scroll offset and height.
+    pub scroll: (f32, f32),
 }
 
 /// The tile grid.
-pub fn grid(
-    ui: &mut Ui,
-    browse: &Browse<'_>,
-    previews: &mut Previews,
-    tile: f32,
-    scroll: &mut (f32, f32),
-) -> BrowseOutput {
+pub fn grid(ui: &mut Ui, browse: &Browse<'_>, previews: &mut Previews, tile: f32) -> BrowseOutput {
     let mut output = BrowseOutput::default();
     let width = ui.available_width();
     let columns = (((width - GAP) / (tile + GAP)).floor() as usize).max(1);
@@ -126,7 +124,7 @@ pub fn grid(
     let mut area = egui::ScrollArea::vertical().id_salt(("grid", browse.mode.key())).auto_shrink([false; 2]);
     if let Some(position) = browse.scroll_to {
         let top = (position / columns) as f32 * cell.y;
-        if let Some(offset) = scroll_into_view(top, cell.y, *scroll) {
+        if let Some(offset) = scroll_into_view(top, cell.y, browse.scroll) {
             area = area.vertical_scroll_offset(offset);
         }
     }
@@ -148,14 +146,14 @@ pub fn grid(
             }
         }
     });
-    *scroll = (result.state.offset.y, result.inner_rect.height());
+    output.scroll = (result.state.offset.y, result.inner_rect.height());
     output.page_rows = ((result.inner_rect.height() / cell.y).floor() as usize).max(1);
     want_rows(browse, previews, visible, columns, rows);
     output
 }
 
 /// The list, with a header to sort by.
-pub fn list(ui: &mut Ui, browse: &Browse<'_>, previews: &mut Previews, scroll: &mut (f32, f32)) -> BrowseOutput {
+pub fn list(ui: &mut Ui, browse: &Browse<'_>, previews: &mut Previews) -> BrowseOutput {
     let mut output = BrowseOutput { columns: 1, ..Default::default() };
     let width = ui.available_width();
     let layout = column_layout(browse.mode, width);
@@ -187,7 +185,7 @@ pub fn list(ui: &mut Ui, browse: &Browse<'_>, previews: &mut Previews, scroll: &
 
     let mut area = egui::ScrollArea::vertical().id_salt(("list", browse.mode.key())).auto_shrink([false; 2]);
     if let Some(position) = browse.scroll_to
-        && let Some(offset) = scroll_into_view(position as f32 * ROW_HEIGHT, ROW_HEIGHT, *scroll)
+        && let Some(offset) = scroll_into_view(position as f32 * ROW_HEIGHT, ROW_HEIGHT, browse.scroll)
     {
         area = area.vertical_scroll_offset(offset);
     }
@@ -209,7 +207,7 @@ pub fn list(ui: &mut Ui, browse: &Browse<'_>, previews: &mut Previews, scroll: &
             item_response(browse, index, &response, &mut output);
         }
     });
-    *scroll = (result.state.offset.y, result.inner_rect.height());
+    output.scroll = (result.state.offset.y, result.inner_rect.height());
     output.page_rows = ((result.inner_rect.height() / ROW_HEIGHT).floor() as usize).max(1);
     want_rows(browse, previews, visible, 1, browse.view.len());
     output

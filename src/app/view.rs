@@ -258,6 +258,7 @@ impl BrowserApp {
     }
 
     pub(super) fn apply_browse(&mut self, output: BrowseOutput) {
+        self.browsing.scroll = output.scroll;
         if output.columns > 0 {
             self.browsing.columns = output.columns;
             self.browsing.page_rows = output.page_rows;

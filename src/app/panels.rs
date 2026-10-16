@@ -194,15 +194,14 @@ impl BrowserApp {
             descending,
             backdrop: self.browsing.display.backdrop,
             scroll_to,
+            scroll: self.browsing.scroll,
             groups: &self.organizing.groups,
             membership: &self.organizing.membership,
             viewing: self.browsing.group,
         };
         Some(match mode_view.layout {
-            ViewLayout::Grid => {
-                browse::grid(ui, &browse, &mut self.previews, mode_view.tile, &mut self.browsing.scroll)
-            }
-            ViewLayout::List => browse::list(ui, &browse, &mut self.previews, &mut self.browsing.scroll),
+            ViewLayout::Grid => browse::grid(ui, &browse, &mut self.previews, mode_view.tile),
+            ViewLayout::List => browse::list(ui, &browse, &mut self.previews),
         })
     }
 }
