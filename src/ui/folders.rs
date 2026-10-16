@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use eframe::egui::{self, Align2, FontId, Rect, Response, Sense, Ui, pos2, vec2};
 use egui_phosphor::regular as icon;
 
+use crate::asset::KindSet;
 use crate::library::{DirNode, Library};
 
 use super::format::grouped;
@@ -89,7 +90,7 @@ impl FolderTree {
 
     /// Draws the tree; returns what was asked of a folder.
     #[expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "refactor: split into named steps")]
-    pub fn show(&mut self, ui: &mut Ui, library: &Library, kinds: [bool; 3], selected: u32) -> Option<FolderAction> {
+    pub fn show(&mut self, ui: &mut Ui, library: &Library, kinds: KindSet, selected: u32) -> Option<FolderAction> {
         let rows = self.rows(library, kinds);
         let mut action = None;
         let mut toggled = None;
@@ -213,7 +214,7 @@ Can't be read now (unplugged, moved or renamed?). Showing what was found there l
     }
 
     /// The folders to show, in order, with nothing of the mode's kinds left out.
-    fn rows(&self, library: &Library, kinds: [bool; 3]) -> Vec<Row> {
+    fn rows(&self, library: &Library, kinds: KindSet) -> Vec<Row> {
         let home = library.home();
         let shown = |dir: u32| library.dirs[dir as usize].total(kinds) > 0;
         let mut rows = Vec::new();
@@ -281,7 +282,7 @@ fn folder_menu(response: &Response, library: &Library, dir: u32) -> Option<Folde
 }
 
 /// The header's list of the library's folders: each to go to or take out, and one to add.
-pub fn library_menu(ui: &mut Ui, library: &Library, kinds: [bool; 3]) -> Option<FolderAction> {
+pub fn library_menu(ui: &mut Ui, library: &Library, kinds: KindSet) -> Option<FolderAction> {
     let mut action = None;
     ui.set_width(300.0);
     for (index, root) in library.roots.iter().enumerate() {

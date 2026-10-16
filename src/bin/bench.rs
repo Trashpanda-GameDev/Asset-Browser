@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use asset_browser::app::grouped;
-use asset_browser::asset::AssetKind;
+use asset_browser::asset::{AssetKind, KindSet};
 use asset_browser::audio::{self, Source};
 use asset_browser::imaging::Pixels;
 use asset_browser::library::{Entry, Library, root_string};
@@ -106,7 +106,7 @@ fn main() {
     let library = Library::build(vec![(root.clone(), loaded)]);
     println!("Build library: {:.0} ms ({} folders with assets)", ms(start.elapsed()), grouped(library.dirs.len()));
     let start = Instant::now();
-    let shown = library.filter(0, [true; 3], "png");
+    let shown = library.filter(0, KindSet::ALL, "png");
     println!("Search 'png':  {:.1} ms ({} matches)", start.elapsed().as_secs_f64() * 1000.0, grouped(shown.len()));
     drop(conn);
 

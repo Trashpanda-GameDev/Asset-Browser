@@ -9,6 +9,7 @@ use eframe::egui::{
 };
 use egui_phosphor::regular as icon;
 
+use crate::asset::KindSet;
 use crate::groups::{FAVORITES, Group, GroupKind, Groups, Membership, UNCATEGORIZED, UNCATEGORIZED_NAME};
 
 use super::format::grouped;
@@ -80,7 +81,7 @@ pub struct Sidebar<'a> {
     pub groups: &'a Groups,
     pub membership: &'a Membership,
     /// The mode's kinds: the counts only count those.
-    pub kinds: [bool; 3],
+    pub kinds: KindSet,
     /// The group being browsed.
     pub viewing: Option<i64>,
     pub edit: &'a mut Option<GroupEdit>,

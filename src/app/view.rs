@@ -232,7 +232,7 @@ impl BrowserApp {
         let in_folder = library.dir_chain(dir).contains(&self.selected_dir);
         let query = self.query.to_lowercase();
         let matches = query.split_whitespace().all(|word| entry.lower.contains(word));
-        if !self.mode.kinds()[kind.index()] {
+        if !self.mode.kinds().contains(kind) {
             self.set_mode(Mode::ALL.into_iter().find(|mode| mode.kind() == Some(kind)).unwrap_or(Mode::All));
         }
         if !matches {

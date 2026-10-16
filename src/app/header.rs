@@ -59,11 +59,7 @@ impl BrowserApp {
                 let notes: Vec<Option<String>> = Mode::ALL
                     .iter()
                     .map(|mode| {
-                        totals.filter(|_| show_counts).map(|totals| {
-                            grouped(
-                                mode.kinds().iter().zip(totals).filter(|(on, _)| **on).map(|(_, n)| n as usize).sum(),
-                            )
-                        })
+                        totals.filter(|_| show_counts).map(|totals| grouped(mode.kinds().count(totals) as usize))
                     })
                     .collect();
                 let tips: Vec<String> = Mode::ALL

@@ -62,6 +62,35 @@ impl AssetKind {
     }
 }
 
+/// Which kinds of asset are shown: every kind, or a mode's one (`Mode::kinds`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KindSet([bool; 3]);
+
+impl KindSet {
+    pub const ALL: Self = Self([true; 3]);
+
+    pub fn of(kinds: &[AssetKind]) -> Self {
+        let mut set = [false; 3];
+        for kind in kinds {
+            set[kind.index()] = true;
+        }
+        Self(set)
+    }
+
+    pub fn only(kind: AssetKind) -> Self {
+        Self::of(&[kind])
+    }
+
+    pub fn contains(self, kind: AssetKind) -> bool {
+        self.0[kind.index()]
+    }
+
+    /// How many of `counts` (one per kind, in `AssetKind::index` order) are of these kinds.
+    pub fn count(self, counts: [u32; 3]) -> u32 {
+        counts.iter().zip(self.0).filter(|(_, on)| *on).map(|(count, _)| count).sum()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,6 +105,16 @@ mod tests {
         }
         assert_eq!(AssetKind::from_db(3), None);
         assert_eq!(AssetKind::from_db(-1), None);
+    }
+
+    #[test]
+    fn a_kind_set_counts_only_its_kinds() {
+        let counts = [5, 7, 11];
+        assert_eq!(KindSet::ALL.count(counts), 23);
+        assert_eq!(KindSet::only(AssetKind::Audio).count(counts), 7);
+        assert_eq!(KindSet::of(&[AssetKind::Image, AssetKind::Model]).count(counts), 16);
+        assert!(KindSet::only(AssetKind::Model).contains(AssetKind::Model));
+        assert!(!KindSet::only(AssetKind::Model).contains(AssetKind::Image));
     }
 
     #[test]

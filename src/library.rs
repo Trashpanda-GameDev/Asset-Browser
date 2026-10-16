@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::asset::AssetKind;
+use crate::asset::{AssetKind, KindSet};
 use crate::preview_key::cache_key;
 use crate::scan::ScannedFile;
 
@@ -78,8 +78,8 @@ pub struct DirNode {
 
 impl DirNode {
     /// Assets of the enabled kinds in this folder and below it.
-    pub fn total(&self, kinds: [bool; 3]) -> u32 {
-        self.totals.iter().zip(kinds).filter(|(_, on)| *on).map(|(n, _)| n).sum()
+    pub fn total(&self, kinds: KindSet) -> u32 {
+        kinds.count(self.totals)
     }
 }
 
@@ -233,13 +233,13 @@ impl Library {
 
     /// Entries in `dir` (and below it) of the enabled kinds whose path contains every word of
     /// `query` (lowercase, whitespace separated).
-    pub fn filter(&self, dir: u32, kinds: [bool; 3], query: &str) -> Vec<u32> {
+    pub fn filter(&self, dir: u32, kinds: KindSet, query: &str) -> Vec<u32> {
         self.filter_with(dir, kinds, query, |_, _| false)
     }
 
     /// `filter`, where a word missing from an entry's path can still match through `also`
     /// (entry index, word): e.g. the names of the categories the entry is in.
-    pub fn filter_with(&self, dir: u32, kinds: [bool; 3], query: &str, also: impl Fn(u32, &str) -> bool) -> Vec<u32> {
+    pub fn filter_with(&self, dir: u32, kinds: KindSet, query: &str, also: impl Fn(u32, &str) -> bool) -> Vec<u32> {
         let (root, prefix) = match self.dirs.get(dir as usize) {
             Some(node) if !node.lower.is_empty() => (node.root, format!("{}/", node.lower)),
             Some(node) => (node.root, String::new()),
@@ -259,9 +259,9 @@ impl Library {
     }
 
     /// Whether the entry is of an enabled kind and has every word in its path (or in `also`).
-    pub fn matches(&self, index: u32, kinds: [bool; 3], words: &[&str], also: &impl Fn(u32, &str) -> bool) -> bool {
+    pub fn matches(&self, index: u32, kinds: KindSet, words: &[&str], also: &impl Fn(u32, &str) -> bool) -> bool {
         let entry = &self.entries[index as usize];
-        kinds[entry.kind.index()] && words.iter().all(|word| entry.lower.contains(word) || also(index, word))
+        kinds.contains(entry.kind) && words.iter().all(|word| entry.lower.contains(word) || also(index, word))
     }
 
     /// The entry of root `root` whose lowercase relative path is `lower`.
@@ -502,7 +502,7 @@ mod tests {
     #[test]
     fn sorts_with_ties_in_library_order() {
         let library = library();
-        let all = library.filter(0, [true; 3], "");
+        let all = library.filter(0, KindSet::ALL, "");
         assert_eq!(names(&library, &all), ["rock.fbx", "boom.ogg", "hit.wav", "A.png", "b.png"]);
 
         let mut view = all.clone();
@@ -528,13 +528,13 @@ mod tests {
         let sfx = library.find_dir("/assets/sfx").unwrap();
         let deep = library.find_dir("/assets/sfx/deep").unwrap();
         assert_eq!(library.dirs[sfx as usize].totals, [0, 2, 0]);
-        assert_eq!(library.dirs[0].total([true, false, true]), 3);
+        assert_eq!(library.dirs[0].total(KindSet::of(&[AssetKind::Image, AssetKind::Model])), 3);
         assert_eq!(library.home(), 1, "with one root, the tree starts at it");
         assert_eq!(library.dir_chain(deep), [0, 1, sfx, deep]);
         assert_eq!(library.dir_path(deep), Some(PathBuf::from("/assets/sfx/deep")));
         assert_eq!(library.dir_path(1), Some(PathBuf::from("/assets")));
         assert_eq!(library.dir_path(0), None, "the top is every root");
-        assert_eq!(library.filter(sfx, [false, true, false], "boom").len(), 1);
+        assert_eq!(library.filter(sfx, KindSet::only(AssetKind::Audio), "boom").len(), 1);
         let by_key = library.index_by_key();
         assert!(library.entries.iter().enumerate().all(|(index, entry)| by_key[&entry.key] == index as u32));
     }
@@ -558,9 +558,9 @@ mod tests {
         let ui_resources = library.find_dir("f:/resources/ui").unwrap();
         let ui_audio = library.find_dir("d:/audio/ui").unwrap();
         assert_ne!(ui_resources, ui_audio);
-        assert_eq!(library.filter(ui_audio, [true; 3], "").len(), 1);
-        assert_eq!(library.filter(Library::root_dir(1), [true; 3], "").len(), 2);
-        assert_eq!(library.filter(0, [true; 3], "").len(), 3);
+        assert_eq!(library.filter(ui_audio, KindSet::ALL, "").len(), 1);
+        assert_eq!(library.filter(Library::root_dir(1), KindSet::ALL, "").len(), 2);
+        assert_eq!(library.filter(0, KindSet::ALL, "").len(), 3);
         let (a, b) = (library.find(0, "ui/a.png").unwrap(), library.find(1, "ui/a.png").unwrap());
         assert_ne!(
             library.entries[a as usize].key, library.entries[b as usize].key,

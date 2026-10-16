@@ -11,7 +11,7 @@ use eframe::egui::{
 use eframe::egui_wgpu::RenderState;
 use egui_phosphor::regular as icon;
 
-use crate::asset::AssetKind;
+use crate::asset::{AssetKind, KindSet};
 use crate::detail::{Detail, DetailLoader};
 use crate::groups::{FAVORITES, GroupKind, Groups, Membership};
 use crate::imaging::Pixels;
@@ -63,7 +63,7 @@ pub struct InspectorArgs<'a> {
     pub render_state: Option<&'a RenderState>,
     /// What's being browsed, for the empty state: its count of each kind.
     pub totals: [u32; 3],
-    pub kinds: [bool; 3],
+    pub kinds: KindSet,
     pub groups: &'a Groups,
     pub membership: &'a Membership,
 }
@@ -586,7 +586,7 @@ fn selection_strip(
 }
 
 /// Shown when nothing is selected.
-fn empty_state(ui: &mut Ui, totals: [u32; 3], kinds: [bool; 3]) {
+fn empty_state(ui: &mut Ui, totals: [u32; 3], kinds: KindSet) {
     ui.add_space(ui.available_height() * 0.25);
     ui.vertical_centered(|ui| {
         ui.label(RichText::new(icon::CURSOR_CLICK).size(40.0).color(theme::TEXT_FAINT));
@@ -598,7 +598,7 @@ fn empty_state(ui: &mut Ui, totals: [u32; 3], kinds: [bool; 3]) {
                 .color(theme::TEXT_WEAK),
         );
         ui.add_space(18.0);
-        for kind in AssetKind::ALL.into_iter().filter(|kind| kinds[kind.index()]) {
+        for kind in AssetKind::ALL.into_iter().filter(|kind| kinds.contains(*kind)) {
             let count = totals[kind.index()];
             let noun = if count == 1 { kind.singular() } else { kind.label() }.to_lowercase();
             ui.label(

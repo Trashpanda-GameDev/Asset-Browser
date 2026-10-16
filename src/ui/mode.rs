@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use eframe::egui::Color32;
 use egui_phosphor::regular as icon;
 
-use crate::asset::AssetKind;
+use crate::asset::{AssetKind, KindSet};
 use crate::library::SortBy;
 
 use super::theme;
@@ -42,15 +42,8 @@ impl Mode {
         }
     }
 
-    pub fn kinds(self) -> [bool; 3] {
-        match self.kind() {
-            None => [true; 3],
-            Some(kind) => {
-                let mut kinds = [false; 3];
-                kinds[kind.index()] = true;
-                kinds
-            }
-        }
+    pub fn kinds(self) -> KindSet {
+        self.kind().map_or(KindSet::ALL, KindSet::only)
     }
 
     pub fn label(self) -> &'static str {

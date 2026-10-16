@@ -20,6 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, params};
 
+use crate::asset::KindSet;
 pub use crate::library::path_key;
 use crate::library::{Library, Located};
 use crate::{db, diag};
@@ -443,8 +444,8 @@ impl Membership {
     }
 
     /// Members of the enabled kinds in the library.
-    pub fn total(&self, id: i64, kinds: [bool; 3]) -> u32 {
-        self.totals(id).iter().zip(kinds).filter(|(_, on)| *on).map(|(n, _)| n).sum()
+    pub fn total(&self, id: i64, kinds: KindSet) -> u32 {
+        kinds.count(self.totals(id))
     }
 
     /// Whether `word` (lowercase) is in the name of a category the entry is in: how the search
@@ -563,14 +564,14 @@ mod tests {
         assert_eq!(membership.missing[&footsteps].len(), 1);
         assert_eq!(membership.elsewhere[&footsteps], 1);
         assert_eq!(membership.totals(FAVORITES), [1, 1, 0]);
-        assert_eq!(membership.total(FAVORITES, [false, true, false]), 1);
+        assert_eq!(membership.total(FAVORITES, KindSet::only(AssetKind::Audio)), 1);
         assert!(membership.is_favorite(icon) && !membership.is_favorite(library.find(0, "rock.fbx").unwrap()));
         assert_eq!(membership.groups_of(step), [FAVORITES, footsteps]);
         assert!(membership.category_matches(&groups, step, "foot"));
         assert!(!membership.category_matches(&groups, icon, "foot"));
         // Search finds the sound by its category although "footsteps" isn't in its path.
         let found = library
-            .filter_with(0, [true; 3], "footsteps", |index, word| membership.category_matches(&groups, index, word));
+            .filter_with(0, KindSet::ALL, "footsteps", |index, word| membership.category_matches(&groups, index, word));
         assert_eq!(found, [step]);
         // Uncategorized: everything in no category (Favorites isn't one), in library order.
         let rock = library.find(0, "rock.fbx").unwrap();
