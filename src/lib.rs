@@ -13,6 +13,7 @@ pub(crate) mod deletion;
 pub(crate) mod detail;
 pub mod diag;
 pub mod groups;
+pub mod imaging;
 pub(crate) mod keymap;
 pub mod library;
 pub(crate) mod memory;

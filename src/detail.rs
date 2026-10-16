@@ -12,9 +12,9 @@ use fast_image_resize as fr;
 
 use crate::animated;
 use crate::asset::AssetKind;
+use crate::imaging::{self, ThumbPixels};
 use crate::model::{self, LoadOptions, Model};
 use crate::sheets::{self, Sheet};
-use crate::thumbs::{self, ThumbPixels};
 
 /// Longest side of an inspector picture, and of a model's textures in the 3D view.
 const DETAIL_MAX: u32 = 2048;
@@ -111,7 +111,7 @@ fn run(slot: &(Mutex<Slot>, Condvar), results: &Sender<Loaded>, on_result: &(dyn
             AssetKind::Audio => Err("sounds have no large preview".to_owned()),
         }))
         .unwrap_or_else(|_| Err("the decoder crashed on this file".into()));
-        thumbs::trim_resizer(&mut resizer);
+        imaging::trim_resizer(&mut resizer);
         if results.send(Loaded { key: request.key, result }).is_err() {
             return;
         }
@@ -130,7 +130,7 @@ fn load_picture(path: &Path, resizer: &mut fr::Resizer, superseded: &dyn Fn() ->
             Ok(None) | Err(_) => {}
         }
     }
-    let pixels = thumbs::make_image(path, resizer, DETAIL_MAX)?;
+    let pixels = imaging::make_image(path, resizer, DETAIL_MAX)?;
     let view =
         sheets::Pixels { rgba: &pixels.rgba, w: pixels.w, h: pixels.h, src_w: pixels.src_w, src_h: pixels.src_h };
     let sheet = sheets::detect(path, &view);

@@ -406,7 +406,7 @@ fn decode_image(bytes: &[u8], name: &Path) -> Option<(u32, u32, Vec<u8>)> {
     // A model's textures are decoded at full size too: on the thumbnail workers they take their
     // turn in the decode budget, like pictures.
     let (w, h) = reader()?.into_dimensions().ok()?;
-    let _decoding = crate::thumbs::reserve_decode(w, h);
+    let _decoding = crate::imaging::reserve_decode(w, h);
     let image = reader()?.decode().ok()?.into_rgba8();
     let (w, h) = image.dimensions();
     Some((w, h, image.into_raw()))
@@ -424,7 +424,7 @@ fn finish(name: &str, w: u32, h: u32, mut rgba: Vec<u8>, max: u32, alpha: Alpha)
             pixel[3] = 255;
         }
     }
-    let (fit_w, fit_h) = crate::thumbs::fit_size(w, h, max);
+    let (fit_w, fit_h) = crate::imaging::fit_size(w, h, max);
     if (fit_w, fit_h) != (w, h) {
         // Opaque (most textures, and every one whose alpha was just dropped): no premultiplied
         // full-size copy needed.

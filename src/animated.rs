@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use fast_image_resize as fr;
 use image::AnimationDecoder;
 
+use crate::imaging::{ThumbPixels, fit_size, shrink};
 use crate::sheets::{Animation, Frame, Sheet, Source};
-use crate::thumbs::{ThumbPixels, fit_size, shrink};
 
 /// The frames picture's longest side, and its pixels at most (16 MP: 64 MB, on the GPU too). The
 /// memory setting can lower the pixels (`set_max_pixels`).

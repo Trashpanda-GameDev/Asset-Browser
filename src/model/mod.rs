@@ -11,7 +11,8 @@ use std::path::Path;
 
 use fast_image_resize as fr;
 
-use crate::thumbs::{THUMB_MAX, ThumbPixels};
+use crate::imaging::ThumbPixels;
+use crate::thumbs::THUMB_MAX;
 
 pub mod blend;
 mod collada;

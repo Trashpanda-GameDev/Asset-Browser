@@ -15,9 +15,10 @@ use std::time::{Duration, Instant};
 use asset_browser::app::grouped;
 use asset_browser::asset::AssetKind;
 use asset_browser::audio::{self, Source};
+use asset_browser::imaging::ThumbPixels;
 use asset_browser::library::{Entry, Library, root_string};
 use asset_browser::model::{self, LoadOptions, raster};
-use asset_browser::thumbs::{Preview, THUMB_MAX, ThumbJob, ThumbPixels, ThumbService};
+use asset_browser::thumbs::{Preview, THUMB_MAX, ThumbJob, ThumbService};
 use asset_browser::{db, scan};
 
 struct Options {

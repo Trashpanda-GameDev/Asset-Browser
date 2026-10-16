@@ -16,8 +16,8 @@ use eframe::egui::{
 };
 use egui_phosphor::regular as icon;
 
+use crate::imaging::ThumbPixels;
 use crate::sheets::{self, Frame, Guess, Pixels, Saved, Sheet, SheetStore, Source, Split};
-use crate::thumbs::ThumbPixels;
 
 use super::browse::fit_rect;
 use super::image_view::ImageView;

@@ -14,10 +14,10 @@ use egui_phosphor::regular as icon;
 use crate::asset::AssetKind;
 use crate::detail::{Detail, DetailLoader};
 use crate::groups::{FAVORITES, GroupKind, Groups, Membership};
+use crate::imaging::ThumbPixels;
 use crate::library::{Entry, Library};
 use crate::model::Model;
 use crate::sheets::{Sheet, Source};
-use crate::thumbs::ThumbPixels;
 
 use super::browse::{Look, MenuAction, channels, draw_preview};
 use super::format::{format_age, format_size, format_time, grouped};

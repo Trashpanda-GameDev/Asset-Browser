@@ -17,7 +17,7 @@ the core can be tested, measured and reused without a window.
 | app | The window's state and what happens each frame: takes in what the services finished, applies what the views asked for | `app` |
 | ui | Draws the window from the state it's given, and returns what the user asked for | `ui`, `keymap` |
 | services | Slow work on background threads, behind a handle | `thumbs`, `audio`, `detail`, `deletion`, `updates`, `watch`, `storage`, `memory` |
-| domain | What assets are and how to read them; the library and the user's organizing | `asset`, `library`, `scan`, `groups`, `sheets`, `model`, `animated`, `psd_composite`, `changelog` |
+| domain | What assets are and how to read them; the library and the user's organizing | `asset`, `library`, `scan`, `groups`, `sheets`, `model`, `imaging`, `animated`, `psd_composite`, `changelog` |
 | foundation | Plumbing: where files go, the databases, the log, calls into the OS | `paths`, `db`, `diag`, `platform` |
 
 The programs (`src/main.rs`, `bench`, `shots`) sit on top of all of them.

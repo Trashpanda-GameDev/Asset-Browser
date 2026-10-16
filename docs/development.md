@@ -25,7 +25,8 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/library.rs` | The library's folders: sorted entries, one folder tree over all of them, filtering |
 | `src/paths.rs` | Where the cache, the user's own data and the log are kept (`ASSET_BROWSER_HOME` moves all three) |
 | `src/db.rs` | SQLite: folder index, thumbnail, waveform and model-facts caches, settings |
-| `src/thumbs.rs` | Preview worker pool and cache writer; image decoding and resizing |
+| `src/thumbs.rs` | Preview worker pool and cache writer |
+| `src/imaging.rs` | Reading pictures and shrinking them, within a memory budget shared by the threads that decode |
 | `src/audio.rs` | Playback (cpal + symphonia, lock-free ring buffer), read-ahead, waveforms |
 | `src/psd_composite.rs` | Reads a PSD/PSB's flattened picture at reduced size |
 | `src/model/` | 3D models: the loaders, the CPU thumbnail renderer, and the lighting shared with the 3D view |

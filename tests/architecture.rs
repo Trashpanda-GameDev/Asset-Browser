@@ -12,21 +12,18 @@ use std::path::{Path, PathBuf};
 /// The layers, lowest first, and the top-level modules in each.
 const LAYERS: [(&str, &[&str]); 5] = [
     ("foundation", &["paths", "db", "diag", "platform"]),
-    ("domain", &["asset", "library", "scan", "groups", "sheets", "model", "animated", "psd_composite", "changelog"]),
+    (
+        "domain",
+        &["asset", "library", "scan", "groups", "sheets", "model", "imaging", "animated", "psd_composite", "changelog"],
+    ),
     ("services", &["thumbs", "audio", "detail", "deletion", "updates", "watch", "storage", "memory"]),
     ("ui", &["ui", "keymap"]),
     ("app", &["app"]),
 ];
 
 /// A module using one in a higher layer: (module, the module it uses).
-const UPWARD_EXCEPTIONS: [(&str, &str); 6] = [
-    ("animated", "thumbs"),
-    ("db", "asset"),
-    ("db", "model"),
-    ("db", "scan"),
-    ("library", "thumbs"),
-    ("model", "thumbs"),
-];
+const UPWARD_EXCEPTIONS: [(&str, &str); 5] =
+    [("db", "asset"), ("db", "model"), ("db", "scan"), ("library", "thumbs"), ("model", "thumbs")];
 
 /// Modules below `ui` that use egui.
 const EGUI_EXCEPTIONS: [&str; 1] = ["asset"];

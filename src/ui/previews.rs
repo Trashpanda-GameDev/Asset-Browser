@@ -11,9 +11,10 @@ use eframe::egui::{self, Color32, ColorImage, TextureFilter, TextureHandle, Text
 
 use crate::asset::AssetKind;
 use crate::audio::Waveform;
+use crate::imaging::ThumbPixels;
 use crate::library::{Entry, Library};
 use crate::model::ModelInfo;
-use crate::thumbs::{Preview, Thumb, ThumbJob, ThumbPixels, ThumbService};
+use crate::thumbs::{Preview, Thumb, ThumbJob, ThumbService};
 
 /// Thumbnails kept on the GPU, until the memory setting says otherwise (`set_max_textures`). The
 /// least recently drawn go first; scrolling back reloads them from the cache in about a
