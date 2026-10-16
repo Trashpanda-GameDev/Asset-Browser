@@ -122,7 +122,7 @@ impl BrowserApp {
             let entry = library.entry(index);
             let waveform = self.previews.waveforms.get(&entry.key).map(|waveform| waveform.as_ref());
             let failed = self.previews.failed.contains_key(&entry.key);
-            ui.label(RichText::new(entry.name()).font(egui::FontId::new(13.0, theme::semibold())));
+            ui.label(RichText::new(entry.name()).font(egui::FontId::new(theme::size::BODY, theme::semibold())));
             command = sound::scrubber(ui, 56.0, &self.playback, library, index, waveform, failed);
             let duration = waveform.map(|waveform| waveform.duration as f64);
             command = command.or(sound::transport(ui, &self.playback, library, index, duration));

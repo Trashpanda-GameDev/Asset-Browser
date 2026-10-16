@@ -138,7 +138,7 @@ impl ImageView {
                 rect.right_bottom() + vec2(-10.0, -10.0),
                 Align2::RIGHT_BOTTOM,
                 "scroll to zoom · double-click for 1:1",
-                FontId::proportional(11.0),
+                FontId::proportional(theme::size::FINE),
                 if self.backdrop == Backdrop::Light { Color32::from_gray(90) } else { theme::TEXT_FAINT },
             );
         }

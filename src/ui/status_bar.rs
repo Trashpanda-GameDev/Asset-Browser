@@ -65,8 +65,10 @@ pub fn show(ui: &mut Ui, args: &StatusArgs<'_>) -> Vec<StatusCommand> {
 /// Left to right: the last error, the library's size, a deletion under way, and the scan.
 fn under_way(ui: &mut Ui, args: &StatusArgs<'_>) {
     if let Some(error) = &args.error {
-        ui.label(RichText::new(format!("{}  {error}", icon::WARNING_CIRCLE)).size(11.5).color(theme::ERROR))
-            .on_hover_text(format!("Logged to {}", paths::log_file().display()));
+        ui.label(
+            RichText::new(format!("{}  {error}", icon::WARNING_CIRCLE)).size(theme::size::SMALL).color(theme::ERROR),
+        )
+        .on_hover_text(format!("Logged to {}", paths::log_file().display()));
         widgets::divider(ui);
     }
     if let Some(library) = args.library {
@@ -74,7 +76,7 @@ fn under_way(ui: &mut Ui, args: &StatusArgs<'_>) {
         widgets::divider(ui);
     }
     if args.deleting {
-        ui.add(egui::Spinner::new().size(12.0));
+        ui.add(egui::Spinner::new().size(theme::size::CAPTION));
         ui.label(small("Deleting…".to_owned()));
         widgets::divider(ui);
     }
@@ -84,7 +86,7 @@ fn under_way(ui: &mut Ui, args: &StatusArgs<'_>) {
 /// The scan under way, or how long the last one took.
 fn scan(ui: &mut Ui, args: &StatusArgs<'_>) {
     if let Some(started) = args.scanning_since {
-        ui.add(egui::Spinner::new().size(12.0));
+        ui.add(egui::Spinner::new().size(theme::size::CAPTION));
         ui.label(small(format!("Scanning… {:.1} s", started.elapsed().as_secs_f32())));
         ui.ctx().request_repaint_after(Duration::from_millis(100));
     } else if let Some(scan) = args.last_scan {
@@ -115,7 +117,7 @@ fn previews(ui: &mut Ui, progress: ThumbProgress) {
     let pending = progress.queued + progress.busy;
     if pending > 0 {
         ui.label(small(format!("Making previews… {}", grouped(pending)))).on_hover_text(details);
-        ui.add(egui::Spinner::new().size(12.0));
+        ui.add(egui::Spinner::new().size(theme::size::CAPTION));
     } else {
         ui.label(small(format!("{} previews", grouped((progress.made + progress.from_cache) as usize))))
             .on_hover_text(details);
@@ -136,7 +138,7 @@ fn playing_elsewhere(ui: &mut Ui, args: &StatusArgs<'_>) -> Option<StatusCommand
     }
     let progress =
         now.duration.map_or(String::new(), |total| format!("  {} / {}", format_time(now.position), format_time(total)));
-    let text = RichText::new(format!("{}{progress}", entry.name())).size(12.0).color(theme::TEXT_WEAK);
+    let text = RichText::new(format!("{}{progress}", entry.name())).size(theme::size::CAPTION).color(theme::TEXT_WEAK);
     if ui.add(egui::Label::new(text).sense(Sense::click())).on_hover_text("Show this sound").clicked() {
         command = Some(StatusCommand::ShowPlaying(index));
     }
@@ -144,5 +146,5 @@ fn playing_elsewhere(ui: &mut Ui, args: &StatusArgs<'_>) -> Option<StatusCommand
 }
 
 fn small(text: String) -> RichText {
-    RichText::new(text).size(11.5).color(theme::TEXT_FAINT)
+    RichText::new(text).size(theme::size::SMALL).color(theme::TEXT_FAINT)
 }

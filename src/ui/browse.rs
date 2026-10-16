@@ -178,7 +178,7 @@ pub fn list(ui: &mut Ui, browse: &Browse<'_>, previews: &mut Previews) -> Browse
             label.push_str(if browse.descending { icon::CARET_DOWN } else { icon::CARET_UP });
         }
         let (anchor, align) = text_anchor(*column, &rect);
-        ui.painter().text(anchor, align, label, FontId::new(10.5, theme::semibold()), color);
+        ui.painter().text(anchor, align, label, FontId::new(theme::size::TINY, theme::semibold()), color);
         if response.clicked() {
             output.sort_clicked = sort;
         }
@@ -283,7 +283,7 @@ fn star_button(ui: &Ui, browse: &Browse<'_>, index: u32, center: Pos2, show_outl
     };
     // A dark halo keeps the star readable over light pictures.
     painter.circle_filled(rect.center(), 10.0, Color32::from_black_alpha(if favorite { 110 } else { 80 }));
-    painter.text(rect.center(), Align2::CENTER_CENTER, icon::STAR, FontId::new(14.0, family), color);
+    painter.text(rect.center(), Align2::CENTER_CENTER, icon::STAR, FontId::new(theme::size::MEDIUM, family), color);
     let tip = keymap::tooltip(&response.ctx, organize::favorite_action(favorite), Action::Favorite);
     let clicked = response.on_hover_text(tip).clicked();
     let path = browse.library.path_of(browse.library.entry(index));
@@ -328,7 +328,13 @@ impl Tile<'_, '_> {
         }
 
         let color = if selected { theme::TEXT } else { theme::TEXT.gamma_multiply(0.86) };
-        let galley = widgets::elided(painter, entry.name().to_owned(), FontId::proportional(12.5), color, rect.width());
+        let galley = widgets::elided(
+            painter,
+            entry.name().to_owned(),
+            FontId::proportional(theme::size::LABEL),
+            color,
+            rect.width(),
+        );
         let label_pos = pos2(rect.center().x - galley.size().x / 2.0, card.bottom() + 5.0);
         painter.galley(label_pos, galley, color);
 
@@ -386,7 +392,7 @@ pub fn draw_preview(
                 rect.right_bottom(),
                 Align2::RIGHT_BOTTOM,
                 format_time(waveform.duration as f64),
-                FontId::proportional(11.0),
+                FontId::proportional(theme::size::FINE),
                 theme::TEXT_WEAK,
             );
             if playing.is_some() {
@@ -394,7 +400,7 @@ pub fn draw_preview(
                     rect.left_bottom(),
                     Align2::LEFT_BOTTOM,
                     icon::SPEAKER_HIGH,
-                    FontId::proportional(13.0),
+                    FontId::proportional(theme::size::BODY),
                     color,
                 );
             }
@@ -643,7 +649,7 @@ impl ListRow<'_, '_> {
             let cell = Rect::from_x_y_ranges((x0 + span.start)..=(x0 + span.end), rect.y_range());
             let (anchor, align) = text_anchor(*column, &cell);
             let weak = |text: String| {
-                painter.text(anchor, align, text, FontId::proportional(12.5), theme::TEXT_WEAK);
+                painter.text(anchor, align, text, FontId::proportional(theme::size::LABEL), theme::TEXT_WEAK);
             };
             match column {
                 Column::Star => {
@@ -651,7 +657,7 @@ impl ListRow<'_, '_> {
                 }
                 Column::Categories => {
                     let mut x = cell.left() + 4.0;
-                    let font = FontId::proportional(11.5);
+                    let font = FontId::proportional(theme::size::SMALL);
                     for group in self.browse.categories(self.index) {
                         let galley = painter.layout_no_wrap(group.name.clone(), font.clone(), theme::TEXT_WEAK);
                         let width = galley.size().x + 20.0;
@@ -689,7 +695,7 @@ impl ListRow<'_, '_> {
                             thumb.center(),
                             Align2::CENTER_CENTER,
                             glyph,
-                            FontId::proportional(15.0),
+                            FontId::proportional(theme::size::TITLE),
                             theme::kind_color(entry.kind),
                         );
                     } else {
@@ -700,7 +706,7 @@ impl ListRow<'_, '_> {
                     let galley = widgets::elided(
                         painter,
                         entry.name().to_owned(),
-                        FontId::proportional(13.0),
+                        FontId::proportional(theme::size::BODY),
                         color,
                         (cell.right() - text_left - 8.0).max(10.0),
                     );
@@ -745,7 +751,7 @@ impl ListRow<'_, '_> {
                     let galley = widgets::elided(
                         painter,
                         self.browse.library.folder_label(entry),
-                        FontId::proportional(12.5),
+                        FontId::proportional(theme::size::LABEL),
                         theme::TEXT_FAINT,
                         (cell.width() - 12.0).max(10.0),
                     );

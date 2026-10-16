@@ -56,7 +56,12 @@ pub fn transport(
             }
             ui.add_space(6.0);
             let position = now.as_ref().map_or(0.0, |now| now.position);
-            ui.label(egui::RichText::new(clock(position, duration)).monospace().size(12.0).color(theme::TEXT_WEAK));
+            ui.label(
+                egui::RichText::new(clock(position, duration))
+                    .monospace()
+                    .size(theme::size::CAPTION)
+                    .color(theme::TEXT_WEAK),
+            );
             // The volume goes on its own line when the pane is too narrow for it here.
             let inline = ui.available_width() >= 150.0;
             if inline {
@@ -93,7 +98,7 @@ fn volume(ui: &mut Ui, playback: &Playback, width: f32) -> Option<SoundCommand> 
         icon::SPEAKER_HIGH
     };
     let name = playback.player.as_ref().map_or("", |player| player.device_name.as_str());
-    ui.label(egui::RichText::new(glyph).size(16.0).color(theme::TEXT_WEAK)).on_hover_text(name);
+    ui.label(egui::RichText::new(glyph).size(theme::size::LARGE).color(theme::TEXT_WEAK)).on_hover_text(name);
     changed.then_some(SoundCommand::Volume(volume))
 }
 
@@ -117,7 +122,13 @@ fn play_button(ui: &mut Ui, glyph: &str) -> egui::Response {
     let fill = if response.hovered() { theme::ACCENT } else { theme::ACCENT.gamma_multiply(0.85) };
     ui.painter().circle_filled(rect.center(), 15.0, fill);
     let nudge = if glyph == icon::PLAY { vec2(1.0, 0.0) } else { Vec2::ZERO };
-    ui.painter().text(rect.center() + nudge, Align2::CENTER_CENTER, glyph, FontId::proportional(16.0), Color32::WHITE);
+    ui.painter().text(
+        rect.center() + nudge,
+        Align2::CENTER_CENTER,
+        glyph,
+        FontId::proportional(theme::size::LARGE),
+        Color32::WHITE,
+    );
     response
 }
 
@@ -147,7 +158,13 @@ pub fn scrubber(
         draw_waveform(&painter, rect.shrink2(vec2(8.0, 10.0)), waveform, color.gamma_multiply(0.45), color, progress);
     } else {
         let text = if failed { "Couldn't read this sound" } else { "Reading…" };
-        painter.text(rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(13.0), theme::TEXT_FAINT);
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            text,
+            FontId::proportional(theme::size::BODY),
+            theme::TEXT_FAINT,
+        );
     }
     let inner = rect.shrink2(vec2(8.0, 0.0));
     let fraction_at = |x: f32| ((x - inner.left()) / inner.width()).clamp(0.0, 1.0);
@@ -168,7 +185,7 @@ pub fn scrubber(
                 pos2(x + 4.0, rect.top() + 4.0),
                 Align2::LEFT_TOP,
                 format_time(fraction_at(pointer.x) as f64 * total),
-                FontId::proportional(11.0),
+                FontId::proportional(theme::size::FINE),
                 theme::TEXT_WEAK,
             );
         }

@@ -14,13 +14,13 @@ use super::{theme, widgets};
 pub fn welcome(ui: &mut Ui) -> bool {
     ui.vertical_centered(|ui| {
         ui.add_space((ui.available_height() / 2.0 - 80.0).max(0.0));
-        ui.label(RichText::new(icon::FOLDERS).size(44.0).color(theme::TEXT_FAINT));
+        ui.label(RichText::new(icon::FOLDERS).size(theme::size::WELCOME_ICON).color(theme::TEXT_FAINT));
         ui.add_space(10.0);
-        ui.label(RichText::new("Add a folder to browse its assets").size(16.0).color(theme::TEXT_WEAK));
+        ui.label(RichText::new("Add a folder to browse its assets").size(theme::size::LARGE).color(theme::TEXT_WEAK));
         ui.add_space(4.0);
         ui.label(
             RichText::new("Or drop one on the window. Add as many as you like: they're browsed together.")
-                .size(12.5)
+                .size(theme::size::LABEL)
                 .color(theme::TEXT_FAINT),
         );
         ui.add_space(14.0);
@@ -57,7 +57,7 @@ pub fn nothing_here(ui: &mut Ui, args: &EmptyArgs<'_>) {
         format!("No {what} here match \u{201c}{query}\u{201d}.")
     };
     ui.centered_and_justified(|ui| {
-        ui.add(egui::Label::new(RichText::new(text).size(14.0).color(theme::TEXT_FAINT)).wrap());
+        ui.add(egui::Label::new(RichText::new(text).size(theme::size::MEDIUM).color(theme::TEXT_FAINT)).wrap());
     });
 }
 

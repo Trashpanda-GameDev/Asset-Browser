@@ -76,6 +76,41 @@ pub fn color_title_bar(ctx: &egui::Context, window: &impl raw_window_handle::Has
     crate::platform::color_title_bar(window, rgb(PANEL), rgb(TEXT_WEAK), rgb(BORDER));
 }
 
+/// Text sizes, smallest first: every size the window draws text and icons at, named for what
+/// they're used for. New text takes the one that fits rather than a number of its own.
+pub mod size {
+    /// File types on tiles, section labels in capitals.
+    pub const TINY: f32 = 10.5;
+    /// Print over pictures and waveforms (hints, times), and small marks such as × and ›.
+    pub const FINE: f32 = 11.0;
+    /// Notes, counts beside names, the status bar (egui's Small).
+    pub const SMALL: f32 = 11.5;
+    /// The toolbar's counts, chips, the sound's clock; spinners beside small text.
+    pub const CAPTION: f32 = 12.0;
+    /// Names under tiles, the list's columns, properties, a question's note (egui's Monospace).
+    pub const LABEL: f32 = 12.5;
+    /// Most text: rows, menus, buttons (egui's Body and Button).
+    pub const BODY: f32 = 13.0;
+    /// Where the user is, in the toolbar; What's new's notes.
+    pub const EMPHASIS: f32 = 13.5;
+    /// Small headings, a view's empty message; icons beside text, spinners beside headings.
+    pub const MEDIUM: f32 = 14.0;
+    /// A question's title, a release's name, the empty pane's; icons on their own.
+    pub const TITLE: f32 = 15.0;
+    /// The pane's asset name, the settings' version, the welcome, icons in buttons.
+    pub const LARGE: f32 = 16.0;
+    /// egui's Heading.
+    pub const HEADING: f32 = 17.0;
+    /// The hint over the window while a folder is dragged onto it.
+    pub const BANNER: f32 = 18.0;
+    /// A window's title: the settings' page, What's new.
+    pub const WINDOW_TITLE: f32 = 20.0;
+    /// The icon in the empty preview pane.
+    pub const PANE_ICON: f32 = 40.0;
+    /// The icon in the welcome, before any folder is added.
+    pub const WELCOME_ICON: f32 = 44.0;
+}
+
 /// The family used for titles.
 pub fn semibold() -> FontFamily {
     FontFamily::Name("semibold".into())
@@ -92,11 +127,11 @@ pub fn apply(ctx: &egui::Context, system: SystemFonts) {
     ctx.all_styles_mut(|style| {
         style.visuals = visuals();
         style.text_styles = [
-            (TextStyle::Small, FontId::proportional(11.5)),
-            (TextStyle::Body, FontId::proportional(13.0)),
-            (TextStyle::Button, FontId::proportional(13.0)),
-            (TextStyle::Heading, FontId::new(17.0, semibold())),
-            (TextStyle::Monospace, FontId::monospace(12.5)),
+            (TextStyle::Small, FontId::proportional(size::SMALL)),
+            (TextStyle::Body, FontId::proportional(size::BODY)),
+            (TextStyle::Button, FontId::proportional(size::BODY)),
+            (TextStyle::Heading, FontId::new(size::HEADING, semibold())),
+            (TextStyle::Monospace, FontId::monospace(size::LABEL)),
         ]
         .into();
         let spacing = &mut style.spacing;

@@ -160,7 +160,8 @@ impl Settings {
             let mut ui = ui.new_child(UiBuilder::new().max_rect(area).layout(top_down));
             ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
             ui.horizontal(|ui| {
-                let title = RichText::new(self.page.label()).font(FontId::new(20.0, theme::semibold()));
+                let title =
+                    RichText::new(self.page.label()).font(FontId::new(theme::size::WINDOW_TITLE, theme::semibold()));
                 ui.label(title.color(theme::TEXT));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if widgets::icon_button(ui, icon::X, "Close (Esc)", false).clicked() {
@@ -191,7 +192,7 @@ impl Settings {
 
     fn sidebar(&mut self, ui: &mut Ui) {
         ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
-        ui.label(RichText::new("SETTINGS").size(11.5).color(theme::TEXT_FAINT));
+        ui.label(RichText::new("SETTINGS").size(theme::size::SMALL).color(theme::TEXT_FAINT));
         ui.add_space(8.0);
         for page in Page::ALL {
             let selected = self.page == page;
@@ -210,7 +211,7 @@ impl Settings {
                 rect.left_center() + vec2(10.0, 0.0),
                 egui::Align2::LEFT_CENTER,
                 text,
-                FontId::proportional(14.0),
+                FontId::proportional(theme::size::MEDIUM),
                 color,
             );
             if response.clicked() {
@@ -324,7 +325,9 @@ impl Settings {
         note(ui, "The cache is made again as it's needed; your data can't be. Tick what to clear.");
         let file_row = |ui: &mut Ui, label: &str, path: &Path, size: Option<u64>, commands: &mut Vec<Command>| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(label).font(FontId::new(14.0, theme::semibold())).color(theme::TEXT));
+                ui.label(
+                    RichText::new(label).font(FontId::new(theme::size::MEDIUM, theme::semibold())).color(theme::TEXT),
+                );
                 if let Some(size) = size {
                     ui.label(RichText::new(format_size(size)).color(theme::TEXT_WEAK));
                 }
@@ -334,7 +337,7 @@ impl Settings {
                     }
                 });
             });
-            ui.label(RichText::new(crate::platform::native(path)).size(11.5).color(theme::TEXT_FAINT));
+            ui.label(RichText::new(crate::platform::native(path)).size(theme::size::SMALL).color(theme::TEXT_FAINT));
         };
 
         ui.add_space(6.0);
@@ -351,7 +354,7 @@ impl Settings {
         ui.add_space(10.0);
         if args.clearing {
             ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new().size(14.0));
+                ui.add(egui::Spinner::new().size(theme::size::MEDIUM));
                 ui.label(RichText::new("Clearing…").color(theme::TEXT_WEAK));
             });
         } else if self.confirming {
@@ -419,7 +422,7 @@ impl Settings {
                         ui.label(RichText::new(count).color(theme::TEXT_FAINT));
                     }
                     None if measuring => {
-                        ui.add(egui::Spinner::new().size(12.0));
+                        ui.add(egui::Spinner::new().size(theme::size::CAPTION));
                     }
                     None => {}
                 }
@@ -443,7 +446,9 @@ impl Settings {
             ui.label(RichText::new(format!("Clear {}?", names.join(", "))).color(theme::TEXT));
             for part in &chosen {
                 ui.label(
-                    RichText::new(format!("{}: {}", part.label(), part.note())).size(12.0).color(theme::TEXT_WEAK),
+                    RichText::new(format!("{}: {}", part.label(), part.note()))
+                        .size(theme::size::CAPTION)
+                        .color(theme::TEXT_WEAK),
                 );
             }
             if yours {
@@ -477,7 +482,9 @@ fn updates_page(ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command
         _ => "installed",
     };
     ui.label(
-        RichText::new(format!("Asset Browser {version}")).font(FontId::new(16.0, theme::semibold())).color(theme::TEXT),
+        RichText::new(format!("Asset Browser {version}"))
+            .font(FontId::new(theme::size::LARGE, theme::semibold()))
+            .color(theme::TEXT),
     );
     ui.label(RichText::new(kind).color(theme::TEXT_FAINT));
     ui.add_space(6.0);
@@ -496,7 +503,7 @@ fn updates_page(ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command
     };
     ui.horizontal(|ui| {
         if matches!(updates.status(), Status::Checking | Status::Downloading { .. }) {
-            ui.add(egui::Spinner::new().size(14.0));
+            ui.add(egui::Spinner::new().size(theme::size::MEDIUM));
         }
         ui.add(egui::Label::new(RichText::new(text).color(color)).wrap());
     });
@@ -590,7 +597,7 @@ fn memory_page(ui: &mut Ui, args: &SettingsArgs<'_>, commands: &mut Vec<Command>
 
 /// A line of explanation, faint and wrapping.
 fn note(ui: &mut Ui, text: &str) {
-    ui.add(egui::Label::new(RichText::new(text).size(12.5).color(theme::TEXT_FAINT)).wrap());
+    ui.add(egui::Label::new(RichText::new(text).size(theme::size::LABEL).color(theme::TEXT_FAINT)).wrap());
 }
 
 /// A tick box that shows on the dark panel (egui's own is faint there), with its label; either
@@ -606,7 +613,7 @@ fn tick(ui: &mut Ui, ticked: &mut bool, label: RichText) -> bool {
             rect.center(),
             egui::Align2::CENTER_CENTER,
             icon::CHECK,
-            FontId::proportional(13.0),
+            FontId::proportional(theme::size::BODY),
             Color32::WHITE,
         );
     } else {

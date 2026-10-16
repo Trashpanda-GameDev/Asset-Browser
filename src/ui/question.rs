@@ -42,7 +42,7 @@ pub fn ask(ctx: &egui::Context, question: &Question<'_>) -> Option<Answered> {
     let mut answered = None;
     let modal = egui::Modal::new(egui::Id::new(question.id)).show(ctx, |ui| {
         ui.set_width(question.width);
-        ui.label(RichText::new(question.title).font(egui::FontId::new(15.0, theme::semibold())));
+        ui.label(RichText::new(question.title).font(egui::FontId::new(theme::size::TITLE, theme::semibold())));
         ui.add_space(4.0);
         ui.add(egui::Label::new(RichText::new(question.details).color(theme::TEXT_WEAK)).wrap());
         if let Some(note) = &question.note {

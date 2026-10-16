@@ -168,7 +168,7 @@ impl BrowserApp {
             width: 420.0,
             title: &request.title,
             details: &request.details,
-            note: Some(note.size(12.5)),
+            note: Some(note.size(theme::size::LABEL)),
             confirm: Answer {
                 glyph: icon::TRASH,
                 label: if request.permanent { "Delete for good" } else { "Delete" },

@@ -53,7 +53,9 @@ impl BrowserApp {
                 ui.horizontal(|ui| {
                     ui.add_space(12.0);
                     let hint = "Folders of assets, browsed together. Press + or drop one on the window.";
-                    ui.add(egui::Label::new(RichText::new(hint).size(11.5).color(theme::TEXT_FAINT)).wrap());
+                    ui.add(
+                        egui::Label::new(RichText::new(hint).size(theme::size::SMALL).color(theme::TEXT_FAINT)).wrap(),
+                    );
                 });
                 return;
             };
@@ -140,7 +142,7 @@ pub(super) fn draw_drop_hint(ctx: &egui::Context) {
         area.center(),
         egui::Align2::CENTER_CENTER,
         format!("{}  Drop a folder to add it to the library", icon::FOLDER_PLUS),
-        egui::FontId::new(18.0, theme::semibold()),
+        egui::FontId::new(theme::size::BANNER, theme::semibold()),
         theme::TEXT,
     );
 }

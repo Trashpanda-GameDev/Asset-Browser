@@ -301,7 +301,7 @@ impl SheetView {
             Source::Grid(_, Guess::User) => "Your grid".to_owned(),
             Source::Grid(_, Guess::Default) => "A first guess: set the grid below".to_owned(),
         };
-        ui.label(egui::RichText::new(source).size(11.5).color(theme::TEXT_FAINT));
+        ui.label(egui::RichText::new(source).size(theme::size::SMALL).color(theme::TEXT_FAINT));
 
         if let Some(mut grid) = sheet.grid() {
             let before = grid;

@@ -70,9 +70,10 @@ fn library_button(ui: &mut Ui, roots: &[PathBuf], library: Option<&Library>, kin
         roots => (icon::FOLDERS, format!("{} folders", roots.len())),
     };
     let label = format!("{glyph}  {name}  {}", icon::CARET_DOWN);
-    let button = egui::Button::new(RichText::new(label).font(egui::FontId::new(14.0, theme::semibold())))
-        .frame_when_inactive(false)
-        .min_size(vec2(0.0, 30.0));
+    let button =
+        egui::Button::new(RichText::new(label).font(egui::FontId::new(theme::size::MEDIUM, theme::semibold())))
+            .frame_when_inactive(false)
+            .min_size(vec2(0.0, 30.0));
     let response = ui.add(button);
     let Some(library) = library else {
         let clicked = response.on_hover_text("Choose a folder of assets, or drop one on the window").clicked();

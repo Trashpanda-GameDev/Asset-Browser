@@ -72,7 +72,7 @@ fn group_title(ui: &mut Ui, id: i64, groups: &Groups) {
             ui.label(RichText::new(icon::STAR).family(theme::filled_icons()).color(theme::FAVORITE));
         }
         Some(GroupKind::Collection) => {
-            ui.label(RichText::new(icon::STACK).size(14.0).color(theme::TEXT_WEAK));
+            ui.label(RichText::new(icon::STACK).size(theme::size::MEDIUM).color(theme::TEXT_WEAK));
         }
         Some(GroupKind::Category) => {
             let (dot, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
@@ -84,7 +84,7 @@ fn group_title(ui: &mut Ui, id: i64, groups: &Groups) {
         }
     }
     ui.add_space(4.0);
-    ui.label(RichText::new(name).font(egui::FontId::new(13.5, theme::semibold())).color(theme::TEXT));
+    ui.label(RichText::new(name).font(egui::FontId::new(theme::size::EMPHASIS, theme::semibold())).color(theme::TEXT));
 }
 
 /// The folder's path from the top of its library folder; a folder clicked in it, to go to.
@@ -94,14 +94,14 @@ fn crumbs(ui: &mut Ui, library: &Library, dir: u32) -> Option<u32> {
     let mut go_to = None;
     for (i, &dir) in chain.iter().enumerate() {
         if i > 0 {
-            ui.label(RichText::new(icon::CARET_RIGHT).size(11.0).color(theme::TEXT_FAINT));
+            ui.label(RichText::new(icon::CARET_RIGHT).size(theme::size::FINE).color(theme::TEXT_FAINT));
         }
         let name = &library.dir(dir).name;
         let last = i + 1 == chain.len();
         let text = if last {
-            RichText::new(name).font(egui::FontId::new(13.5, theme::semibold())).color(theme::TEXT)
+            RichText::new(name).font(egui::FontId::new(theme::size::EMPHASIS, theme::semibold())).color(theme::TEXT)
         } else {
-            RichText::new(name).size(13.0).color(theme::TEXT_WEAK)
+            RichText::new(name).size(theme::size::BODY).color(theme::TEXT_WEAK)
         };
         if ui.add(egui::Label::new(text).sense(Sense::click())).clicked() && !last {
             go_to = Some(dir);
@@ -127,10 +127,12 @@ fn counts(ui: &mut Ui, args: &ToolbarArgs<'_>) -> Option<ToolbarCommand> {
         };
         count.push_str(&format!(" · {} outside {outside}", grouped(elsewhere)));
     }
-    ui.label(RichText::new(count).size(12.0).color(theme::TEXT_FAINT));
+    ui.label(RichText::new(count).size(theme::size::CAPTION).color(theme::TEXT_FAINT));
     let id = args.group.filter(|_| missing > 0)?;
     ui.add_space(6.0);
-    let text = RichText::new(format!("{}  {} missing", icon::WARNING, grouped(missing))).size(12.0).color(theme::ERROR);
+    let text = RichText::new(format!("{}  {} missing", icon::WARNING, grouped(missing)))
+        .size(theme::size::CAPTION)
+        .color(theme::ERROR);
     let response = ui.add(egui::Label::new(text).sense(Sense::click()));
     let clicked =
         response.on_hover_text("Moved, renamed or deleted since they were added. Click to take them out.").clicked();
@@ -147,7 +149,7 @@ fn view_options(ui: &mut Ui, args: &ToolbarArgs<'_>, commands: &mut Vec<ToolbarC
         if ui.add_sized(vec2(96.0, 20.0), slider).on_hover_text("Tile size").changed() {
             commands.push(ToolbarCommand::Tile(tile));
         }
-        ui.label(RichText::new(icon::SQUARES_FOUR).size(14.0).color(theme::TEXT_FAINT));
+        ui.label(RichText::new(icon::SQUARES_FOUR).size(theme::size::MEDIUM).color(theme::TEXT_FAINT));
     }
     if let Some((sort, descending)) = order_menu(ui, view, args.in_group_order) {
         commands.push(ToolbarCommand::Order(sort, descending));

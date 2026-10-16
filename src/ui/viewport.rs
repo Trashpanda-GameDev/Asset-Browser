@@ -193,7 +193,7 @@ impl Viewport {
                 rect.left_bottom() + vec2(10.0, -8.0),
                 Align2::LEFT_BOTTOM,
                 "drag to orbit · right-drag to pan · scroll to zoom",
-                FontId::proportional(11.0),
+                FontId::proportional(theme::size::FINE),
                 theme::TEXT_FAINT,
             );
         }

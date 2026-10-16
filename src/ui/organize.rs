@@ -207,7 +207,9 @@ impl Sidebar<'_> {
                 };
                 ui.horizontal(|ui| {
                     ui.add_space(12.0);
-                    ui.add(egui::Label::new(RichText::new(hint).size(11.5).color(theme::TEXT_FAINT)).wrap());
+                    ui.add(
+                        egui::Label::new(RichText::new(hint).size(theme::size::SMALL).color(theme::TEXT_FAINT)).wrap(),
+                    );
                 });
             }
         }
@@ -257,13 +259,13 @@ impl Row<'_> {
                     pos2(x, y),
                     Align2::CENTER_CENTER,
                     icon::STAR,
-                    FontId::new(14.0, theme::filled_icons()),
+                    FontId::new(theme::size::MEDIUM, theme::filled_icons()),
                     theme::FAVORITE,
                 );
             }
             Glyph::Icon(glyph) => {
                 let color = if self.selected { theme::ACCENT } else { theme::TEXT_WEAK };
-                painter.text(pos2(x, y), Align2::CENTER_CENTER, glyph, FontId::proportional(15.0), color);
+                painter.text(pos2(x, y), Align2::CENTER_CENTER, glyph, FontId::proportional(theme::size::TITLE), color);
             }
             Glyph::Dot(color) => {
                 painter.circle_filled(pos2(x, y), 5.0, color);
@@ -273,13 +275,13 @@ impl Row<'_> {
             }
         }
         let count = grouped(self.count as usize);
-        let count = painter.layout_no_wrap(count, FontId::proportional(11.5), theme::TEXT_FAINT);
+        let count = painter.layout_no_wrap(count, FontId::proportional(theme::size::SMALL), theme::TEXT_FAINT);
         let count_x = rect.right() - 12.0 - count.size().x;
         let color = if self.selected { theme::TEXT } else { theme::TEXT.gamma_multiply(0.88) };
         let name = widgets::elided(
             painter,
             self.name.to_owned(),
-            FontId::proportional(13.0),
+            FontId::proportional(theme::size::BODY),
             color,
             (count_x - x - 22.0).max(10.0),
         );
@@ -346,7 +348,7 @@ fn dashed_row(ui: &mut Ui, label: &str) -> Response {
         pos2(row.left() + 12.0, row.center().y),
         Align2::LEFT_CENTER,
         format!("{}  {label}", icon::PLUS),
-        FontId::proportional(12.0),
+        FontId::proportional(theme::size::CAPTION),
         color,
     );
     response
@@ -469,7 +471,7 @@ fn menu_toggle(ui: &mut Ui, on: bool, color: Option<Color32>, name: &str) -> Res
             pos2(rect.left() + 10.0, y),
             Align2::CENTER_CENTER,
             icon::CHECK,
-            FontId::proportional(13.0),
+            FontId::proportional(theme::size::BODY),
             theme::ACCENT,
         );
     }
@@ -478,7 +480,7 @@ fn menu_toggle(ui: &mut Ui, on: bool, color: Option<Color32>, name: &str) -> Res
         painter.circle_filled(pos2(x + 4.0, y), 4.5, color);
         x += 14.0;
     }
-    painter.text(pos2(x, y), Align2::LEFT_CENTER, name, FontId::proportional(13.0), theme::TEXT);
+    painter.text(pos2(x, y), Align2::LEFT_CENTER, name, FontId::proportional(theme::size::BODY), theme::TEXT);
     response
 }
 
@@ -525,7 +527,7 @@ enum ChipClick {
 }
 
 fn chip(ui: &mut Ui, name: &str, color: Color32, partly: bool) -> ChipClick {
-    let font = FontId::proportional(12.0);
+    let font = FontId::proportional(theme::size::CAPTION);
     let galley = ui.painter().layout_no_wrap(name.to_owned(), font, theme::TEXT);
     let size = vec2(galley.size().x + 44.0, 22.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
@@ -542,7 +544,13 @@ fn chip(ui: &mut Ui, name: &str, color: Color32, partly: bool) -> ChipClick {
         theme::TEXT.gamma_multiply(alpha),
     );
     let x_color = if remove.hovered() { theme::TEXT } else { theme::TEXT_FAINT };
-    painter.text(remove_rect.center(), Align2::CENTER_CENTER, icon::X, FontId::proportional(11.0), x_color);
+    painter.text(
+        remove_rect.center(),
+        Align2::CENTER_CENTER,
+        icon::X,
+        FontId::proportional(theme::size::FINE),
+        x_color,
+    );
     if remove.clicked() {
         ChipClick::Remove
     } else if response.clicked() {
@@ -561,7 +569,7 @@ pub fn drag_indicator(ctx: &egui::Context) {
     let Some(pointer) = ctx.pointer_latest_pos() else { return };
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("dragged-assets")));
     let text = format!("{}  {}", icon::STACK, plural(payload.0.len(), "asset"));
-    let galley = painter.layout_no_wrap(text, FontId::proportional(12.5), theme::TEXT);
+    let galley = painter.layout_no_wrap(text, FontId::proportional(theme::size::LABEL), theme::TEXT);
     let rect = Rect::from_min_size(pointer + vec2(14.0, 10.0), galley.size() + vec2(20.0, 10.0));
     painter.rect_filled(rect, CornerRadius::same(13), theme::ACCENT.gamma_multiply(0.9));
     painter.galley(rect.min + vec2(10.0, 5.0), galley, theme::TEXT);

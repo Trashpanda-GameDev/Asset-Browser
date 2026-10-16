@@ -11,7 +11,7 @@ use egui_phosphor::regular as icon;
 
 use super::theme;
 
-const ICON_SIZE: f32 = 16.0;
+const ICON_SIZE: f32 = theme::size::LARGE;
 
 /// The sidebar's rows, folders and groups alike.
 pub const SIDEBAR_ROW_HEIGHT: f32 = 26.0;
@@ -48,7 +48,7 @@ pub fn icon_button_sized(ui: &mut Ui, glyph: &str, tooltip: &str, active: bool, 
 
 /// A button with an icon and a label on a card background.
 pub fn button(ui: &mut Ui, glyph: &str, label: &str) -> Response {
-    let font = FontId::proportional(13.0);
+    let font = FontId::proportional(theme::size::BODY);
     let galley = ui.painter().layout_no_wrap(label.to_owned(), font.clone(), theme::TEXT);
     let icon_width = if glyph.is_empty() { 0.0 } else { ICON_SIZE + 6.0 };
     let size = vec2(galley.size().x + icon_width + 22.0, 28.0);
@@ -91,8 +91,8 @@ pub struct Segment<'a> {
 pub fn segmented(ui: &mut Ui, id: Id, segments: &[Segment<'_>], selected: usize) -> Option<usize> {
     const PAD: f32 = 3.0;
     const HEIGHT: f32 = 30.0;
-    let font = FontId::proportional(13.0);
-    let note_font = FontId::proportional(11.5);
+    let font = FontId::proportional(theme::size::BODY);
+    let note_font = FontId::proportional(theme::size::SMALL);
     let painter = ui.painter().clone();
     let widths: Vec<f32> = segments
         .iter()
@@ -167,7 +167,7 @@ pub fn segmented(ui: &mut Ui, id: Id, segments: &[Segment<'_>], selected: usize)
 
 /// An on/off pill with an icon and a label.
 pub fn toggle_chip(ui: &mut Ui, glyph: &str, label: &str, on: &mut bool, tooltip: &str) -> Response {
-    let font = FontId::proportional(12.5);
+    let font = FontId::proportional(theme::size::LABEL);
     let galley = ui.painter().layout_no_wrap(label.to_owned(), font, theme::TEXT);
     let size = vec2(galley.size().x + ICON_SIZE + 26.0, 26.0);
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
@@ -188,7 +188,13 @@ pub fn toggle_chip(ui: &mut Ui, glyph: &str, label: &str, on: &mut bool, tooltip
         painter.rect_stroke(rect, CornerRadius::same(13), Stroke::new(1.0, theme::BORDER), StrokeKind::Inside);
     }
     let y = rect.center().y;
-    painter.text(pos2(rect.left() + 10.0, y), Align2::LEFT_CENTER, glyph, FontId::proportional(14.0), color);
+    painter.text(
+        pos2(rect.left() + 10.0, y),
+        Align2::LEFT_CENTER,
+        glyph,
+        FontId::proportional(theme::size::MEDIUM),
+        color,
+    );
     painter.galley(pos2(rect.left() + 16.0 + ICON_SIZE, y - galley.size().y / 2.0), galley, color);
     if tooltip.is_empty() { response } else { response.on_hover_text(tooltip) }
 }
@@ -208,7 +214,7 @@ pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, focus: bool) -> 
         pos2(rect.left() + 12.0, rect.center().y),
         Align2::LEFT_CENTER,
         icon::MAGNIFYING_GLASS,
-        FontId::proportional(15.0),
+        FontId::proportional(theme::size::TITLE),
         if focused { theme::TEXT } else { theme::TEXT_FAINT },
     );
 
@@ -240,7 +246,13 @@ pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, focus: bool) -> 
         let clear = Rect::from_center_size(pos2(rect.right() - 18.0, rect.center().y), Vec2::splat(22.0));
         let response = ui.interact(clear, id.with("clear"), Sense::click());
         let color = if response.hovered() { theme::TEXT } else { theme::TEXT_FAINT };
-        painter.text(clear.center(), Align2::CENTER_CENTER, icon::X_CIRCLE, FontId::proportional(15.0), color);
+        painter.text(
+            clear.center(),
+            Align2::CENTER_CENTER,
+            icon::X_CIRCLE,
+            FontId::proportional(theme::size::TITLE),
+            color,
+        );
         if response.on_hover_text("Clear the search (Esc)").clicked() {
             text.clear();
             changed = true;
@@ -251,14 +263,20 @@ pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, focus: bool) -> 
 
 /// A small dim caption above a group of controls.
 pub fn section_label(ui: &mut Ui, text: &str) {
-    ui.label(egui::RichText::new(text.to_uppercase()).size(10.5).color(theme::TEXT_FAINT).strong());
+    ui.label(egui::RichText::new(text.to_uppercase()).size(theme::size::TINY).color(theme::TEXT_FAINT).strong());
 }
 
 /// One "name: value" line in the inspector. Returns the value's response.
 pub fn property(ui: &mut Ui, name: &str, value: impl Into<egui::WidgetText>) -> Response {
     ui.horizontal_top(|ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(96.0, 18.0), Sense::hover());
-        ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, name, FontId::proportional(12.5), theme::TEXT_WEAK);
+        ui.painter().text(
+            rect.left_center(),
+            Align2::LEFT_CENTER,
+            name,
+            FontId::proportional(theme::size::LABEL),
+            theme::TEXT_WEAK,
+        );
         ui.add(egui::Label::new(value.into()).wrap())
     })
     .inner
@@ -319,7 +337,7 @@ pub fn badge_widget(ui: &mut Ui, text: &str, color: Color32) -> Response {
 }
 
 fn badge_font() -> FontId {
-    FontId::new(10.5, theme::semibold())
+    FontId::new(theme::size::TINY, theme::semibold())
 }
 
 fn paint_badge(painter: &egui::Painter, rect: Rect, galley: std::sync::Arc<egui::Galley>, color: Color32) {

@@ -38,7 +38,7 @@ pub fn ready(new: &str) -> String {
 
 /// Draws it, for the right-to-left end of the status bar. Returns what was clicked.
 pub fn status(ui: &mut Ui, updates: &Updates) -> Option<UpdateAction> {
-    let small = |text: String, color: Color32| RichText::new(text).size(11.5).color(color);
+    let small = |text: String, color: Color32| RichText::new(text).size(theme::size::SMALL).color(color);
     let version = updates.version();
     let about = format!("Asset Browser {version}, {}", if updates.is_portable() { "portable" } else { "installed" });
     let answering = updates.answered().map(|at| at.elapsed()).filter(|shown| *shown < ANSWER_TIME);
@@ -60,7 +60,7 @@ pub fn status(ui: &mut Ui, updates: &Updates) -> Option<UpdateAction> {
         }
         Status::Checking if updates.asked() => {
             ui.label(small("Checking for updates…".to_owned(), theme::TEXT_FAINT));
-            ui.add(egui::Spinner::new().size(12.0));
+            ui.add(egui::Spinner::new().size(theme::size::CAPTION));
             None
         }
         Status::Checking => {
@@ -86,7 +86,7 @@ pub fn status(ui: &mut Ui, updates: &Updates) -> Option<UpdateAction> {
         Status::Downloading { version: new, percent } => {
             ui.label(small(downloading(new, *percent), theme::TEXT_FAINT))
                 .on_hover_text(format!("{about}. Downloading Asset Browser {new}."));
-            ui.add(egui::Spinner::new().size(12.0));
+            ui.add(egui::Spinner::new().size(theme::size::CAPTION));
             None
         }
         Status::Ready { version: new } => {

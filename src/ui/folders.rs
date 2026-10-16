@@ -126,7 +126,13 @@ impl FolderTree {
                         let caret_response = ui.interact(caret, ui.id().with(("caret", row.dir)), Sense::click());
                         let color = if caret_response.hovered() { theme::TEXT } else { theme::TEXT_FAINT };
                         let glyph = if open { icon::CARET_DOWN } else { icon::CARET_RIGHT };
-                        painter.text(caret.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(12.0), color);
+                        painter.text(
+                            caret.center(),
+                            Align2::CENTER_CENTER,
+                            glyph,
+                            FontId::proportional(theme::size::CAPTION),
+                            color,
+                        );
                         if caret_response.clicked() {
                             toggled = Some(row.dir);
                         }
@@ -155,19 +161,20 @@ impl FolderTree {
                         pos2(x, y),
                         Align2::LEFT_CENTER,
                         folder_glyph,
-                        FontId::proportional(15.0),
+                        FontId::proportional(theme::size::TITLE),
                         folder_color,
                     );
                     x += 22.0;
 
                     let count = grouped(node.total(kinds) as usize);
-                    let count_galley = painter.layout_no_wrap(count, FontId::proportional(11.5), theme::TEXT_FAINT);
+                    let count_galley =
+                        painter.layout_no_wrap(count, FontId::proportional(theme::size::SMALL), theme::TEXT_FAINT);
                     let count_x = rect.right() - 12.0 - count_galley.size().x;
                     let name_color = if is_selected { theme::TEXT } else { theme::TEXT.gamma_multiply(0.88) };
                     let galley = widgets::elided(
                         painter,
                         node.name.clone(),
-                        FontId::proportional(13.0),
+                        FontId::proportional(theme::size::BODY),
                         name_color,
                         (count_x - x - 8.0).max(10.0),
                     );
@@ -298,23 +305,29 @@ pub fn library_menu(ui: &mut Ui, library: &Library, kinds: KindSet) -> Option<Fo
             pos2(rect.left() + 18.0, y),
             Align2::CENTER_CENTER,
             icon::HARD_DRIVES,
-            FontId::proportional(15.0),
+            FontId::proportional(theme::size::TITLE),
             theme::TEXT_WEAK,
         );
         let count = grouped(library.dir(dir).total(kinds) as usize);
-        let count = painter.layout_no_wrap(count, FontId::proportional(11.5), theme::TEXT_FAINT);
+        let count = painter.layout_no_wrap(count, FontId::proportional(theme::size::SMALL), theme::TEXT_FAINT);
         let count_x = remove_rect.left() - 6.0 - count.size().x;
         let name = widgets::elided(
             painter,
             root.name.clone(),
-            FontId::proportional(13.0),
+            FontId::proportional(theme::size::BODY),
             theme::TEXT,
             (count_x - rect.left() - 44.0).max(10.0),
         );
         painter.galley(pos2(rect.left() + 34.0, y - name.size().y / 2.0), name, theme::TEXT);
         painter.galley(pos2(count_x, y - count.size().y / 2.0), count, theme::TEXT_FAINT);
         let x_color = if remove.hovered() { theme::TEXT } else { theme::TEXT_FAINT };
-        painter.text(remove_rect.center(), Align2::CENTER_CENTER, icon::X, FontId::proportional(12.0), x_color);
+        painter.text(
+            remove_rect.center(),
+            Align2::CENTER_CENTER,
+            icon::X,
+            FontId::proportional(theme::size::CAPTION),
+            x_color,
+        );
         if remove.on_hover_text("Remove from library (the files stay where they are)").clicked() {
             action = Some(FolderAction::RemoveRoot(root.path.clone()));
             ui.close();

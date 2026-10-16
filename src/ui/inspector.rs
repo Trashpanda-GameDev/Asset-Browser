@@ -403,7 +403,7 @@ impl Inspector {
                 rect.center_bottom() + vec2(0.0, -10.0),
                 Align2::CENTER_BOTTOM,
                 note,
-                FontId::proportional(11.5),
+                FontId::proportional(theme::size::SMALL),
                 theme::TEXT_FAINT,
             );
         }
@@ -526,12 +526,17 @@ fn title(ui: &mut Ui, library: &Library, entry: &Entry) {
         widgets::badge_widget(ui, &entry.extension().to_uppercase(), theme::TEXT_WEAK);
     });
     ui.add(
-        egui::Label::new(RichText::new(entry.name()).font(FontId::new(16.0, theme::semibold())).color(theme::TEXT))
-            .wrap(),
+        egui::Label::new(
+            RichText::new(entry.name()).font(FontId::new(theme::size::LARGE, theme::semibold())).color(theme::TEXT),
+        )
+        .wrap(),
     );
     let path = crate::platform::native(&library.path_of(entry));
-    let response =
-        ui.add(egui::Label::new(RichText::new(&path).size(11.5).color(theme::TEXT_FAINT)).wrap().sense(Sense::click()));
+    let response = ui.add(
+        egui::Label::new(RichText::new(&path).size(theme::size::SMALL).color(theme::TEXT_FAINT))
+            .wrap()
+            .sense(Sense::click()),
+    );
     if response.on_hover_text("Click to copy the path").clicked() {
         ui.ctx().copy_text(path);
     }
@@ -600,12 +605,16 @@ fn selection_strip(
 fn empty_state(ui: &mut Ui, totals: [u32; 3], kinds: KindSet) {
     ui.add_space(ui.available_height() * 0.25);
     ui.vertical_centered(|ui| {
-        ui.label(RichText::new(icon::CURSOR_CLICK).size(40.0).color(theme::TEXT_FAINT));
+        ui.label(RichText::new(icon::CURSOR_CLICK).size(theme::size::PANE_ICON).color(theme::TEXT_FAINT));
         ui.add_space(6.0);
-        ui.label(RichText::new("Nothing selected").font(FontId::new(15.0, theme::semibold())).color(theme::TEXT));
+        ui.label(
+            RichText::new("Nothing selected")
+                .font(FontId::new(theme::size::TITLE, theme::semibold()))
+                .color(theme::TEXT),
+        );
         ui.label(
             RichText::new("Click an asset to see it here.\nCtrl- or Shift-click to pick several.")
-                .size(12.0)
+                .size(theme::size::CAPTION)
                 .color(theme::TEXT_WEAK),
         );
         ui.add_space(18.0);
@@ -614,7 +623,7 @@ fn empty_state(ui: &mut Ui, totals: [u32; 3], kinds: KindSet) {
             let noun = if count == 1 { kind.singular() } else { kind.label() }.to_lowercase();
             ui.label(
                 RichText::new(format!("{}  {} {noun}", theme::kind_icon(kind), grouped(count as usize)))
-                    .size(12.5)
+                    .size(theme::size::LABEL)
                     .color(if count > 0 { theme::TEXT_WEAK } else { theme::TEXT_FAINT }),
             );
         }
@@ -644,7 +653,7 @@ fn animation_button(ui: &mut Ui, animating: bool, frames: Option<usize>) -> egui
             pos2(rect.left() + 13.0, rect.center().y),
             Align2::CENTER_CENTER,
             icon::FILM_STRIP,
-            FontId::proportional(14.0),
+            FontId::proportional(theme::size::MEDIUM),
             color,
         );
         let count = frames.map(|n| n.to_string()).unwrap_or_default();
@@ -652,11 +661,17 @@ fn animation_button(ui: &mut Ui, animating: bool, frames: Option<usize>) -> egui
             pos2(rect.right() - 8.0, rect.center().y),
             Align2::RIGHT_CENTER,
             count,
-            FontId::proportional(12.0),
+            FontId::proportional(theme::size::CAPTION),
             color,
         );
     } else {
-        painter.text(rect.center(), Align2::CENTER_CENTER, icon::FILM_STRIP, FontId::proportional(14.0), color);
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            icon::FILM_STRIP,
+            FontId::proportional(theme::size::MEDIUM),
+            color,
+        );
     }
     let tip = match (animating, frames) {
         (true, _) => "Show the whole picture".to_owned(),
@@ -669,7 +684,7 @@ fn animation_button(ui: &mut Ui, animating: bool, frames: Option<usize>) -> egui
 /// The pane's star: "Favorite", filled once it is one.
 fn favorite_button(ui: &mut Ui, favorite: bool) -> egui::Response {
     let label = if favorite { "Favorite" } else { "Add to Favorites" };
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), FontId::proportional(13.0), theme::TEXT);
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), FontId::proportional(theme::size::BODY), theme::TEXT);
     let size = vec2(galley.size().x + 44.0, 28.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let fill = if favorite {
@@ -687,7 +702,7 @@ fn favorite_button(ui: &mut Ui, favorite: bool) -> egui::Response {
         pos2(rect.left() + 18.0, rect.center().y),
         Align2::CENTER_CENTER,
         icon::STAR,
-        FontId::new(15.0, family),
+        FontId::new(theme::size::TITLE, family),
         star,
     );
     painter.galley(pos2(rect.left() + 32.0, rect.center().y - galley.size().y / 2.0), galley, theme::TEXT);
@@ -704,7 +719,7 @@ fn placeholder(ui: &Ui, rect: Rect, entry: &Entry, previews: &Previews, look: Lo
 /// A small spinner in the corner while the large preview loads.
 fn spinner_badge(ui: &mut Ui, rect: Rect) {
     let spinner = Rect::from_min_size(rect.left_top() + vec2(10.0, 10.0), vec2(16.0, 16.0));
-    ui.put(spinner, egui::Spinner::new().size(14.0).color(theme::TEXT_WEAK));
+    ui.put(spinner, egui::Spinner::new().size(theme::size::MEDIUM).color(theme::TEXT_WEAK));
 }
 
 /// Buttons over the top-right corner of a preview.
