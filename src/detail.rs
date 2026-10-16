@@ -120,7 +120,7 @@ fn load_picture(path: &Path, resizer: &mut fr::Resizer, superseded: &dyn Fn() ->
         let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
         match animated::load_gif(&bytes, resizer, superseded) {
             Ok(Some((pixels, sheet))) => return Ok(Detail::Image(pixels, Some(sheet))),
-            Err(err) if superseded() => return Err(err),
+            Err(err) if superseded() => return Err(err.to_string()),
             // A still GIF is a picture like any other; so is one whose frames can't all be read.
             Ok(None) | Err(_) => {}
         }
