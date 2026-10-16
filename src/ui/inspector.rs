@@ -28,7 +28,7 @@ use super::mode::Selection;
 use super::organize::{self, GroupCommand, Targets};
 use super::previews::Previews;
 use super::sheet_view::SheetView;
-use super::sound;
+use super::sound::{self, SoundCommand};
 use super::viewport::Viewport;
 use super::{theme, widgets};
 
@@ -61,7 +61,7 @@ pub struct InspectorArgs<'a> {
     pub library: &'a Library,
     pub selection: &'a Selection,
     pub previews: &'a mut Previews,
-    pub playback: &'a mut Playback,
+    pub playback: &'a Playback,
     pub render_state: Option<&'a RenderState>,
     /// What's being browsed, for the empty state: its count of each kind.
     pub totals: [u32; 3],
@@ -78,6 +78,7 @@ pub struct InspectorOutput {
     pub focus: Option<u32>,
     pub action: Option<AssetAction>,
     pub command: Option<GroupCommand>,
+    pub sound: Option<SoundCommand>,
     /// The focused asset's large preview is wanted: the entry to load it for.
     pub load_detail: Option<u32>,
     /// The user changed a picture's sprite sheet: its key and the choices to save.
@@ -174,7 +175,7 @@ impl Inspector {
             let width = ui.available_width();
             match entry.kind {
                 AssetKind::Image => self.image_section(ui, entry, previews, width),
-                AssetKind::Audio => sound_section(ui, library, focus, previews, playback),
+                AssetKind::Audio => output.sound = sound_section(ui, library, focus, previews, playback),
                 AssetKind::Model => self.model_section(ui, entry, previews, render_state, width),
             }
             ui.add_space(4.0);
@@ -441,13 +442,20 @@ fn metres(value: f32) -> String {
     }
 }
 
-fn sound_section(ui: &mut Ui, library: &Library, focus: u32, previews: &Previews, playback: &mut Playback) {
+fn sound_section(
+    ui: &mut Ui,
+    library: &Library,
+    focus: u32,
+    previews: &Previews,
+    playback: &Playback,
+) -> Option<SoundCommand> {
     let entry = library.entry(focus);
     let waveform = previews.waveforms.get(&entry.key).map(|waveform| waveform.as_ref());
-    sound::scrubber(ui, 120.0, playback, library, focus, waveform, previews.failed.contains_key(&entry.key));
+    let failed = previews.failed.contains_key(&entry.key);
+    let scrubbed = sound::scrubber(ui, 120.0, playback, library, focus, waveform, failed);
     let duration =
         playback.now_for(entry.key).and_then(|now| now.duration).or(waveform.map(|waveform| waveform.duration as f64));
-    sound::transport(ui, playback, library, focus, duration);
+    scrubbed.or(sound::transport(ui, playback, library, focus, duration))
 }
 
 fn sound_properties(ui: &mut Ui, entry: &Entry, previews: &Previews) {

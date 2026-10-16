@@ -8,33 +8,51 @@ use crate::library::Library;
 use crate::playback::Playback;
 
 use super::format::format_time;
+use super::keymap::{self, Action};
 use super::{theme, widgets};
 
-/// Play/pause, stop, loop, the time and the volume for the sound `index`.
-pub fn transport(ui: &mut Ui, playback: &mut Playback, library: &Library, index: u32, duration: Option<f64>) {
+/// What's asked of the player.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SoundCommand {
+    /// Pause or resume the sound, or start it if it isn't the one playing.
+    Toggle(u32),
+    Stop,
+    /// Play the sound from this many seconds in, or jump there if it's the one playing.
+    PlayFrom(u32, f64),
+    Loop(bool),
+    Volume(f32),
+}
+
+/// Play/pause, stop, loop, the time and the volume for the sound `index`; what was asked for.
+pub fn transport(
+    ui: &mut Ui,
+    playback: &Playback,
+    library: &Library,
+    index: u32,
+    duration: Option<f64>,
+) -> Option<SoundCommand> {
     let entry = library.entry(index);
     if playback.player.is_none() {
         ui.colored_label(theme::ERROR, "No sound output. See the error in the status bar.");
-        return;
+        return None;
     }
     let now = playback.now_for(entry.key);
     let audible = now.as_ref().is_some_and(|now| !now.paused);
+    let mut command = None;
     let volume_inline = ui
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let (glyph, tip) = if audible { (icon::PAUSE, "Pause") } else { (icon::PLAY, "Play") };
-            let hint = |action| crate::ui::keymap::hint(ui.ctx(), action);
-            let (play_hint, stop_hint) =
-                (hint(crate::ui::keymap::Action::PlayPause), hint(crate::ui::keymap::Action::StopOrClear));
+            let hint = |action| keymap::hint(ui.ctx(), action);
+            let (play_hint, stop_hint) = (hint(Action::PlayPause), hint(Action::StopOrClear));
             if play_button(ui, glyph).on_hover_text(format!("{tip}{play_hint}")).clicked() {
-                playback.toggle(library, index);
+                command = Some(SoundCommand::Toggle(index));
             }
             if widgets::icon_button(ui, icon::STOP, &format!("Stop{stop_hint}"), false).clicked() {
-                playback.stop();
+                command = Some(SoundCommand::Stop);
             }
-            if widgets::icon_button(ui, icon::REPEAT, "Loop", playback.looping).clicked() {
-                playback.looping = !playback.looping;
-                playback.set_looping(playback.looping);
+            if widgets::icon_button(ui, icon::REPEAT, "Loop", playback.looping()).clicked() {
+                command = Some(SoundCommand::Loop(!playback.looping()));
             }
             ui.add_space(6.0);
             let position = now.as_ref().map_or(0.0, |now| now.position);
@@ -42,7 +60,8 @@ pub fn transport(ui: &mut Ui, playback: &mut Playback, library: &Library, index:
             // The volume goes on its own line when the pane is too narrow for it here.
             let inline = ui.available_width() >= 150.0;
             if inline {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| volume(ui, playback, 90.0));
+                let right_to_left = egui::Layout::right_to_left(egui::Align::Center);
+                command = command.or(ui.with_layout(right_to_left, |ui| volume(ui, playback, 90.0)).inner);
             }
             inline
         })
@@ -51,30 +70,31 @@ pub fn transport(ui: &mut Ui, playback: &mut Playback, library: &Library, index:
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let width = (ui.available_width() - 30.0).clamp(60.0, 160.0);
-                volume(ui, playback, width);
+                command = command.or(volume(ui, playback, width));
             });
         });
     }
     if let Some(error) = now.as_ref().and_then(|now| now.error.as_deref()) {
         ui.colored_label(theme::ERROR, error);
     }
+    command
 }
 
-/// The volume slider with a speaker icon to its left, in a right-to-left layout.
-fn volume(ui: &mut Ui, playback: &mut Playback, width: f32) {
-    let slider = egui::Slider::new(&mut playback.volume, 0.0..=1.0).show_value(false);
-    if ui.add_sized(vec2(width, 20.0), slider).changed() {
-        playback.set_volume(playback.volume);
-    }
-    let glyph = if playback.volume <= 0.001 {
+/// The volume slider with a speaker icon to its left, in a right-to-left layout; the volume set.
+fn volume(ui: &mut Ui, playback: &Playback, width: f32) -> Option<SoundCommand> {
+    let mut volume = playback.volume();
+    let slider = egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false);
+    let changed = ui.add_sized(vec2(width, 20.0), slider).changed();
+    let glyph = if volume <= 0.001 {
         icon::SPEAKER_NONE
-    } else if playback.volume < 0.5 {
+    } else if volume < 0.5 {
         icon::SPEAKER_LOW
     } else {
         icon::SPEAKER_HIGH
     };
     let name = playback.player.as_ref().map_or("", |player| player.device_name.as_str());
     ui.label(egui::RichText::new(glyph).size(16.0).color(theme::TEXT_WEAK)).on_hover_text(name);
+    changed.then_some(SoundCommand::Volume(volume))
 }
 
 /// "0:42 / 2:00" for long sounds, "0.4 / 1.2 s" for short ones.
@@ -101,17 +121,17 @@ fn play_button(ui: &mut Ui, glyph: &str) -> egui::Response {
     response
 }
 
-/// A waveform to click or drag on to jump. Starts the sound if it isn't playing.
+/// A waveform to click or drag on to jump there, starting the sound if it isn't playing.
 #[expect(clippy::too_many_arguments, reason = "refactor: take fewer, grouped arguments")]
 pub fn scrubber(
     ui: &mut Ui,
     height: f32,
-    playback: &mut Playback,
+    playback: &Playback,
     library: &Library,
     index: u32,
     waveform: Option<&Waveform>,
     failed: bool,
-) {
+) -> Option<SoundCommand> {
     let entry = library.entry(index);
     let now = playback.now_for(entry.key);
     let duration = now.as_ref().and_then(|now| now.duration).or(waveform.map(|w| w.duration as f64));
@@ -153,11 +173,9 @@ pub fn scrubber(
             );
         }
     }
-    if (response.clicked() || response.drag_stopped())
-        && let (Some(pointer), Some(total)) = (response.interact_pointer_pos(), duration)
-    {
-        playback.play_from(library, index, fraction_at(pointer.x) as f64 * total);
-    }
+    let (Some(pointer), Some(total)) = (response.interact_pointer_pos(), duration) else { return None };
+    (response.clicked() || response.drag_stopped())
+        .then(|| SoundCommand::PlayFrom(index, fraction_at(pointer.x) as f64 * total))
 }
 
 /// Draws a waveform as one mesh: a bar per column from the lowest to the highest sample in it.
@@ -193,23 +211,6 @@ pub fn draw_waveform(
         mesh.add_colored_rect(Rect::from_min_max(pos2(x, top), pos2(x + column_width, bottom)), fill);
     }
     painter.add(egui::Shape::mesh(mesh));
-}
-
-/// A small "now playing" control for the status bar, for when the playing sound isn't the one
-/// shown. Returns the entry clicked, to show it.
-pub fn now_playing_chip(ui: &mut Ui, playback: &mut Playback, library: &Library) -> Option<u32> {
-    let (index, key) = playback.playing?;
-    let now = playback.now_for(key)?;
-    let entry = library.entries().get(index as usize).filter(|entry| entry.key == key)?;
-    let glyph = if now.paused { icon::PLAY } else { icon::PAUSE };
-    if widgets::icon_button_sized(ui, glyph, "Play or pause", false, 22.0).clicked() {
-        playback.toggle(library, index);
-    }
-    let progress =
-        now.duration.map_or(String::new(), |total| format!("  {} / {}", format_time(now.position), format_time(total)));
-    let text = egui::RichText::new(format!("{}{progress}", entry.name())).size(12.0).color(theme::TEXT_WEAK);
-    let clicked = ui.add(egui::Label::new(text).sense(Sense::click())).on_hover_text("Show this sound").clicked();
-    clicked.then_some(index)
 }
 
 #[cfg(test)]

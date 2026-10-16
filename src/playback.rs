@@ -12,23 +12,32 @@ use crate::work::Wake;
 /// Sounds read into memory ahead of the selection, in the direction of travel.
 const READ_AHEAD_SOUNDS: usize = 3;
 
+/// How loud sounds play until the user changes it.
+pub const DEFAULT_VOLUME: f32 = 0.8;
+
 pub struct Playback {
     pub player: Option<Player>,
     read_ahead: ReadAhead,
     /// The entry last sent to the player: (index, key).
     pub playing: Option<(u32, i64)>,
     pub autoplay: bool,
-    pub looping: bool,
-    pub volume: f32,
+    looping: bool,
+    volume: f32,
 }
 
 impl Playback {
     /// `wake` runs when the player has news, e.g. to draw the playhead again.
     pub fn start(wake: Wake) -> Self {
         let player = Player::start(wake).map_err(|err| diag::report("No sound output", err)).ok();
-        let playback =
-            Self { player, read_ahead: ReadAhead::start(), playing: None, autoplay: true, looping: false, volume: 0.8 };
-        playback.set_volume(playback.volume);
+        let mut playback = Self {
+            player,
+            read_ahead: ReadAhead::start(),
+            playing: None,
+            autoplay: true,
+            looping: false,
+            volume: DEFAULT_VOLUME,
+        };
+        playback.set_volume(DEFAULT_VOLUME);
         playback
     }
 
@@ -82,13 +91,24 @@ impl Playback {
         }
     }
 
-    pub fn set_volume(&self, volume: f32) {
+    pub fn volume(&self) -> f32 {
+        self.volume
+    }
+
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume = volume;
         if let Some(player) = &self.player {
             player.set_volume(volume);
         }
     }
 
-    pub fn set_looping(&self, looping: bool) {
+    /// Sounds start over when they end.
+    pub fn looping(&self) -> bool {
+        self.looping
+    }
+
+    pub fn set_looping(&mut self, looping: bool) {
+        self.looping = looping;
         if let Some(player) = &self.player {
             player.set_looping(looping);
         }

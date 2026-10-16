@@ -28,11 +28,12 @@ impl BrowserApp {
             previews: self.thumbs.progress(),
             updates: &self.updates,
             focus: self.browsing.mode_view().selection.focus,
-            playback: &mut self.playback,
+            playback: &self.playback,
         };
-        for command in status_bar::show(ui, args) {
+        for command in status_bar::show(ui, &args) {
             match command {
                 StatusCommand::Update(action) => self.run_update_action(action),
+                StatusCommand::Sound(command) => self.run_sound_command(command),
                 StatusCommand::ShowPlaying(index) => self.reveal(index),
             }
         }
@@ -57,7 +58,7 @@ impl BrowserApp {
                     library,
                     selection,
                     previews: &mut self.previews,
-                    playback: &mut self.playback,
+                    playback: &self.playback,
                     render_state: self.render_state.as_ref(),
                     totals,
                     kinds: self.browsing.mode.kinds(),
@@ -79,6 +80,9 @@ impl BrowserApp {
         }
         if let Some(command) = output.command {
             self.run_group_command(command);
+        }
+        if let Some(command) = output.sound {
+            self.run_sound_command(command);
         }
         if let Some(index) = output.focus {
             let selection = &mut self.browsing.mode_view_mut().selection;
@@ -109,22 +113,19 @@ impl BrowserApp {
             return;
         }
         let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin::symmetric(12, 8));
+        let mut command = None;
         egui::Panel::bottom("player").frame(frame).show(ui, |ui| {
             let entry = library.entry(index);
             let waveform = self.previews.waveforms.get(&entry.key).map(|waveform| waveform.as_ref());
+            let failed = self.previews.failed.contains_key(&entry.key);
             ui.label(RichText::new(entry.name()).font(egui::FontId::new(13.0, theme::semibold())));
-            sound::scrubber(
-                ui,
-                56.0,
-                &mut self.playback,
-                library,
-                index,
-                waveform,
-                self.previews.failed.contains_key(&entry.key),
-            );
+            command = sound::scrubber(ui, 56.0, &self.playback, library, index, waveform, failed);
             let duration = waveform.map(|waveform| waveform.duration as f64);
-            sound::transport(ui, &mut self.playback, library, index, duration);
+            command = command.or(sound::transport(ui, &self.playback, library, index, duration));
         });
+        if let Some(command) = command {
+            self.run_sound_command(command);
+        }
     }
 
     /// The middle: the toolbar over the browsed assets, or the welcome before any folder is added.

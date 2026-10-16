@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Align, Frame, Layout, Margin, RichText, Ui};
+use eframe::egui::{self, Align, Frame, Layout, Margin, RichText, Sense, Ui};
 use egui_phosphor::regular as icon;
 
 use crate::library::Library;
@@ -14,10 +14,11 @@ use crate::rescan::ScanTotals;
 use crate::thumbs::ThumbProgress;
 use crate::updates::Updates;
 
-use super::format::grouped;
+use super::format::{format_time, grouped};
 use super::organize::plural;
+use super::sound::SoundCommand;
 use super::updates::{self, UpdateAction};
-use super::{sound, theme, widgets};
+use super::{theme, widgets};
 
 pub struct StatusArgs<'a> {
     /// The last error, kept until another one.
@@ -34,27 +35,28 @@ pub struct StatusArgs<'a> {
     pub updates: &'a Updates,
     /// The asset in the pane: the sound playing shows here only when it's another.
     pub focus: Option<u32>,
-    pub playback: &'a mut Playback,
+    pub playback: &'a Playback,
 }
 
 /// What the user asked for from the status bar.
 pub enum StatusCommand {
     Update(UpdateAction),
+    Sound(SoundCommand),
     /// Show the sound playing.
     ShowPlaying(u32),
 }
 
-pub fn show(ui: &mut Ui, mut args: StatusArgs<'_>) -> Vec<StatusCommand> {
+pub fn show(ui: &mut Ui, args: &StatusArgs<'_>) -> Vec<StatusCommand> {
     let frame = Frame::new().fill(theme::PANEL).inner_margin(Margin::symmetric(12, 4));
     let mut commands = Vec::new();
     egui::Panel::bottom("status").frame(frame).show(ui, |ui| {
         ui.horizontal(|ui| {
-            under_way(ui, &args);
+            under_way(ui, args);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 commands.extend(updates::status(ui, args.updates).map(StatusCommand::Update));
                 widgets::divider(ui);
                 previews(ui, args.previews);
-                commands.extend(playing_elsewhere(ui, &mut args).map(StatusCommand::ShowPlaying));
+                commands.extend(playing_elsewhere(ui, args));
             });
         });
     });
@@ -121,14 +123,25 @@ fn previews(ui: &mut Ui, progress: ThumbProgress) {
     }
 }
 
-/// The sound playing, when it isn't the one shown; the entry clicked, to show it.
-fn playing_elsewhere(ui: &mut Ui, args: &mut StatusArgs<'_>) -> Option<u32> {
+/// The sound playing, when it isn't the one shown: play or pause it, or click it to show it.
+fn playing_elsewhere(ui: &mut Ui, args: &StatusArgs<'_>) -> Option<StatusCommand> {
     let library = args.library?;
-    if !args.playback.playing.is_some_and(|(index, _)| Some(index) != args.focus) {
-        return None;
-    }
+    let (index, key) = args.playback.playing.filter(|&(index, _)| Some(index) != args.focus)?;
     widgets::divider(ui);
-    sound::now_playing_chip(ui, args.playback, library)
+    let now = args.playback.now_for(key)?;
+    let entry = library.entries().get(index as usize).filter(|entry| entry.key == key)?;
+    let mut command = None;
+    let glyph = if now.paused { icon::PLAY } else { icon::PAUSE };
+    if widgets::icon_button_sized(ui, glyph, "Play or pause", false, 22.0).clicked() {
+        command = Some(StatusCommand::Sound(SoundCommand::Toggle(index)));
+    }
+    let progress =
+        now.duration.map_or(String::new(), |total| format!("  {} / {}", format_time(now.position), format_time(total)));
+    let text = RichText::new(format!("{}{progress}", entry.name())).size(12.0).color(theme::TEXT_WEAK);
+    if ui.add(egui::Label::new(text).sense(Sense::click())).on_hover_text("Show this sound").clicked() {
+        command = Some(StatusCommand::ShowPlaying(index));
+    }
+    command
 }
 
 fn small(text: String) -> RichText {

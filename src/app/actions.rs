@@ -9,6 +9,7 @@ use crate::ui::asset_actions::AssetAction;
 use crate::ui::keymap::{Action, Keymap};
 use crate::ui::mode::{Layout as ViewLayout, Mode};
 use crate::ui::organize::{GroupCommand, Targets, plural};
+use crate::ui::sound::SoundCommand;
 use crate::{diag, platform};
 
 use super::BrowserApp;
@@ -204,6 +205,18 @@ impl BrowserApp {
             self.focused(index);
         }
         self.browsing.scroll_to_focus = true;
+    }
+
+    /// Does what was asked of the player, from the pane, the player bar or the status bar.
+    pub(super) fn run_sound_command(&mut self, command: SoundCommand) {
+        let Some(library) = &self.library else { return };
+        match command {
+            SoundCommand::Toggle(index) => self.playback.toggle(library, index),
+            SoundCommand::Stop => self.playback.stop(),
+            SoundCommand::PlayFrom(index, seconds) => self.playback.play_from(library, index, seconds),
+            SoundCommand::Loop(on) => self.playback.set_looping(on),
+            SoundCommand::Volume(volume) => self.playback.set_volume(volume),
+        }
     }
 
     /// Plays or pauses the selected sound, or else whatever is playing.
