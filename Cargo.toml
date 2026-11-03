@@ -36,6 +36,9 @@ notify = "8.2"
 # Copied files on the clipboard, to paste into a folder or another app (`platform::copy_files`).
 # egui's own clipboard, so it's in the build already.
 arboard = { version = "3.6", default-features = false }
+# Feedback sent as GitHub issues (`feedback`). Both are in the build already, through velopack and url.
+ureq = "3.4"
+percent-encoding = "2"
 # Installs and updates the app from GitHub Releases. Pinned to the `vpk` version that packs releases
 # (.github/workflows/release.yml), which must match.
 velopack = "=1.2.161"
@@ -54,6 +57,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Graphics_Dwm",
     "Win32_Storage_FileSystem",
     "Win32_System_ProcessStatus",
+    "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_System_WindowsProgramming",
 ] }

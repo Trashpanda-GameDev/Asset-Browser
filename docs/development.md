@@ -39,7 +39,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/groups/` | Favorites, collections and categories (`mod.rs`), how they're saved (`store.rs`), and where their members are in the library (`membership.rs`) |
 | `src/sheets/` | Sprite sheets: what one is (`mod.rs`), guessing grids (`guess.rs`), reading Aseprite / TexturePacker data (`data.rs`), per-file choices (`store.rs`) |
 | `src/animated.rs` | Animated GIFs as sheets of their own frames, within a memory budget |
-| `src/app/` | The window's state (`BrowserApp`, in `mod.rs`) and what it does, a file an area: the library's folders and scans (`library.rs`), what's browsed and selected (`view.rs`), keys and asset actions (`actions.rs`), favorites, collections and categories (`organizing.rs`), deleting (`deleting.rs`), dragging files out of the window (`drag_out.rs`), settings (`settings.rs`, saved under the keys in `setting_keys.rs`), the window's parts (`header.rs`, `toolbar.rs`, `sidebar.rs`, `panels.rs`, `toast.rs`), and the screenshots tool's hooks (`screenshots.rs`) |
+| `src/app/` | The window's state (`BrowserApp`, in `mod.rs`) and what it does, a file an area: the library's folders and scans (`library.rs`), what's browsed and selected (`view.rs`), keys and asset actions (`actions.rs`), favorites, collections and categories (`organizing.rs`), deleting (`deleting.rs`), dragging files out of the window (`drag_out.rs`), feedback (`feedback.rs`), settings (`settings.rs`, saved under the keys in `setting_keys.rs`), the window's parts (`header.rs`, `toolbar.rs`, `sidebar.rs`, `panels.rs`, `toast.rs`), and the screenshots tool's hooks (`screenshots.rs`) |
 | `src/ui/mode.rs` | The modes, what each remembers, and the selection |
 | `src/ui/header.rs` | The window's top: the library's folders, the modes, the view's buttons and the search |
 | `src/ui/toolbar.rs` | Above the assets: where you are, the counts, the order and each mode's own options |
@@ -61,6 +61,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/deletion.rs` | Deleting to the Recycle Bin on its own thread, and which files actually went |
 | `src/diag.rs` | Error log, once a program starts it (`main.rs` does), and panic hook (release builds have no console) |
 | `src/work.rs` | What the background threads share: starting one, locking, the list of work they take from, waking the window |
+| `src/feedback.rs` | Feedback sent as a GitHub issue on its own thread, or GitHub's new-issue page filled in; the key `build.rs` puts in ([releasing](releasing.md#the-feedback-key)) |
 | `src/updates.rs` | Updates through Velopack: checking the releases, downloading, installing on a restart or on closing |
 | `src/ui/updates.rs` | The version and the updater's news at the end of the status bar |
 | `src/ui/keymap.rs` | The keyboard shortcuts: defaults, changing them, matching key presses |

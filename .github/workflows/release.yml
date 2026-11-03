@@ -110,6 +110,10 @@ jobs:
         with:
           save-if: ${{ github.event_name == 'push' }}
       - name: Build
+        env:
+          # The key feedback is sent to GitHub's issues with (build.rs, src/feedback.rs). Without
+          # the secret the build has none, and the app opens GitHub's page to send it there.
+          ASSET_BROWSER_FEEDBACK_TOKEN: ${{ secrets.FEEDBACK_TOKEN }}
         run: cargo build --release --locked
 
       - uses: actions/setup-dotnet@v6

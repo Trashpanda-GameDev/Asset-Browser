@@ -32,6 +32,24 @@ both moved on, the tag exists or there are no notes; a `main` that's only behind
 Don't make the release on GitHub's website (**Draft a new release**): the workflow makes it, and fails if the tag has
 one already.
 
+## The feedback key
+
+The app's **Feedback** button sends reports as issues in this repository, with a key the release build carries. The
+key is never in the repository: the workflow hands the secret `FEEDBACK_TOKEN` to the build (`build.rs` puts it in the
+app, scrambled so tools that look for GitHub keys in files don't find it). Anyone who digs it out of the app can do
+what the key may do, so it may do very little:
+
+1. On GitHub: your picture, **Settings**, **Developer settings**, **Personal access tokens**, **Fine-grained tokens**,
+   **Generate new token**. Resource owner: `Trashpanda-GameDev`; **Only select repositories**: `Asset-Browser`;
+   **Repository permissions**: **Issues**, **Read and write** (Metadata, read-only, comes with it). Nothing else.
+   Give it an expiry date and note it down, since releases after it can't send.
+2. In the repository: **Settings**, **Secrets and variables**, **Actions**, **New repository secret**, named
+   `FEEDBACK_TOKEN`, with the token as its value.
+
+The next release carries it. If it's ever misused, delete the token on GitHub: copies out there can't send any more,
+and open GitHub's page with the report filled in instead, as builds without a key (your own `cargo build`) always do.
+A new token in the secret goes out with the next release.
+
 ## The ruleset for `main`
 
 The push goes straight to `main`, so the ruleset for `main` (**Settings**, **Rules**, **Rulesets**) has to let it

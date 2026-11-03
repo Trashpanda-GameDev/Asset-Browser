@@ -98,6 +98,10 @@ They're in the sidebar, and gather assets from any folder without moving a file.
 - **Copying:** right-click, **Copy file** (or **Ctrl+Shift+C**) puts the files themselves on the clipboard: paste into
   a folder to put copies there, or into an app that takes files, such as a game engine or a chat. **Copy path**
   (**Ctrl+C**) copies where they are, as text.
+- **Feedback:** the speech bubble at the top right sends a bug report, an idea or what you think: it becomes an issue
+  on the app's GitHub page, which anyone can read, with the app's version, the Windows version and the graphics card
+  (and the last error, if you tick it). A copy that can't send opens GitHub's page with the report filled in instead,
+  to send it there with a GitHub account.
 - **Dragging out:** drag assets out of the window and drop them in a folder, on the desktop or in an app that takes
   files. They're always copied, even to a folder on the same drive, where a drag would usually move them. Inside the
   window, the drag still goes onto a collection or category.

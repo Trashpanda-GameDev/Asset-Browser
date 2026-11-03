@@ -2,7 +2,7 @@
 
 use eframe::egui;
 
-use crate::ui::header::{self, HeaderArgs, HeaderCommand};
+use crate::ui::header::{self, HeaderArgs, HeaderCommand, Window};
 
 use super::BrowserApp;
 
@@ -14,7 +14,13 @@ impl BrowserApp {
             totals: self.library.as_ref().map(|_| self.source_totals()),
             mode: self.browsing.mode,
             layout: self.browsing.mode_view().layout,
-            settings_open: self.preferences.settings.is_open(),
+            window: if self.preferences.settings.is_open() {
+                Window::Settings
+            } else if self.chrome.feedback.is_open() {
+                Window::Feedback
+            } else {
+                Window::None
+            },
             pane_shown: self.chrome.show_inspector,
             query: &mut self.browsing.query,
             focus_search: std::mem::take(&mut self.chrome.focus_search),
@@ -24,6 +30,7 @@ impl BrowserApp {
                 HeaderCommand::Folder(action) => self.run_folder_action(action),
                 HeaderCommand::Mode(mode) => self.set_mode(mode),
                 HeaderCommand::OpenSettings => self.preferences.settings.open(),
+                HeaderCommand::OpenFeedback => self.chrome.feedback.open(),
                 HeaderCommand::TogglePane => self.chrome.show_inspector = !self.chrome.show_inspector,
                 HeaderCommand::Layout(layout) => self.browsing.set_layout(layout),
                 HeaderCommand::Searched => self.browsing.view_dirty = true,

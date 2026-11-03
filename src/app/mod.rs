@@ -9,13 +9,14 @@
 //! `BrowserApp` holds the window's state; what it does is split by area across this module's files:
 //! the library's folders and scans (`library`), what's browsed and selected (`view`), keys and the
 //! asset actions (`actions`), favorites, collections and categories (`organizing`), deleting
-//! (`deleting`), dragging files out of the window (`drag_out`), the settings (`settings`), the
+//! (`deleting`), dragging files out of the window (`drag_out`), feedback (`feedback`), the settings (`settings`), the
 //! window's parts (`header`, `toolbar`, `sidebar`, `panels`, `toast`), and what the screenshots tool
 //! drives (`screenshots`).
 
 mod actions;
 mod deleting;
 mod drag_out;
+mod feedback;
 mod header;
 mod library;
 mod organizing;
@@ -50,6 +51,7 @@ use crate::watch::Watch;
 use crate::{db, diag, paths, platform, work};
 use deleting::Deletion;
 use drag_out::DragOut;
+use feedback::Feedback;
 use library::Folders;
 use organizing::Organizing;
 use settings::Preferences;
@@ -84,13 +86,14 @@ pub struct BrowserApp {
 }
 
 /// The window's own state: whether the pane is shown, the search box, the toast, the folder tree,
-/// a drag out of the window.
+/// a drag out of the window, the feedback window.
 pub(super) struct Chrome {
     show_inspector: bool,
     focus_search: bool,
     toast: Option<(String, Instant)>,
     folder_tree: FolderTree,
     drag_out: DragOut,
+    feedback: Feedback,
 }
 
 impl BrowserApp {
@@ -134,6 +137,7 @@ impl BrowserApp {
                 toast: None,
                 folder_tree: FolderTree::default(),
                 drag_out: DragOut::default(),
+                feedback: Feedback::default(),
             },
             thumbs,
             previews: Previews::new(&cc.egui_ctx),
@@ -192,6 +196,7 @@ impl eframe::App for BrowserApp {
         self.delete_dialog(&ctx);
         self.delete_files_dialog(&ctx);
         self.settings_window(&ctx);
+        self.feedback_window(&ctx);
         if let Some(whats_new) = &mut self.preferences.whats_new
             && !whats_new.show(&ctx)
         {

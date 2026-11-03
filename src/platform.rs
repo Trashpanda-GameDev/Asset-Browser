@@ -325,6 +325,61 @@ fn read_first(candidates: &[&str]) -> Option<Vec<u8>> {
     candidates.iter().find_map(|path| std::fs::read(path.replace("%WINDIR%", &windir)).ok())
 }
 
+/// The OS and its version, for a bug report: "Windows 11, version 24H2 (build 26100.2894)".
+pub fn os_version() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        const KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+        let Some(build) = registry_text(KEY, "CurrentBuild") else { return "Windows".to_owned() };
+        // Windows 11 still calls itself Windows 10 in the registry; its builds start at 22000.
+        let name = if build.parse::<u32>().is_ok_and(|build| build >= 22000) { "Windows 11" } else { "Windows 10" };
+        let build = match registry_number(KEY, "UBR") {
+            Some(update) => format!("{build}.{update}"),
+            None => build,
+        };
+        match registry_text(KEY, "DisplayVersion") {
+            Some(version) => format!("{name}, version {version} (build {build})"),
+            None => format!("{name} (build {build})"),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::consts::OS.to_owned()
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn registry_text(key: &str, value: &str) -> Option<String> {
+    use windows_sys::Win32::System::Registry::RRF_RT_REG_SZ;
+    let mut buffer = [0u16; 128];
+    let bytes = registry_value(key, value, RRF_RT_REG_SZ, buffer.as_mut_ptr().cast(), size_of_val(&buffer))?;
+    // The size counts the closing NUL.
+    let text = &buffer[..(bytes / 2).saturating_sub(1)];
+    Some(String::from_utf16_lossy(text)).filter(|text| !text.is_empty())
+}
+
+#[cfg(target_os = "windows")]
+fn registry_number(key: &str, value: &str) -> Option<u32> {
+    use windows_sys::Win32::System::Registry::RRF_RT_REG_DWORD;
+    let mut number = 0u32;
+    registry_value(key, value, RRF_RT_REG_DWORD, (&raw mut number).cast(), size_of::<u32>())?;
+    Some(number)
+}
+
+/// Reads a value under HKEY_LOCAL_MACHINE into `data`; how many bytes it took.
+#[cfg(target_os = "windows")]
+fn registry_value(key: &str, value: &str, kind: u32, data: *mut core::ffi::c_void, size: usize) -> Option<usize> {
+    use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RegGetValueW};
+    let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (key, value) = (wide(key), wide(value));
+    let mut size = size as u32;
+    // SAFETY: NUL-terminated names that outlive the call, and `data` writable for `size` bytes.
+    let status = unsafe {
+        RegGetValueW(HKEY_LOCAL_MACHINE, key.as_ptr(), value.as_ptr(), kind, std::ptr::null_mut(), data, &mut size)
+    };
+    (status == 0).then_some(size as usize)
+}
+
 /// How much memory the app holds right now (its private bytes), where the OS says.
 pub fn memory_in_use() -> Option<u64> {
     #[cfg(target_os = "windows")]
@@ -356,6 +411,14 @@ mod tests {
         fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
             Err(raw_window_handle::HandleError::Unavailable)
         }
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn the_windows_version_reads_as_a_person_would_say_it() {
+        let version = os_version();
+        assert!(version.starts_with("Windows 1"), "{version}");
+        assert!(version.contains("(build "), "{version}");
     }
 
     #[test]

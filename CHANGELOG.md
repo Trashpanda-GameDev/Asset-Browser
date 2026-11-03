@@ -9,6 +9,8 @@ As things change, add them under a `## Unreleased` heading at the top. To releas
 
 ## Unreleased
 
+- **Send feedback from the app:** the speech bubble at the top right sends a bug report, an idea or
+  what you think straight to the app's GitHub page, as a public issue.
 - **Drag files out into Explorer or another app:** drag assets out of the window and drop them in a
   folder, on the desktop or in an app that takes files. They're always copied, never moved out of
   your library's folders.

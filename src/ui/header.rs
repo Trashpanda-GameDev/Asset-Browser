@@ -25,7 +25,8 @@ pub struct HeaderArgs<'a> {
     pub totals: Option<[u32; 3]>,
     pub mode: Mode,
     pub layout: ViewLayout,
-    pub settings_open: bool,
+    /// The window open over the app, whose button shows it.
+    pub window: Window,
     pub pane_shown: bool,
     /// What's searched for, typed in place.
     pub query: &'a mut String,
@@ -33,11 +34,20 @@ pub struct HeaderArgs<'a> {
     pub focus_search: bool,
 }
 
+/// A window the header opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Window {
+    None,
+    Settings,
+    Feedback,
+}
+
 /// What the user asked for from the header.
 pub enum HeaderCommand {
     Folder(FolderAction),
     Mode(Mode),
     OpenSettings,
+    OpenFeedback,
     TogglePane,
     Layout(ViewLayout),
     /// What's searched for changed.
@@ -109,11 +119,15 @@ fn mode_buttons(ui: &mut Ui, totals: Option<[u32; 3]>, current: Mode) -> Option<
     widgets::segmented(ui, ui.id().with("modes"), &segments, current.index()).map(|index| Mode::ALL[index])
 }
 
-/// Right to left: the settings, the preview pane, list or grid, and the search.
+/// Right to left: the settings, feedback, the preview pane, list or grid, and the search.
 fn view_buttons(ui: &mut Ui, args: &mut HeaderArgs<'_>, commands: &mut Vec<HeaderCommand>) {
     let settings_tip = keymap::tooltip(ui.ctx(), "Settings", Action::Settings);
-    if widgets::icon_button(ui, icon::GEAR_SIX, &settings_tip, args.settings_open).clicked() {
+    if widgets::icon_button(ui, icon::GEAR_SIX, &settings_tip, args.window == Window::Settings).clicked() {
         commands.push(HeaderCommand::OpenSettings);
+    }
+    let feedback_tip = "Send feedback: a bug, an idea or what you think";
+    if widgets::icon_button(ui, icon::CHAT_CIRCLE_TEXT, feedback_tip, args.window == Window::Feedback).clicked() {
+        commands.push(HeaderCommand::OpenFeedback);
     }
     widgets::divider(ui);
     let pane = if args.pane_shown { "Hide the preview pane" } else { "Show the preview pane" };
