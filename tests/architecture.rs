@@ -1,6 +1,6 @@
 //! Checks the rules in docs/architecture.md on the source code: every module uses only modules in its own layer or
-//! below, no modules depend on each other in a circle, nothing below `ui` uses egui, and views read no files, start
-//! no threads and open no databases.
+//! below, no modules depend on each other in a circle, nothing below `ui` uses egui, views read no files, start no
+//! threads and open no databases, and only the programs start the log.
 //!
 //! What breaks a rule today is listed in the exceptions below. Each must still be true, so once the code is fixed
 //! the test fails until its exception is taken out too.
@@ -111,6 +111,22 @@ fn views_read_no_files_start_no_threads_and_open_no_databases() {
     let found: Vec<(String, Work)> =
         view_work().into_iter().filter(|(path, work)| !VIEW_EXCEPTIONS.contains(&(path.as_str(), *work))).collect();
     assert!(found.is_empty(), "views doing work the app should do: {found:?}");
+}
+
+#[test]
+fn only_the_programs_start_the_log() {
+    // Tests run the library's code: if it chose the log's place or started it, `cargo test` would write to the
+    // user's own log.
+    let diag_uses_paths = module_uses().get("diag").is_some_and(|used| used.contains("paths"));
+    assert!(!diag_uses_paths, "diag picks no place for the log: the program gives it one");
+    let starting: Vec<String> = sources()
+        .into_iter()
+        .filter(|source| source.path != "diag.rs" && source.code.contains("start_log("))
+        .map(|source| source.path)
+        .collect();
+    assert!(starting.is_empty(), "library files that start the log, which only the programs may: {starting:?}");
+    let main = fs::read_to_string(src().join("main.rs")).expect("read src/main.rs");
+    assert!(main.contains("diag::start_log("), "the app starts its log in src/main.rs");
 }
 
 #[test]

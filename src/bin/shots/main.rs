@@ -27,7 +27,7 @@ use asset_browser::app::{BrowserApp, ScreenshotView, setting_keys};
 use asset_browser::library::SortBy;
 use asset_browser::ui::mode::{Layout, Mode};
 use asset_browser::ui::settings::Page;
-use asset_browser::{db, paths};
+use asset_browser::{db, diag, paths};
 use clip::{Clip, Recording};
 use eframe::egui;
 
@@ -318,6 +318,8 @@ fn main() -> eframe::Result {
         let _ = std::fs::remove_dir_all(&dir);
         // SAFETY: no other thread has started yet, so nothing reads the environment meanwhile.
         unsafe { std::env::set_var(paths::HOME_VARIABLE, dir.join("home")) };
+        // Like the app, it keeps a log: the demo's own, so its setup's errors are in it too.
+        diag::start_log(paths::log_file());
         // The preview pane shows the files' paths, so a short folder reads best (F:\Assets, say);
         // else one beside the app's files. Not the temporary folder: its path has the user's name.
         let library = match args.get(1) {
@@ -339,6 +341,8 @@ fn main() -> eframe::Result {
         // Tall enough for a sprite sheet's controls, below its details in the preview pane.
         (Some(library), DEMO, [1280.0, 1024.0])
     } else {
+        // On the user's own library, so it logs where the app does.
+        diag::start_log(paths::log_file());
         (args.get(1).cloned(), PLAN, [1440.0, 880.0])
     };
     let options = eframe::NativeOptions {

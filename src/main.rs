@@ -11,6 +11,7 @@ fn main() -> eframe::Result {
     // install, update or uninstall, and it exits straight after. And a downloaded update that
     // didn't get installed when the app closed is installed now, restarting it.
     velopack::VelopackApp::build().run();
+    asset_browser::diag::start_log(asset_browser::paths::log_file());
     asset_browser::diag::install_panic_hook();
     // An optional folder to add to the library (or show, if it's in already).
     let start_root = std::env::args_os().nth(1).map(PathBuf::from);

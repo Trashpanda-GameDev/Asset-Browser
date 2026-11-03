@@ -59,7 +59,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/ui/theme.rs`, `widgets.rs`, `format.rs` | Colours, fonts and icons; the hand-drawn controls; numbers and dates |
 | `src/platform.rs` | Open / show in file manager, the Recycle Bin, the title bar's colours, the process's memory: the only per-OS code |
 | `src/deletion.rs` | Deleting to the Recycle Bin on its own thread, and which files actually went |
-| `src/diag.rs` | Error log and panic hook (release builds have no console) |
+| `src/diag.rs` | Error log, once a program starts it (`main.rs` does), and panic hook (release builds have no console) |
 | `src/work.rs` | What the background threads share: starting one, locking, the list of work they take from, waking the window |
 | `src/updates.rs` | Updates through Velopack: checking the releases, downloading, installing on a restart or on closing |
 | `src/ui/updates.rs` | The version and the updater's news at the end of the status bar |

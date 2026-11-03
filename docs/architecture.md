@@ -79,6 +79,10 @@ Not checked by a tool, but expected:
   (`ModelError::Unreadable`), since nothing acts on it but the user.
 - The app shows errors with `diag::report` (the log, and the status bar); `diag::note` only logs, for errors not worth
   showing, such as an update check while offline.
+- The log is the programs' to start: `src/main.rs` starts the app's with `diag::start_log(paths::log_file())`, and
+  the screenshots tool starts one too (with `--demo`, in the demo's own folder). Until a program does, `diag`
+  writes nothing, so tests and the bench leave the user's log alone. `diag` knows no paths, and the architecture
+  test checks that no library code starts the log.
 - No error is dropped without saying why: a `let _ =` on a `Result` has a comment.
 
 The error types:
@@ -112,8 +116,8 @@ The error types:
 - Tests sit next to the code, in a `mod tests` at the end of the file.
 - Files a test makes go in a `test_support::TempDir`: a new folder of its own, removed when the test ends, even when
   it fails.
-- They never touch the user's own folders, settings or data, the network or the clipboard. A test that has to is
-  `#[ignore]`d and says how to run it.
+- They never touch the user's own folders, settings, data or log, the network or the clipboard. A test that has to
+  is `#[ignore]`d and says how to run it.
 - Code without tests gets them before it's changed.
 - Everything that reads files made elsewhere has a damaged-file test: whatever the bytes, it must not panic.
 
