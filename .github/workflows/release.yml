@@ -93,17 +93,17 @@ jobs:
         shell: bash
         run: |
           # The version's section of CHANGELOG.md, which the app shows as "What's new" too. Checked
-          # before the build, so a missing one doesn't wait for it.
+          # before the build, so a missing one doesn't wait for it. Not in target/: the build cache is
+          # restored over that afterwards, which took the notes with it (0.2.3 wasn't published so).
           version="${{ steps.version.outputs.version }}"
-          mkdir -p target
           tr -d '\r' < CHANGELOG.md | awk -v version="$version" '
             /^## / { if (found) exit; found = ($2 == version); next }
-            found' > target/release-notes.md
-          if ! grep -q '[^[:space:]]' target/release-notes.md; then
+            found' > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
             echo "::error::CHANGELOG.md has no notes under \"## $version\". Rename \"## Unreleased\" to it."
             exit 1
           fi
-          cat target/release-notes.md
+          cat release-notes.md
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -135,7 +135,7 @@ jobs:
           vpk pack --packId "$PACK_ID" --packVersion "${{ steps.version.outputs.version }}" \
             --packDir target/publish --mainExe asset_browser.exe --runtime win-x64 \
             --packTitle "Asset Browser" --packAuthors "Trashpanda GameDev" --icon assets/icon.ico \
-            --releaseNotes target/release-notes.md -o target/velopack
+            --releaseNotes release-notes.md -o target/velopack
 
       - name: Publish
         if: github.event_name == 'push'

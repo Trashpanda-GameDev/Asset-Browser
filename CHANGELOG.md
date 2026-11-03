@@ -7,6 +7,11 @@ Updates → What's new), and the release workflow publishes the same notes with 
 As things change, add them under a `## Unreleased` heading at the top. To release, run
 `npm run deploy` on main: it renames the heading to the version and date, as below.
 
+## Unreleased
+
+- 0.2.3 didn't go out: a step of the release stopped before publishing it. This version brings its
+  changes, below.
+
 ## 0.2.3 – 3 Nov 2026
 
 - **Send feedback from the app:** the speech bubble at the top right sends a bug report, an idea or
