@@ -1,6 +1,7 @@
 //! The few things that work differently on each OS: opening and revealing files, copying them to
-//! the clipboard, deleting them to the Recycle Bin or Trash, the window's title bar, the UI fonts
-//! and the process's memory. Nothing else in the app should call into a specific platform.
+//! the clipboard, dragging them out of the window, deleting them to the Recycle Bin or Trash, the
+//! window's title bar, the UI fonts and the process's memory. Nothing else in the app should call
+//! into a specific platform.
 
 use std::cell::RefCell;
 use std::io;
@@ -91,6 +92,102 @@ pub fn copy_files(paths: &[PathBuf]) -> Result<(), CopyError> {
         clipboard.clear()?;
         Ok(clipboard.set().file_list(paths)?)
     })
+}
+
+/// Why files couldn't be dragged out of the window.
+#[derive(Debug, thiserror::Error)]
+pub enum DragError {
+    #[error("the files aren't there any more")]
+    Missing,
+    /// What the shell said.
+    #[error("{0}")]
+    Shell(io::Error),
+}
+
+/// Drags the files out of the window as Explorer does, into a folder, the desktop or another app
+/// that takes files. They're offered only to be copied, so a drop never moves one out of its folder.
+/// Returns once they're dropped or the drag is given up (Esc, or let go where nothing takes them);
+/// the window doesn't redraw meanwhile. Files that aren't there any more are left out.
+pub fn drag_files_out(window: &impl raw_window_handle::HasWindowHandle, paths: &[PathBuf]) -> Result<(), DragError> {
+    let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).filter(|path| path.exists()).collect();
+    if paths.is_empty() {
+        return Err(DragError::Missing);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        shell_drag::drag(window, &paths).map_err(|err| DragError::Shell(err.into()))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Only made for Windows so far.
+        let _ = window;
+        Ok(())
+    }
+}
+
+/// Dragging files out with the shell's own data object for them, the one Explorer drags: other
+/// apps get the files as from Explorer, with their thumbnails.
+#[cfg(target_os = "windows")]
+mod shell_drag {
+    use std::path::Path;
+
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{CoTaskMemFree, IBindCtx, IDataObject};
+    use windows::Win32::System::Ole::{DROPEFFECT_COPY, IDropSource};
+    use windows::Win32::UI::Shell::Common::ITEMIDLIST;
+    use windows::Win32::UI::Shell::{
+        BHID_DataObject, IShellItemArray, SHCreateShellItemArrayFromIDLists, SHDoDragDrop, SHParseDisplayName,
+    };
+    use windows::core::{HSTRING, Result};
+
+    pub(super) fn drag(window: &impl HasWindowHandle, paths: &[&Path]) -> Result<()> {
+        let Ok(handle) = window.window_handle() else { return Ok(()) };
+        let RawWindowHandle::Win32(win32) = handle.as_raw() else { return Ok(()) };
+        let hwnd = HWND(win32.hwnd.get() as *mut core::ffi::c_void);
+        let ids = ItemIds::of(paths)?;
+        // SAFETY: the ids are alive until `ids` is dropped, after the array has copied them.
+        let items: IShellItemArray = unsafe { SHCreateShellItemArrayFromIDLists(&ids.as_const()) }?;
+        // SAFETY: a COM call on a live object.
+        let data: IDataObject = unsafe { items.BindToHandler(None::<&IBindCtx>, &BHID_DataObject) }?;
+        // Copy only: a drop on the same drive would otherwise move the files out of their folder.
+        // SAFETY: the window is ours and outlives the drag; with no drop source the shell's is used.
+        unsafe { SHDoDragDrop(Some(hwnd), &data, None::<&IDropSource>, DROPEFFECT_COPY) }?;
+        Ok(())
+    }
+
+    /// The shell's ids for the files, freed when dropped.
+    struct ItemIds(Vec<*mut ITEMIDLIST>);
+
+    impl ItemIds {
+        fn of(paths: &[&Path]) -> Result<Self> {
+            let mut ids = Self(Vec::with_capacity(paths.len()));
+            for &path in paths {
+                // The library's paths can mix in '/', which the shell turns down ("The parameter is
+                // incorrect").
+                let path = HSTRING::from(super::native(path).as_str());
+                let mut id = std::ptr::null_mut();
+                // SAFETY: a NUL-terminated path that outlives the call, and a pointer for the id.
+                unsafe { SHParseDisplayName(&path, None::<&IBindCtx>, &mut id, 0, None) }?;
+                ids.0.push(id);
+            }
+            Ok(ids)
+        }
+
+        fn as_const(&self) -> Vec<*const ITEMIDLIST> {
+            self.0.iter().map(|&id| id.cast_const()).collect()
+        }
+    }
+
+    impl Drop for ItemIds {
+        fn drop(&mut self) {
+            for &id in &self.0 {
+                // SAFETY: each id came from SHParseDisplayName, allocated with the COM allocator,
+                // and is freed once.
+                unsafe { CoTaskMemFree(Some(id.cast_const().cast())) };
+            }
+        }
+    }
 }
 
 /// The path with the OS's own separators, for showing to people and handing to other programs.
@@ -250,6 +347,23 @@ pub fn memory_in_use() -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
+
+    /// Stands in for the window where a test never gets as far as needing one.
+    struct NoWindow;
+
+    impl raw_window_handle::HasWindowHandle for NoWindow {
+        fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+            Err(raw_window_handle::HandleError::Unavailable)
+        }
+    }
+
+    #[test]
+    fn files_that_are_gone_are_not_dragged_out() {
+        let dir = TempDir::new("drag-out");
+        let gone = dir.path().join("gone.png");
+        assert!(matches!(drag_files_out(&NoWindow, &[gone]), Err(DragError::Missing)));
+    }
 
     /// It puts files on the real clipboard, so it only runs when asked for:
     /// `cargo test copied_files_can_be_pasted -- --ignored`.

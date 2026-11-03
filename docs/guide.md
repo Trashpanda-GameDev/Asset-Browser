@@ -98,6 +98,9 @@ They're in the sidebar, and gather assets from any folder without moving a file.
 - **Copying:** right-click, **Copy file** (or **Ctrl+Shift+C**) puts the files themselves on the clipboard: paste into
   a folder to put copies there, or into an app that takes files, such as a game engine or a chat. **Copy path**
   (**Ctrl+C**) copies where they are, as text.
+- **Dragging out:** drag assets out of the window and drop them in a folder, on the desktop or in an app that takes
+  files. They're always copied, even to a folder on the same drive, where a drag would usually move them. Inside the
+  window, the drag still goes onto a collection or category.
 - **Deleting:** **Delete** (or right-click, **Delete…**) asks, then moves the selected files to the Recycle Bin (the
   Trash on macOS and Linux); right-click a folder in the tree for **Delete folder…**, which takes everything in it.
   The asset after them is selected next. They can be put back from the Recycle Bin, favorites, collections and
@@ -140,6 +143,6 @@ updater logs to `%LOCALAPPDATA%\velopack\velopack_TrashpandaAssetBrowser.log`.
 
 ## Not yet
 
-Material previews, SVG, Opus sounds (symphonia has no Opus decoder), dragging files out into other apps, playing a
-model's animations, and the geometry inside Blender files (only the picture Blender saved). Builds for macOS and Linux
-would have to be made on those systems, and aren't released yet.
+Material previews, SVG, Opus sounds (symphonia has no Opus decoder), playing a model's animations, and the geometry
+inside Blender files (only the picture Blender saved). Builds for macOS and Linux would have to be made on those
+systems, and aren't released yet.

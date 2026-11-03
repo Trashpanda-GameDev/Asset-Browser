@@ -57,6 +57,15 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_System_WindowsProgramming",
 ] }
+# Dragging files out of the window with the shell's own data object (`platform::drag_files_out`).
+# The version `trash` builds already.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+] }
 
 [dev-dependencies]
 # The version wgpu uses: checks the 3D view's shader in tests, without a GPU.

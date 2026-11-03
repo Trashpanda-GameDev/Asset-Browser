@@ -9,11 +9,13 @@
 //! `BrowserApp` holds the window's state; what it does is split by area across this module's files:
 //! the library's folders and scans (`library`), what's browsed and selected (`view`), keys and the
 //! asset actions (`actions`), favorites, collections and categories (`organizing`), deleting
-//! (`deleting`), the settings (`settings`), the window's parts (`header`, `toolbar`, `sidebar`,
-//! `panels`, `toast`), and what the screenshots tool drives (`screenshots`).
+//! (`deleting`), dragging files out of the window (`drag_out`), the settings (`settings`), the
+//! window's parts (`header`, `toolbar`, `sidebar`, `panels`, `toast`), and what the screenshots tool
+//! drives (`screenshots`).
 
 mod actions;
 mod deleting;
+mod drag_out;
 mod header;
 mod library;
 mod organizing;
@@ -47,6 +49,7 @@ use crate::updates::Updates;
 use crate::watch::Watch;
 use crate::{db, diag, paths, platform, work};
 use deleting::Deletion;
+use drag_out::DragOut;
 use library::Folders;
 use organizing::Organizing;
 use settings::Preferences;
@@ -80,12 +83,14 @@ pub struct BrowserApp {
     updates: Updates,
 }
 
-/// The window's own state: whether the pane is shown, the search box, the toast, the folder tree.
+/// The window's own state: whether the pane is shown, the search box, the toast, the folder tree,
+/// a drag out of the window.
 pub(super) struct Chrome {
     show_inspector: bool,
     focus_search: bool,
     toast: Option<(String, Instant)>,
     folder_tree: FolderTree,
+    drag_out: DragOut,
 }
 
 impl BrowserApp {
@@ -128,6 +133,7 @@ impl BrowserApp {
                 focus_search: false,
                 toast: None,
                 folder_tree: FolderTree::default(),
+                drag_out: DragOut::default(),
             },
             thumbs,
             previews: Previews::new(&cc.egui_ctx),
@@ -145,7 +151,11 @@ impl BrowserApp {
 }
 
 impl eframe::App for BrowserApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.chrome.drag_out.tidy_up(raw_input);
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         // For the tooltips that name a shortcut.
         keymap::publish(&ctx, &self.preferences.keymap);
@@ -188,6 +198,7 @@ impl eframe::App for BrowserApp {
             self.preferences.whats_new = None;
         }
         self.draw_toast(&ctx);
+        self.drag_out(&ctx, frame);
         organize::drag_indicator(&ctx);
         sidebar::draw_drop_hint(&ctx);
         // Keep the playhead moving while something is audible.

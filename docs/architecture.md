@@ -89,7 +89,7 @@ The error types:
 
 | Module | Error types |
 |---|---|
-| `platform` | `CopyError`: files couldn't be put on the clipboard |
+| `platform` | `CopyError`: files couldn't be put on the clipboard; `DragError`: files couldn't be dragged out |
 | `imaging` | `PictureError`: a picture couldn't be read or made smaller; `psd::PsdError` for PSD files |
 | `animated` | `GifError`: a GIF's frames couldn't be read |
 | `audio` | `OutputError`: no sound output; `SoundError`: a sound can't be played or measured |

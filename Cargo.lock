@@ -306,6 +306,7 @@ dependencies = [
  "trash",
  "ufbx",
  "velopack",
+ "windows",
  "windows-sys 0.61.2",
  "winresource",
 ]

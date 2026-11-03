@@ -7,6 +7,12 @@ Updates → What's new), and the release workflow publishes the same notes with 
 As things change, add them under a `## Unreleased` heading at the top. To release, run
 `npm run deploy` on main: it renames the heading to the version and date, as below.
 
+## Unreleased
+
+- **Drag files out into Explorer or another app:** drag assets out of the window and drop them in a
+  folder, on the desktop or in an app that takes files. They're always copied, never moved out of
+  your library's folders.
+
 ## 0.2.2 – 3 Nov 2026
 
 - **Copy files to paste them anywhere:** right-click and **Copy file**, or press Ctrl+Shift+C, then
