@@ -4,8 +4,8 @@ How the code is laid out, how it stays fast, and the tools for measuring it and 
 code follows, and which part may use which, are in [how the code fits together](architecture.md).
 [Back to the README](../README.md)
 
-It's written in Rust with [egui](https://github.com/emilk/egui) on wgpu. Windows comes first; it's written to build
-on macOS and Linux too, and the release workflow tests it on both, but it hasn't been run there yet.
+It's written in Rust with [egui](https://github.com/emilk/egui) on wgpu. For now it's made for Windows only: the code
+is written to build on macOS and Linux too, but nothing tests it there, and it hasn't been run there.
 
 ```
 cargo run --release                  # opens the library: the folders you added
@@ -73,7 +73,7 @@ Work goes on the `dev` branch and into `main` with a pull request; releases are 
 | `src/bin/shots/` | Screenshots of the window and the settings, to check the look; and the README's pictures and clips, of made-up assets |
 | `build.rs`, `assets/` | The app icon, and putting it with the app's name into the Windows exe (`src/main.rs` sets the window's) |
 | `.cargo/config.toml` | Links the C runtime into Windows builds, so they need no Visual C++ redistributable |
-| `.github/workflows/release.yml` | For release commits only: tests on Windows, macOS and Linux, builds and publishes the release, keeps two caches per job |
+| `.github/workflows/release.yml` | For release commits only: tests on Windows, builds and publishes the release, keeps two caches per job |
 | `scripts/deploy.mjs`, `package.json` | `npm run deploy`: the next version's commit and tag on `main`, pushed to start the release |
 
 The icon is `assets/icon.png` (1024 px); `assets/icon.ico` holds every size Windows uses, made from it. Where the app

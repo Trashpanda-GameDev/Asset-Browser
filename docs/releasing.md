@@ -49,12 +49,12 @@ either:
 
 `.github/workflows/release.yml` is the only workflow, and it runs only for a release: the "Release 0.2.1" commit that
 `npm run deploy` pushes to `main` with its tag. Other pushes and pull requests run nothing (a merge that changes
-`Cargo.toml` shows as a skipped run). It tests on Windows, macOS and Linux (`cargo fmt`, `clippy` and `test`), then
-builds the app on Windows, packs it with [Velopack](https://velopack.io) into the setup program, the portable zip and
-the update packages (with a smaller delta from the last release), and publishes them as a GitHub release, under the
-tag, with the version's notes from `CHANGELOG.md`. A failing test, or a commit without its tag, stops it before
-anything is published. To test, build and pack without publishing, run it by hand on any branch (**Actions**,
-**Release**, **Run workflow**): the files are kept with the run.
+`Cargo.toml` shows as a skipped run). It tests on Windows (`cargo fmt`, `clippy` and `test`), the only system the app
+is made for at the moment, then builds the app, packs it with [Velopack](https://velopack.io) into the setup program,
+the portable zip and the update packages (with a smaller delta from the last release), and publishes them as a GitHub
+release, under the tag, with the version's notes from `CHANGELOG.md`. A failing test, or a commit without its tag,
+stops it before anything is published. To test, build and pack without publishing, run it by hand on any branch
+(**Actions**, **Release**, **Run workflow**): the files are kept with the run.
 
 The builds are cached on `main`, which is why a release starts from `main`'s commit rather than from the tag: a run
 can only use caches made on its own branch or tag, or on `main`. Only releases save caches, and only when the

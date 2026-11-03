@@ -3,7 +3,7 @@
 // It renames "## Unreleased" in CHANGELOG.md to the version and today's date (the release's notes, and
 // what the app shows as What's new), sets the version in Cargo.toml and Cargo.lock, commits that on main
 // as "Release <version>", tags it v<version> and pushes both. That release commit on main starts the
-// release workflow (.github/workflows/release.yml), which tests on Windows, macOS and Linux, then builds
+// release workflow (.github/workflows/release.yml), which tests on Windows, then builds
 // and publishes the setup program, the portable zip and the update that installed copies download.
 //
 // Nothing changes until everything has been checked and you've said yes, and if GitHub turns the push
@@ -247,7 +247,7 @@ async function deploy() {
   }
 
   const page = webPage(git('remote', 'get-url', REMOTE));
-  console.log(`\nPushed ${tag}. GitHub tests it on Windows, macOS and Linux, then builds and publishes it, which`);
+  console.log(`\nPushed ${tag}. GitHub tests it on Windows, then builds and publishes it, which`);
   console.log(`takes 10 to 30 minutes: ${page}/actions/workflows/release.yml`);
   // dev has to have the renamed notes before more go under a new "## Unreleased", or the next merge
   // conflicts. If it has nothing main doesn't, it's simply moved up to main.

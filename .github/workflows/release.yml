@@ -6,11 +6,12 @@
 #   2. set `version` in Cargo.toml and Cargo.lock (the build below is --locked).
 # Other pushes and pull requests run nothing (a merge that changes Cargo.toml shows as a skipped run).
 #
-# The tests run on Windows, macOS and Linux, so code that only builds on one is caught, and a failure
-# stops the release before anything is published. Then Velopack packs the build into a setup
-# program, a portable zip, and the update package that the copies already out there download
-# (src/updates.rs). Run by hand (Actions > Release > Run workflow, on any branch), it tests, builds
-# and packs without publishing, and keeps the files as the run's artifact.
+# The tests run on Windows: for now it's the only system the app is made for (macOS and Linux aren't
+# supported, so they aren't tested either), and a failure stops the release before anything is
+# published. Then Velopack packs the build into a setup program, a portable zip, and the update
+# package that the copies already out there download (src/updates.rs). Run by hand (Actions >
+# Release > Run workflow, on any branch), it tests, builds and packs without publishing, and keeps
+# the files as the run's artifact.
 #
 # It starts from main's commit rather than the tag for the cache: a run can only use caches made on
 # its own branch or tag, or on main, so a cache made for one tag would never be used by the next
@@ -44,11 +45,7 @@ env:
 jobs:
   test:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'Release ')
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -57,9 +54,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.event_name == 'push' }}
-      - name: Linux libraries (sound, file dialog, windowing)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libgtk-3-dev libxkbcommon-dev libwayland-dev
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
@@ -171,7 +165,7 @@ jobs:
           gh api --paginate "repos/$GITHUB_REPOSITORY/actions/caches?per_page=100" --jq '.actions_caches[]' |
             jq -s . > caches.json
           # A job's caches share their key but for its last two parts, the hashes of Rust and of the
-          # dependencies: v0-rust-test-Linux-x64-<rust>-<dependencies>. The newest two on main stay;
+          # dependencies: v0-rust-test-Windows-x64-<rust>-<dependencies>. The newest two on main stay;
           # older ones and any made elsewhere (tags, before releases ran on main) go.
           jq -r '
             def job: .key | split("-") | .[:-2] | join("-");
