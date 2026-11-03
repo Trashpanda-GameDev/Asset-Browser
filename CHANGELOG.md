@@ -7,7 +7,7 @@ Updates → What's new), and the release workflow publishes the same notes with 
 As things change, add them under a `## Unreleased` heading at the top. To release, run
 `npm run deploy` on main: it renames the heading to the version and date, as below.
 
-## Unreleased
+## 0.2.2 – 3 Nov 2026
 
 - **Copy files to paste them anywhere:** right-click and **Copy file**, or press Ctrl+Shift+C, then
   paste into a folder to put a copy there, or into another app that takes files. It's in the preview
